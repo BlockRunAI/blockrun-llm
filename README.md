@@ -35,26 +35,55 @@ That's it. The SDK handles x402 payment automatically.
 
 ## Available Models
 
-| Model | Provider | Input Price | Output Price |
-|-------|----------|-------------|--------------|
-| `openai/gpt-5.2` | OpenAI | $1.75/M | $14.00/M |
-| `openai/gpt-4o` | OpenAI | $2.50/M | $10.00/M |
-| `openai/gpt-4o-mini` | OpenAI | $0.15/M | $0.60/M |
-| `openai/o1` | OpenAI | $15.00/M | $60.00/M |
-| `openai/o1-mini` | OpenAI | $3.00/M | $12.00/M |
-| `anthropic/claude-opus-4` | Anthropic | $15.00/M | $75.00/M |
-| `anthropic/claude-sonnet-4` | Anthropic | $3.00/M | $15.00/M |
-| `anthropic/claude-haiku-4.5` | Anthropic | $1.00/M | $5.00/M |
-| `google/gemini-3-pro-preview` | Google | $2.00/M | $12.00/M |
-| `google/gemini-2.5-pro` | Google | $1.25/M | $10.00/M |
-| `google/gemini-2.5-flash` | Google | $0.15/M | $0.60/M |
-| `x-ai/grok-4-fast` | xAI | $0.20/M | $0.50/M |
-| `deepseek/deepseek-v3-0324` | DeepSeek | $0.20/M | $0.88/M |
-| `deepseek/deepseek-r1` | DeepSeek | $0.55/M | $2.19/M |
-| `meta-llama/llama-3.3-70b-instruct` | Meta | $0.12/M | $0.30/M |
-| `meta-llama/llama-3.1-405b-instruct` | Meta | $2.00/M | $2.00/M |
-| `qwen/qwen-2.5-72b-instruct` | Qwen | $0.07/M | $0.26/M |
-| `mistralai/mistral-large` | Mistral | $2.00/M | $6.00/M |
+### OpenAI GPT-5 Family
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `openai/gpt-5.2` | $1.75/M | $14.00/M |
+| `openai/gpt-5.1` | $1.25/M | $10.00/M |
+| `openai/gpt-5` | $1.25/M | $10.00/M |
+| `openai/gpt-5-mini` | $0.25/M | $2.00/M |
+| `openai/gpt-5-nano` | $0.05/M | $0.40/M |
+| `openai/gpt-5.2-pro` | $21.00/M | $168.00/M |
+| `openai/gpt-5-pro` | $15.00/M | $120.00/M |
+
+### OpenAI GPT-4 Family
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `openai/gpt-4.1` | $2.00/M | $8.00/M |
+| `openai/gpt-4.1-mini` | $0.40/M | $1.60/M |
+| `openai/gpt-4.1-nano` | $0.10/M | $0.40/M |
+| `openai/gpt-4o` | $2.50/M | $10.00/M |
+| `openai/gpt-4o-mini` | $0.15/M | $0.60/M |
+
+### OpenAI O-Series (Reasoning)
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `openai/o1` | $15.00/M | $60.00/M |
+| `openai/o1-mini` | $1.10/M | $4.40/M |
+| `openai/o3` | $2.00/M | $8.00/M |
+| `openai/o3-mini` | $1.10/M | $4.40/M |
+| `openai/o4-mini` | $1.10/M | $4.40/M |
+
+### Anthropic Claude
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `anthropic/claude-opus-4` | $15.00/M | $75.00/M |
+| `anthropic/claude-sonnet-4` | $3.00/M | $15.00/M |
+| `anthropic/claude-haiku-4.5` | $1.00/M | $5.00/M |
+
+### Google Gemini
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `google/gemini-3-pro-preview` | $2.00/M | $12.00/M |
+| `google/gemini-2.5-pro` | $1.25/M | $10.00/M |
+| `google/gemini-2.5-flash` | $0.15/M | $0.60/M |
+| `google/gemini-2.5-flash-lite` | **Free** | **Free** |
+
+### Image Generation
+| Model | Price |
+|-------|-------|
+| `openai/dall-e-3` | $0.04-0.08/image |
+| `openai/gpt-image-1` | $0.02-0.04/image |
 
 ## Usage Examples
 
