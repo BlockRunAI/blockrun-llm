@@ -235,8 +235,8 @@ class LLMClient:
         response: httpx.Response,
     ) -> ChatResponse:
         """Handle 402 response: parse requirements, sign payment, retry."""
-        # Get payment required header
-        payment_header = response.headers.get("X-Payment-Required")
+        # Get payment required header (x402 library uses lowercase)
+        payment_header = response.headers.get("payment-required")
         if not payment_header:
             # Try to get from response body
             try:
@@ -277,13 +277,13 @@ class LLMClient:
             extensions=extensions,
         )
 
-        # Retry with payment
+        # Retry with payment (x402 library expects PAYMENT-SIGNATURE header)
         retry_response = self._client.post(
             url,
             json=body,
             headers={
                 "Content-Type": "application/json",
-                "X-Payment": payment_payload,
+                "PAYMENT-SIGNATURE": payment_payload,
             },
         )
 
@@ -462,7 +462,8 @@ class AsyncLLMClient:
         response: httpx.Response,
     ) -> ChatResponse:
         """Handle 402 response asynchronously."""
-        payment_header = response.headers.get("X-Payment-Required")
+        # Get payment required header (x402 library uses lowercase)
+        payment_header = response.headers.get("payment-required")
         if not payment_header:
             try:
                 resp_body = response.json()
@@ -500,12 +501,13 @@ class AsyncLLMClient:
             extensions=extensions,
         )
 
+        # Retry with payment (x402 library expects PAYMENT-SIGNATURE header)
         retry_response = await self._client.post(
             url,
             json=body,
             headers={
                 "Content-Type": "application/json",
-                "X-Payment": payment_payload,
+                "PAYMENT-SIGNATURE": payment_payload,
             },
         )
 
