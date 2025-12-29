@@ -1,6 +1,17 @@
 """
 BlockRun Image Client - Generate images via x402 micropayments.
 
+SECURITY NOTE - Private Key Handling:
+=====================================
+Your private key NEVER leaves your machine. Here's what happens:
+
+1. Key stays local - only used to sign an EIP-712 typed data message
+2. Only the SIGNATURE is sent in the PAYMENT-SIGNATURE header
+3. BlockRun verifies the signature on-chain via Coinbase CDP facilitator
+4. Your actual private key is NEVER transmitted to any server
+
+This is the same security model as signing any blockchain transaction.
+
 Usage:
     from blockrun_llm import ImageClient
 
