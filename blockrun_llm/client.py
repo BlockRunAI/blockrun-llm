@@ -1,6 +1,20 @@
 """
 BlockRun LLM Client - Main SDK entry point.
 
+SECURITY NOTE - Private Key Handling:
+=====================================
+Your private key NEVER leaves your machine. Here's what happens:
+
+1. Key stays local - only used to sign an EIP-712 typed data message
+2. Only the SIGNATURE is sent in the PAYMENT-SIGNATURE header
+3. BlockRun verifies the signature on-chain via Coinbase CDP facilitator
+4. Your actual private key is NEVER transmitted to any server
+
+This is the same security model as:
+- Signing a MetaMask transaction
+- Any on-chain swap or trade
+- Standard EIP-3009 TransferWithAuthorization
+
 Usage:
     from blockrun_llm import LLMClient
 
@@ -53,6 +67,9 @@ class LLMClient:
 
     Provides access to multiple LLM providers (OpenAI, Anthropic, Google, etc.)
     with automatic x402 micropayments on Base chain.
+
+    Security: Your private key is used ONLY for local EIP-712 signing.
+    The key NEVER leaves your machine - only signatures are transmitted.
     """
 
     DEFAULT_API_URL = "https://blockrun.ai/api"
@@ -69,24 +86,33 @@ class LLMClient:
 
         Args:
             private_key: EVM wallet private key (or set BLOCKRUN_WALLET_KEY env var)
+                         NOTE: Key is used for LOCAL signing only - never transmitted
             api_url: API endpoint URL (default: https://blockrun.ai/api)
             timeout: Request timeout in seconds (default: 60)
 
         Raises:
             ValueError: If no private key is provided or found in env
+
+        Security:
+            Your private key NEVER leaves your machine. It is only used to sign
+            EIP-712 typed data locally. Only the signature is sent to the server.
         """
         # Get private key from param or environment
+        # SECURITY: Key is stored in memory only, used for LOCAL signing
         key = private_key or os.environ.get("BLOCKRUN_WALLET_KEY")
         if not key:
             raise ValueError(
                 "Private key required. Either pass private_key parameter or set "
-                "BLOCKRUN_WALLET_KEY environment variable."
+                "BLOCKRUN_WALLET_KEY environment variable. "
+                "NOTE: Your key never leaves your machine - only signatures are sent."
             )
 
         # Validate private key format
         validate_private_key(key)
 
-        # Initialize wallet account (key stays local, never transmitted)
+        # Initialize wallet account
+        # SECURITY: Key stays local, only used to sign EIP-712 messages
+        # The key is NEVER transmitted - only signatures are sent
         self.account = Account.from_key(key)
 
         # Validate and set API URL
@@ -234,7 +260,12 @@ class LLMClient:
         body: Dict[str, Any],
         response: httpx.Response,
     ) -> ChatResponse:
-        """Handle 402 response: parse requirements, sign payment, retry."""
+        """
+        Handle 402 response: parse requirements, sign payment locally, retry.
+
+        SECURITY: Payment signing happens entirely on your machine.
+        Only the signature is sent - your private key never leaves.
+        """
         # Get payment required header (x402 library uses lowercase)
         payment_header = response.headers.get("payment-required")
         if not payment_header:
@@ -259,6 +290,7 @@ class LLMClient:
         details = extract_payment_details(payment_required)
 
         # Create signed payment payload (v2 format)
+        # SECURITY: Signing happens locally - only the signature is sent to server
         resource = details.get("resource") or {}
         # Pass through extensions from server (for Bazaar discovery)
         extensions = payment_required.get("extensions", {})
@@ -483,6 +515,7 @@ class AsyncLLMClient:
         details = extract_payment_details(payment_required)
 
         # Create signed payment payload (v2 format)
+        # SECURITY: Signing happens locally - only the signature is sent to server
         resource = details.get("resource") or {}
         # Pass through extensions from server (for Bazaar discovery)
         extensions = payment_required.get("extensions", {})
