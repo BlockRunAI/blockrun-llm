@@ -89,3 +89,29 @@ class APIError(BlockrunError):
         super().__init__(message)
         self.status_code = status_code
         self.response = response
+
+
+# Image generation types
+class ImageData(BaseModel):
+    """A single generated image."""
+
+    url: str
+    revised_prompt: Optional[str] = None
+
+
+class ImageResponse(BaseModel):
+    """Response from image generation."""
+
+    created: int
+    data: List[ImageData]
+
+
+class ImageModel(BaseModel):
+    """Available image model information."""
+
+    id: str
+    name: str
+    provider: str
+    description: str
+    price_per_image: float
+    available: bool = True
