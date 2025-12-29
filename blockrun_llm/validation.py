@@ -169,7 +169,7 @@ def validate_api_url(url: str) -> None:
         ValueError: If the URL is invalid or insecure
 
     Example:
-        >>> validate_api_url("https://api.blockrun.ai")
+        >>> validate_api_url("https://blockrun.ai/api")
         >>> validate_api_url("http://localhost:3000")  # OK for development
     """
     try:
@@ -251,16 +251,16 @@ def validate_resource_url(url: str, base_url: str) -> str:
 
     Example:
         >>> validate_resource_url(
-        ...     "https://api.blockrun.ai/v1/chat",
-        ...     "https://api.blockrun.ai"
+        ...     "https://blockrun.ai/api/v1/chat",
+        ...     "https://blockrun.ai/api"
         ... )
-        'https://api.blockrun.ai/v1/chat'
+        'https://blockrun.ai/api/v1/chat'
 
         >>> validate_resource_url(
         ...     "https://malicious.com/steal",
-        ...     "https://api.blockrun.ai"
+        ...     "https://blockrun.ai/api"
         ... )
-        'https://api.blockrun.ai/v1/chat/completions'
+        'https://blockrun.ai/api/v1/chat/completions'
     """
     try:
         parsed = urlparse(url)
