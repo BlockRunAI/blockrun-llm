@@ -387,10 +387,10 @@ class AsyncLLMClient:
         api_url: Optional[str] = None,
         timeout: float = 60.0,
     ):
-        key = private_key or os.environ.get("BLOCKRUN_WALLET_KEY")
+        key = private_key or os.environ.get("BASE_CHAIN_WALLET_KEY")
         if not key:
             raise ValueError(
-                "Private key required. Set BLOCKRUN_WALLET_KEY env or pass private_key."
+                "Private key required. Set BASE_CHAIN_WALLET_KEY env or pass private_key."
             )
 
         # Validate private key format

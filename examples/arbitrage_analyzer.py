@@ -6,7 +6,7 @@ a cryptocurrency arbitrage bot (like Polymarket-Kalshi BTC arbitrage).
 
 Setup:
     pip install blockrun-llm
-    export BLOCKRUN_WALLET_KEY=0x...  # Your Base wallet private key
+    export BASE_CHAIN_WALLET_KEY=0x...  # Your Base wallet private key
 
 Usage:
     python arbitrage_analyzer.py
@@ -246,7 +246,7 @@ if __name__ == "__main__":
         market="BTC > $100,000 by Jan 15"
     )
 
-    # Initialize analyzer (uses BLOCKRUN_WALLET_KEY from env)
+    # Initialize analyzer (uses BASE_CHAIN_WALLET_KEY from env)
     analyzer = ArbitrageAnalyzer(model_tier="fast")
 
     print("=" * 60)

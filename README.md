@@ -169,7 +169,7 @@ for model in models:
 1. Create a wallet on Base network (Coinbase Wallet, MetaMask, etc.)
 2. Get some ETH on Base for gas (small amount, ~$1)
 3. Get USDC on Base for API payments
-4. Export your private key and set it as `BLOCKRUN_WALLET_KEY`
+4. Export your private key and set it as `BASE_CHAIN_WALLET_KEY`
 
 ```bash
 # .env file
@@ -208,7 +208,7 @@ pytest tests/unit -v                 # Verbose output
 
 Integration tests call the production API and require:
 - A funded Base wallet with USDC ($1+ recommended)
-- `BLOCKRUN_WALLET_KEY` environment variable set
+- `BASE_CHAIN_WALLET_KEY` environment variable set
 - Estimated cost: ~$0.05 per test run
 
 ```bash
@@ -217,7 +217,7 @@ pytest tests/integration             # Run integration tests only
 pytest                               # Run all tests
 ```
 
-Integration tests are automatically skipped if `BLOCKRUN_WALLET_KEY` is not set.
+Integration tests are automatically skipped if `BASE_CHAIN_WALLET_KEY` is not set.
 
 ## Security
 

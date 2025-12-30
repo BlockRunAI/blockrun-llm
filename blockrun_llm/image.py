@@ -15,7 +15,7 @@ This is the same security model as signing any blockchain transaction.
 Usage:
     from blockrun_llm import ImageClient
 
-    # Initialize with private key from env (BLOCKRUN_WALLET_KEY)
+    # Initialize with private key from env (BASE_CHAIN_WALLET_KEY)
     client = ImageClient()
 
     # Generate an image
@@ -68,7 +68,7 @@ class ImageClient:
         Initialize the BlockRun Image client.
 
         Args:
-            private_key: EVM wallet private key (or set BLOCKRUN_WALLET_KEY env var)
+            private_key: EVM wallet private key (or set BASE_CHAIN_WALLET_KEY env var)
             api_url: API endpoint URL (default: https://blockrun.ai/api)
             timeout: Request timeout in seconds (default: 120 for images)
 
@@ -76,11 +76,11 @@ class ImageClient:
             ValueError: If no private key is provided or found in env
         """
         # Get private key from param or environment
-        key = private_key or os.environ.get("BLOCKRUN_WALLET_KEY")
+        key = private_key or os.environ.get("BASE_CHAIN_WALLET_KEY")
         if not key:
             raise ValueError(
                 "Private key required. Either pass private_key parameter or set "
-                "BLOCKRUN_WALLET_KEY environment variable."
+                "BASE_CHAIN_WALLET_KEY environment variable."
             )
 
         # Validate private key format
