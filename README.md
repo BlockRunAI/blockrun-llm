@@ -77,7 +77,6 @@ That's it. The SDK handles x402 payment automatically.
 | `google/gemini-3-pro-preview` | $2.00/M | $12.00/M |
 | `google/gemini-2.5-pro` | $1.25/M | $10.00/M |
 | `google/gemini-2.5-flash` | $0.15/M | $0.60/M |
-| `google/gemini-2.5-flash-lite` | **Free** | **Free** |
 
 ### Image Generation
 | Model | Price |
