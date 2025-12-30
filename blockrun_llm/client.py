@@ -138,7 +138,7 @@ class LLMClient:
         Simple 1-line chat interface.
 
         Args:
-            model: Model ID (e.g., "gpt-4o", "claude-3-5-sonnet", "gemini-2.5-pro")
+            model: Model ID (e.g., "openai/gpt-4o", "anthropic/claude-sonnet-4", "google/gemini-2.5-pro")
             prompt: User message
             system: Optional system prompt
             max_tokens: Max tokens to generate (default: 1024)
