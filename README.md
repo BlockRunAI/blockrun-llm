@@ -17,7 +17,7 @@ pip install blockrun-llm
 ```python
 from blockrun_llm import LLMClient
 
-client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY (never sent to server)
+client = LLMClient()  # Uses BASE_CHAIN_WALLET_KEY (never sent to server)
 response = client.chat("openai/gpt-4o", "Hello!")
 ```
 
@@ -91,7 +91,7 @@ That's it. The SDK handles x402 payment automatically.
 ```python
 from blockrun_llm import LLMClient
 
-client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY (never sent to server)
+client = LLMClient()  # Uses BASE_CHAIN_WALLET_KEY (never sent to server)
 
 response = client.chat("openai/gpt-4o", "Explain quantum computing")
 print(response)
@@ -109,7 +109,7 @@ response = client.chat(
 ```python
 from blockrun_llm import LLMClient
 
-client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY (never sent to server)
+client = LLMClient()  # Uses BASE_CHAIN_WALLET_KEY (never sent to server)
 
 messages = [
     {"role": "system", "content": "You are a helpful assistant."},
@@ -161,7 +161,7 @@ for model in models:
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `BLOCKRUN_WALLET_KEY` | Your EVM wallet private key | Yes (or pass to constructor) |
+| `BASE_CHAIN_WALLET_KEY` | Your Base chain wallet private key | Yes (or pass to constructor) |
 | `BLOCKRUN_API_URL` | API endpoint | No (default: https://blockrun.ai/api) |
 
 ## Setting Up Your Wallet
@@ -173,7 +173,7 @@ for model in models:
 
 ```bash
 # .env file
-BLOCKRUN_WALLET_KEY=0x...your_private_key_here
+BASE_CHAIN_WALLET_KEY=0x...your_private_key_here
 ```
 
 ## Error Handling
@@ -212,7 +212,7 @@ Integration tests call the production API and require:
 - Estimated cost: ~$0.05 per test run
 
 ```bash
-export BLOCKRUN_WALLET_KEY=0x...
+export BASE_CHAIN_WALLET_KEY=0x...
 pytest tests/integration             # Run integration tests only
 pytest                               # Run all tests
 ```
