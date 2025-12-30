@@ -1,12 +1,12 @@
 """Integration tests for BlockRun LLM SDK against production API.
 
 Requirements:
-- BLOCKRUN_WALLET_KEY environment variable with funded Base wallet
+- BASE_CHAIN_WALLET_KEY environment variable with funded Base wallet
 - Minimum $1 USDC on Base chain
 - Estimated cost per test run: ~$0.05
 
 Run with: pytest tests/integration
-Skip if no wallet: Tests will be skipped if BLOCKRUN_WALLET_KEY not set
+Skip if no wallet: Tests will be skipped if BASE_CHAIN_WALLET_KEY not set
 """
 
 import os
@@ -14,12 +14,12 @@ import pytest
 import time
 from blockrun_llm import LLMClient, AsyncLLMClient
 
-WALLET_KEY = os.environ.get("BLOCKRUN_WALLET_KEY")
-PRODUCTION_API = "https://api.blockrun.ai"
+WALLET_KEY = os.environ.get("BASE_CHAIN_WALLET_KEY")
+PRODUCTION_API = "https://blockrun.ai/api"
 
 # Skip all tests if no wallet key configured
 pytestmark = pytest.mark.skipif(
-    not WALLET_KEY, reason="BLOCKRUN_WALLET_KEY environment variable not set"
+    not WALLET_KEY, reason="BASE_CHAIN_WALLET_KEY environment variable not set"
 )
 
 
@@ -30,7 +30,7 @@ class TestProductionAPISync:
     def client(self):
         """Create LLMClient instance for testing."""
         if not WALLET_KEY:
-            pytest.skip("BLOCKRUN_WALLET_KEY not set")
+            pytest.skip("BASE_CHAIN_WALLET_KEY not set")
 
         client = LLMClient(private_key=WALLET_KEY, api_url=PRODUCTION_API)
 
@@ -134,7 +134,7 @@ class TestProductionAPIAsync:
     async def async_client(self):
         """Create AsyncLLMClient instance for testing."""
         if not WALLET_KEY:
-            pytest.skip("BLOCKRUN_WALLET_KEY not set")
+            pytest.skip("BASE_CHAIN_WALLET_KEY not set")
 
         client = AsyncLLMClient(private_key=WALLET_KEY, api_url=PRODUCTION_API)
 
@@ -202,7 +202,7 @@ class TestProductionAPIErrorHandling:
     def client(self):
         """Create LLMClient instance for testing."""
         if not WALLET_KEY:
-            pytest.skip("BLOCKRUN_WALLET_KEY not set")
+            pytest.skip("BASE_CHAIN_WALLET_KEY not set")
 
         return LLMClient(private_key=WALLET_KEY, api_url=PRODUCTION_API)
 
