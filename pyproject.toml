@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "blockrun-llm"
-version = "0.2.0"
+version = "0.2.1"
 description = "BlockRun SDK - Pay-per-request AI (LLM & Image) via x402 on Base"
 readme = "README.md"
 license = "MIT"
@@ -43,7 +43,7 @@ dev = [
 [project.urls]
 Homepage = "https://blockrun.ai"
 Documentation = "https://docs.blockrun.ai"
-Repository = "https://github.com/blockrun/blockrun-llm"
+Repository = "https://github.com/BlockRunAI/blockrun-llm"
 
 [tool.hatch.build.targets.wheel]
 packages = ["blockrun_llm"]
