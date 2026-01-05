@@ -4,7 +4,7 @@ BlockRun LLM SDK - Pay-per-request AI via x402 on Base
 Usage:
     from blockrun_llm import LLMClient
 
-    client = LLMClient()  # Uses BASE_CHAIN_WALLET_KEY from env
+    client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY from env
     response = client.chat("gpt-4o", "Hello!")
     print(response)
 

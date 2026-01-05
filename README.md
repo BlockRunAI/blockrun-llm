@@ -17,7 +17,7 @@ pip install blockrun-llm
 ```python
 from blockrun_llm import LLMClient
 
-client = LLMClient()  # Uses BASE_CHAIN_WALLET_KEY (never sent to server)
+client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY (never sent to server)
 response = client.chat("openai/gpt-4o", "Hello!")
 ```
 
@@ -91,7 +91,7 @@ That's it. The SDK handles x402 payment automatically.
 ```python
 from blockrun_llm import LLMClient
 
-client = LLMClient()  # Uses BASE_CHAIN_WALLET_KEY (never sent to server)
+client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY (never sent to server)
 
 response = client.chat("openai/gpt-4o", "Explain quantum computing")
 print(response)
@@ -109,7 +109,7 @@ response = client.chat(
 ```python
 from blockrun_llm import LLMClient
 
-client = LLMClient()  # Uses BASE_CHAIN_WALLET_KEY (never sent to server)
+client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY (never sent to server)
 
 messages = [
     {"role": "system", "content": "You are a helpful assistant."},
@@ -161,7 +161,7 @@ for model in models:
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `BASE_CHAIN_WALLET_KEY` | Your Base chain wallet private key | Yes (or pass to constructor) |
+| `BLOCKRUN_WALLET_KEY` | Your Base chain wallet private key | Yes (or pass to constructor) |
 | `BLOCKRUN_API_URL` | API endpoint | No (default: https://blockrun.ai/api) |
 
 ## Setting Up Your Wallet
@@ -169,11 +169,11 @@ for model in models:
 1. Create a wallet on Base network (Coinbase Wallet, MetaMask, etc.)
 2. Get some ETH on Base for gas (small amount, ~$1)
 3. Get USDC on Base for API payments
-4. Export your private key and set it as `BASE_CHAIN_WALLET_KEY`
+4. Export your private key and set it as `BLOCKRUN_WALLET_KEY`
 
 ```bash
 # .env file
-BASE_CHAIN_WALLET_KEY=0x...your_private_key_here
+BLOCKRUN_WALLET_KEY=0x...your_private_key_here
 ```
 
 ## Error Handling
@@ -208,16 +208,16 @@ pytest tests/unit -v                 # Verbose output
 
 Integration tests call the production API and require:
 - A funded Base wallet with USDC ($1+ recommended)
-- `BASE_CHAIN_WALLET_KEY` environment variable set
+- `BLOCKRUN_WALLET_KEY` environment variable set
 - Estimated cost: ~$0.05 per test run
 
 ```bash
-export BASE_CHAIN_WALLET_KEY=0x...
+export BLOCKRUN_WALLET_KEY=0x...
 pytest tests/integration             # Run integration tests only
 pytest                               # Run all tests
 ```
 
-Integration tests are automatically skipped if `BASE_CHAIN_WALLET_KEY` is not set.
+Integration tests are automatically skipped if `BLOCKRUN_WALLET_KEY` is not set.
 
 ## Security
 

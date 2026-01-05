@@ -18,7 +18,7 @@ This is the same security model as:
 Usage:
     from blockrun_llm import LLMClient
 
-    # Initialize with private key from env (BASE_CHAIN_WALLET_KEY)
+    # Initialize with private key from env (BLOCKRUN_WALLET_KEY)
     client = LLMClient()
 
     # Or pass private key directly
@@ -85,7 +85,7 @@ class LLMClient:
         Initialize the BlockRun LLM client.
 
         Args:
-            private_key: Base chain wallet private key (or set BASE_CHAIN_WALLET_KEY env var)
+            private_key: Base chain wallet private key (or set BLOCKRUN_WALLET_KEY env var)
                          NOTE: Key is used for LOCAL signing only - never transmitted
             api_url: API endpoint URL (default: https://blockrun.ai/api)
             timeout: Request timeout in seconds (default: 60)
@@ -99,11 +99,11 @@ class LLMClient:
         """
         # Get private key from param or environment
         # SECURITY: Key is stored in memory only, used for LOCAL signing
-        key = private_key or os.environ.get("BASE_CHAIN_WALLET_KEY")
+        key = private_key or os.environ.get("BLOCKRUN_WALLET_KEY") or os.environ.get("BASE_CHAIN_WALLET_KEY")
         if not key:
             raise ValueError(
                 "Private key required. Either pass private_key parameter or set "
-                "BASE_CHAIN_WALLET_KEY environment variable. "
+                "BLOCKRUN_WALLET_KEY environment variable. "
                 "NOTE: Your key never leaves your machine - only signatures are sent."
             )
 
@@ -387,10 +387,10 @@ class AsyncLLMClient:
         api_url: Optional[str] = None,
         timeout: float = 60.0,
     ):
-        key = private_key or os.environ.get("BASE_CHAIN_WALLET_KEY")
+        key = private_key or os.environ.get("BLOCKRUN_WALLET_KEY") or os.environ.get("BASE_CHAIN_WALLET_KEY")
         if not key:
             raise ValueError(
-                "Private key required. Set BASE_CHAIN_WALLET_KEY env or pass private_key."
+                "Private key required. Set BLOCKRUN_WALLET_KEY env or pass private_key."
             )
 
         # Validate private key format
