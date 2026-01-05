@@ -39,12 +39,9 @@ That's it. The SDK handles x402 payment automatically.
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
 | `openai/gpt-5.2` | $1.75/M | $14.00/M |
-| `openai/gpt-5.1` | $1.25/M | $10.00/M |
-| `openai/gpt-5` | $1.25/M | $10.00/M |
 | `openai/gpt-5-mini` | $0.25/M | $2.00/M |
 | `openai/gpt-5-nano` | $0.05/M | $0.40/M |
 | `openai/gpt-5.2-pro` | $21.00/M | $168.00/M |
-| `openai/gpt-5-pro` | $15.00/M | $120.00/M |
 
 ### OpenAI GPT-4 Family
 | Model | Input Price | Output Price |
@@ -64,6 +61,12 @@ That's it. The SDK handles x402 payment automatically.
 | `openai/o3-mini` | $1.10/M | $4.40/M |
 | `openai/o4-mini` | $1.10/M | $4.40/M |
 
+### OpenAI Open-Source (Apache 2.0)
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `openai/gpt-oss-20b` | $0.03/M | $0.14/M |
+| `openai/gpt-oss-120b` | $0.18/M | $0.84/M |
+
 ### Anthropic Claude
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
@@ -78,11 +81,33 @@ That's it. The SDK handles x402 payment automatically.
 | `google/gemini-2.5-pro` | $1.25/M | $10.00/M |
 | `google/gemini-2.5-flash` | $0.15/M | $0.60/M |
 
+### DeepSeek
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `deepseek/deepseek-chat` | $0.28/M | $0.42/M |
+| `deepseek/deepseek-reasoner` | $0.28/M | $0.42/M |
+
+### Qwen (Alibaba)
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `qwen/qwen3-max` | $0.46/M | $1.84/M |
+| `qwen/qwen-plus` | $0.10/M | $0.30/M |
+| `qwen/qwen-turbo` | $0.02/M | $0.06/M |
+
+### xAI Grok
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `xai/grok-3` | $3.00/M | $15.00/M |
+| `xai/grok-3-fast` | $5.00/M | $25.00/M |
+| `xai/grok-3-mini` | $0.30/M | $0.50/M |
+
 ### Image Generation
 | Model | Price |
 |-------|-------|
 | `openai/dall-e-3` | $0.04-0.08/image |
 | `openai/gpt-image-1` | $0.02-0.04/image |
+| `google/nano-banana` | $0.05/image |
+| `google/nano-banana-pro` | $0.10-0.15/image |
 
 ## Usage Examples
 
