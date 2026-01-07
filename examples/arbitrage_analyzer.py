@@ -13,20 +13,20 @@ Usage:
 """
 
 from dataclasses import dataclass
-from typing import Optional
 from blockrun_llm import LLMClient, AsyncLLMClient, PaymentError, APIError
 
 
 @dataclass
 class ArbitrageOpportunity:
     """Represents a detected arbitrage opportunity."""
+
     platform_a: str
     platform_b: str
     price_a: float  # e.g., 0.52 (52% probability)
     price_b: float  # e.g., 0.47 (47% probability)
-    spread: float   # Combined cost below $1.00
+    spread: float  # Combined cost below $1.00
     expiry: str
-    market: str     # e.g., "BTC > $100,000"
+    market: str  # e.g., "BTC > $100,000"
 
 
 class ArbitrageAnalyzer:
@@ -39,10 +39,10 @@ class ArbitrageAnalyzer:
 
     # Model recommendations by use case
     MODELS = {
-        "fast": "openai/gpt-4o-mini",      # $0.15/M input - quick analysis
+        "fast": "openai/gpt-4o-mini",  # $0.15/M input - quick analysis
         "balanced": "anthropic/claude-haiku-4.5",  # $1.00/M input - good reasoning
         "deep": "anthropic/claude-sonnet-4",  # $3.00/M input - thorough analysis
-        "frontier": "openai/gpt-5.2",      # $1.75/M input - latest capabilities
+        "frontier": "openai/gpt-5.2",  # $1.75/M input - latest capabilities
     }
 
     def __init__(self, model_tier: str = "fast"):
@@ -84,26 +84,20 @@ Provide a risk score (1-10, 10=highest risk) and clear recommendation."""
             response = self.client.chat(
                 self.model,
                 prompt,
-                system="You are a quantitative trading analyst specializing in prediction market arbitrage. Be concise and actionable."
+                system="You are a quantitative trading analyst specializing in prediction market arbitrage. Be concise and actionable.",
             )
 
             return {
                 "success": True,
                 "analysis": response,
                 "model": self.model,
-                "cost_estimate": "~$0.001-0.01"
+                "cost_estimate": "~$0.001-0.01",
             }
 
         except PaymentError as e:
-            return {
-                "success": False,
-                "error": f"Payment failed - check USDC balance: {e}"
-            }
+            return {"success": False, "error": f"Payment failed - check USDC balance: {e}"}
         except APIError as e:
-            return {
-                "success": False,
-                "error": f"API error: {e}"
-            }
+            return {"success": False, "error": f"API error: {e}"}
 
     def get_market_sentiment(self, asset: str = "BTC") -> dict:
         """
@@ -129,15 +123,10 @@ Provide a sentiment score (-100 to +100) and brief reasoning."""
             response = self.client.chat(
                 self.model,
                 prompt,
-                system="You are a crypto market analyst. Provide objective, data-driven analysis."
+                system="You are a crypto market analyst. Provide objective, data-driven analysis.",
             )
 
-            return {
-                "success": True,
-                "asset": asset,
-                "sentiment": response,
-                "model": self.model
-            }
+            return {"success": True, "asset": asset, "sentiment": response, "model": self.model}
 
         except (PaymentError, APIError) as e:
             return {"success": False, "error": str(e)}
@@ -152,11 +141,13 @@ Provide a sentiment score (-100 to +100) and brief reasoning."""
         Returns:
             Ranked list with recommendations
         """
-        opp_descriptions = "\n".join([
-            f"{i+1}. {o.market}: {o.platform_a} @ {o.price_a:.2%} vs {o.platform_b} @ {o.price_b:.2%}, "
-            f"spread: ${o.spread:.4f}, expires: {o.expiry}"
-            for i, o in enumerate(opportunities)
-        ])
+        opp_descriptions = "\n".join(
+            [
+                f"{i+1}. {o.market}: {o.platform_a} @ {o.price_a:.2%} vs {o.platform_b} @ {o.price_b:.2%}, "
+                f"spread: ${o.spread:.4f}, expires: {o.expiry}"
+                for i, o in enumerate(opportunities)
+            ]
+        )
 
         prompt = f"""Rank these arbitrage opportunities by risk-adjusted return:
 
@@ -174,14 +165,14 @@ Return a ranked list with brief reasoning for each."""
             response = self.client.chat(
                 self.model,
                 prompt,
-                system="You are a quantitative trading analyst. Rank opportunities objectively."
+                system="You are a quantitative trading analyst. Rank opportunities objectively.",
             )
 
             return {
                 "success": True,
                 "ranking": response,
                 "count": len(opportunities),
-                "model": self.model
+                "model": self.model,
             }
 
         except (PaymentError, APIError) as e:
@@ -220,15 +211,18 @@ class AsyncArbitrageAnalyzer:
                     client.chat(
                         self.model,
                         prompt,
-                        system="Be extremely concise. Yes/No + one sentence max."
+                        system="Be extremely concise. Yes/No + one sentence max.",
                     )
                 )
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             return [
-                {"opportunity": opp, "analysis": r} if isinstance(r, str)
-                else {"opportunity": opp, "error": str(r)}
+                (
+                    {"opportunity": opp, "analysis": r}
+                    if isinstance(r, str)
+                    else {"opportunity": opp, "error": str(r)}
+                )
                 for opp, r in zip(opportunities, results)
             ]
 
@@ -243,7 +237,7 @@ if __name__ == "__main__":
         price_b=0.47,
         spread=0.99,  # $0.99 combined cost
         expiry="2024-01-15 17:00 UTC",
-        market="BTC > $100,000 by Jan 15"
+        market="BTC > $100,000 by Jan 15",
     )
 
     # Initialize analyzer (uses BASE_CHAIN_WALLET_KEY from env)

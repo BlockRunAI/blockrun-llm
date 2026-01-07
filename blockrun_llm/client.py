@@ -38,12 +38,12 @@ Usage:
 """
 
 import os
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional
 import httpx
 from eth_account import Account
 from dotenv import load_dotenv
 
-from .types import ChatMessage, ChatResponse, APIError, PaymentError
+from .types import ChatResponse, APIError, PaymentError
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
 from .validation import (
     validate_private_key,
@@ -99,7 +99,11 @@ class LLMClient:
         """
         # Get private key from param or environment
         # SECURITY: Key is stored in memory only, used for LOCAL signing
-        key = private_key or os.environ.get("BLOCKRUN_WALLET_KEY") or os.environ.get("BASE_CHAIN_WALLET_KEY")
+        key = (
+            private_key
+            or os.environ.get("BLOCKRUN_WALLET_KEY")
+            or os.environ.get("BASE_CHAIN_WALLET_KEY")
+        )
         if not key:
             raise ValueError(
                 "Private key required. Either pass private_key parameter or set "
@@ -300,8 +304,7 @@ class LLMClient:
             amount=details["amount"],
             network=details.get("network", "eip155:8453"),
             resource_url=validate_resource_url(
-                resource.get("url", f"{self.api_url}/v1/chat/completions"),
-                self.api_url
+                resource.get("url", f"{self.api_url}/v1/chat/completions"), self.api_url
             ),
             resource_description=resource.get("description", "BlockRun AI API call"),
             max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
@@ -346,9 +349,14 @@ class LLMClient:
         response = self._client.get(f"{self.api_url}/v1/models")
 
         if response.status_code != 200:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
             raise APIError(
                 f"Failed to list models: {response.status_code}",
                 response.status_code,
+                sanitize_error_response(error_body),
             )
 
         return response.json().get("data", [])
@@ -387,7 +395,11 @@ class AsyncLLMClient:
         api_url: Optional[str] = None,
         timeout: float = 60.0,
     ):
-        key = private_key or os.environ.get("BLOCKRUN_WALLET_KEY") or os.environ.get("BASE_CHAIN_WALLET_KEY")
+        key = (
+            private_key
+            or os.environ.get("BLOCKRUN_WALLET_KEY")
+            or os.environ.get("BASE_CHAIN_WALLET_KEY")
+        )
         if not key:
             raise ValueError(
                 "Private key required. Set BLOCKRUN_WALLET_KEY env or pass private_key."
@@ -525,8 +537,7 @@ class AsyncLLMClient:
             amount=details["amount"],
             network=details.get("network", "eip155:8453"),
             resource_url=validate_resource_url(
-                resource.get("url", f"{self.api_url}/v1/chat/completions"),
-                self.api_url
+                resource.get("url", f"{self.api_url}/v1/chat/completions"), self.api_url
             ),
             resource_description=resource.get("description", "BlockRun AI API call"),
             max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
@@ -565,9 +576,14 @@ class AsyncLLMClient:
         response = await self._client.get(f"{self.api_url}/v1/models")
 
         if response.status_code != 200:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
             raise APIError(
                 f"Failed to list models: {response.status_code}",
                 response.status_code,
+                sanitize_error_response(error_body),
             )
 
         return response.json().get("data", [])
