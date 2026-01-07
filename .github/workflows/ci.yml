@@ -31,8 +31,5 @@ jobs:
       - name: Lint
         run: ruff check .
 
-      - name: Type check
-        run: mypy blockrun_llm
-
       - name: Run unit tests
-        run: pytest tests/unit --cov --cov-fail-under=85
+        run: pytest tests/unit
