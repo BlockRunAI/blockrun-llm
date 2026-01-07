@@ -114,7 +114,11 @@ def create_payment_payload(
             "extra": extra or {"name": "USD Coin", "version": "2"},
         },
         "payload": {
-            "signature": "0x" + signed.signature.hex() if not signed.signature.hex().startswith("0x") else signed.signature.hex(),
+            "signature": (
+                "0x" + signed.signature.hex()
+                if not signed.signature.hex().startswith("0x")
+                else signed.signature.hex()
+            ),
             "authorization": {
                 "from": account.address,
                 "to": recipient,

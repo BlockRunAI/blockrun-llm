@@ -27,9 +27,7 @@ class TestValidatePrivateKey:
     def test_reject_no_prefix(self):
         """Should reject key without 0x prefix."""
         with pytest.raises(ValueError, match="must start with 0x"):
-            validate_private_key(
-                "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
-            )
+            validate_private_key("ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
 
     def test_reject_short_key(self):
         """Should reject short key."""
@@ -83,9 +81,9 @@ class TestValidateApiUrl:
 
     def test_reject_invalid_url(self):
         """Should reject invalid URL format."""
-        with pytest.raises(ValueError, match="Invalid"):
+        with pytest.raises(ValueError, match="scheme"):
             validate_api_url("not-a-url")
-        with pytest.raises(ValueError, match="Invalid"):
+        with pytest.raises(ValueError, match="scheme"):
             validate_api_url("")
 
 
@@ -240,9 +238,7 @@ class TestSanitizeErrorResponse:
 class TestValidateResourceUrl:
     def test_allow_matching_domain(self):
         """Should allow matching domain."""
-        result = validate_resource_url(
-            "https://api.blockrun.ai/v1/chat", "https://api.blockrun.ai"
-        )
+        result = validate_resource_url("https://api.blockrun.ai/v1/chat", "https://api.blockrun.ai")
         assert result == "https://api.blockrun.ai/v1/chat"
 
     def test_allow_different_path(self):
@@ -254,16 +250,12 @@ class TestValidateResourceUrl:
 
     def test_reject_different_domain(self):
         """Should reject different domain."""
-        result = validate_resource_url(
-            "https://malicious.com/steal", "https://api.blockrun.ai"
-        )
+        result = validate_resource_url("https://malicious.com/steal", "https://api.blockrun.ai")
         assert result == "https://api.blockrun.ai/v1/chat/completions"
 
     def test_reject_different_protocol(self):
         """Should reject different protocol."""
-        result = validate_resource_url(
-            "http://api.blockrun.ai/v1/chat", "https://api.blockrun.ai"
-        )
+        result = validate_resource_url("http://api.blockrun.ai/v1/chat", "https://api.blockrun.ai")
         assert result == "https://api.blockrun.ai/v1/chat/completions"
 
     def test_handle_invalid_url(self):

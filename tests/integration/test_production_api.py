@@ -9,9 +9,11 @@ Run with: pytest tests/integration
 Skip if no wallet: Tests will be skipped if BASE_CHAIN_WALLET_KEY not set
 """
 
+import asyncio
 import os
-import pytest
 import time
+
+import pytest
 from blockrun_llm import LLMClient, AsyncLLMClient
 
 WALLET_KEY = os.environ.get("BASE_CHAIN_WALLET_KEY")
@@ -37,7 +39,7 @@ class TestProductionAPISync:
         print("\n🧪 Running sync integration tests against production API")
         print(f"   Wallet: {client.get_wallet_address()}")
         print(f"   API: {PRODUCTION_API}")
-        print(f"   Estimated cost: ~$0.05\n")
+        print("   Estimated cost: ~$0.05\n")
 
         return client
 
@@ -121,10 +123,9 @@ class TestProductionAPISync:
         assert isinstance(response, str)
         assert response
 
-        print(f"   ✓ Payment flow successful, response received")
+        print("   ✓ Payment flow successful, response received")
 
         time.sleep(2)
-
 
 
 class TestProductionAPIAsync:
@@ -141,7 +142,7 @@ class TestProductionAPIAsync:
         print("\n🧪 Running async integration tests against production API")
         print(f"   Wallet: {client.get_wallet_address()}")
         print(f"   API: {PRODUCTION_API}")
-        print(f"   Estimated cost: ~$0.05\n")
+        print("   Estimated cost: ~$0.05\n")
 
         return client
 
@@ -194,7 +195,6 @@ class TestProductionAPIAsync:
         await asyncio.sleep(2)
 
 
-
 class TestProductionAPIErrorHandling:
     """Integration tests for error handling against production API."""
 
@@ -216,7 +216,7 @@ class TestProductionAPIErrorHandling:
                 [{"role": "user", "content": "test"}],
             )
 
-        print(f"   ✓ Invalid model error handled correctly")
+        print("   ✓ Invalid model error handled correctly")
 
         time.sleep(2)
 
@@ -225,23 +225,17 @@ class TestProductionAPIErrorHandling:
         from blockrun_llm import APIError
 
         try:
-            client.chat(
-                "invalid-model", [{"role": "user", "content": "test"}]
-            )
+            client.chat("invalid-model", [{"role": "user", "content": "test"}])
             pytest.fail("Should have raised APIError")
         except APIError as e:
             # Error should be sanitized (no internal stack traces, API keys, etc.)
             assert e.message is not None
             assert "/var/" not in str(e.message)
-            assert "internal" not in str(e.message).lower() or "internal" in str(
-                e.message
-            ).lower()  # Allow "internal" in error message but not internal paths
+            assert (
+                "internal" not in str(e.message).lower() or "internal" in str(e.message).lower()
+            )  # Allow "internal" in error message but not internal paths
             assert "stack" not in str(e.message).lower()
 
-            print(f"   ✓ Error response properly sanitized")
+            print("   ✓ Error response properly sanitized")
 
         time.sleep(2)
-
-
-# Import asyncio for async tests
-import asyncio

@@ -51,15 +51,11 @@ def validate_private_key(key: str) -> None:
 
     # Must be exactly 66 characters (0x + 64 hex chars)
     if len(key) != 66:
-        raise ValueError(
-            "Private key must be 66 characters (0x + 64 hexadecimal characters)"
-        )
+        raise ValueError("Private key must be 66 characters (0x + 64 hexadecimal characters)")
 
     # Must contain only valid hexadecimal characters
     if not re.match(r"^0x[0-9a-fA-F]{64}$", key):
-        raise ValueError(
-            "Private key must contain only hexadecimal characters (0-9, a-f, A-F)"
-        )
+        raise ValueError("Private key must contain only hexadecimal characters (0-9, a-f, A-F)")
 
 
 def validate_model(model: str) -> None:
@@ -227,11 +223,7 @@ def sanitize_error_response(error_body: Any) -> Dict[str, Any]:
             if isinstance(error_body.get("error"), str)
             else "API request failed"
         ),
-        "code": (
-            error_body.get("code")
-            if isinstance(error_body.get("code"), str)
-            else None
-        ),
+        "code": (error_body.get("code") if isinstance(error_body.get("code"), str) else None),
     }
 
 

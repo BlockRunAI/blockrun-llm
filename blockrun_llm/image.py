@@ -76,7 +76,11 @@ class ImageClient:
             ValueError: If no private key is provided or found in env
         """
         # Get private key from param or environment
-        key = private_key or os.environ.get("BLOCKRUN_WALLET_KEY") or os.environ.get("BASE_CHAIN_WALLET_KEY")
+        key = (
+            private_key
+            or os.environ.get("BLOCKRUN_WALLET_KEY")
+            or os.environ.get("BASE_CHAIN_WALLET_KEY")
+        )
         if not key:
             raise ValueError(
                 "Private key required. Either pass private_key parameter or set "
@@ -213,8 +217,7 @@ class ImageClient:
             amount=details["amount"],
             network=details.get("network", "eip155:8453"),
             resource_url=validate_resource_url(
-                resource.get("url", f"{self.api_url}/v1/images/generations"),
-                self.api_url
+                resource.get("url", f"{self.api_url}/v1/images/generations"), self.api_url
             ),
             resource_description=resource.get("description", "BlockRun Image Generation"),
             max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
