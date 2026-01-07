@@ -2,10 +2,9 @@
 
 import pytest
 from unittest.mock import Mock, patch
-from blockrun_llm import LLMClient, APIError, PaymentError
+from blockrun_llm import LLMClient, APIError
 from ..helpers import (
     TEST_PRIVATE_KEY,
-    build_chat_response,
     build_error_response,
     build_models_response,
     MockResponse,
@@ -44,13 +43,11 @@ class TestLLMClientInit:
     def test_default_api_url(self):
         """Should use default API URL."""
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
-        assert client.api_url == "https://api.blockrun.ai"
+        assert client.api_url == "https://blockrun.ai/api"
 
     def test_custom_api_url(self):
         """Should accept custom API URL."""
-        client = LLMClient(
-            private_key=TEST_PRIVATE_KEY, api_url="https://custom.example.com"
-        )
+        client = LLMClient(private_key=TEST_PRIVATE_KEY, api_url="https://custom.example.com")
         assert client.api_url == "https://custom.example.com"
 
     def test_invalid_api_url_http(self):
@@ -60,9 +57,7 @@ class TestLLMClientInit:
 
     def test_allow_localhost_http(self):
         """Should allow HTTP for localhost."""
-        client = LLMClient(
-            private_key=TEST_PRIVATE_KEY, api_url="http://localhost:3000"
-        )
+        client = LLMClient(private_key=TEST_PRIVATE_KEY, api_url="http://localhost:3000")
         assert client.api_url == "http://localhost:3000"
 
 
@@ -114,9 +109,7 @@ class TestErrorSanitization:
         mock_client = Mock()
         mock_client_class.return_value = mock_client
 
-        raw_error = build_error_response(
-            error="Invalid model", include_sensitive=True
-        )
+        raw_error = build_error_response(error="Invalid model", include_sensitive=True)
         mock_response = MockResponse(400, raw_error)
         mock_client.get.return_value = mock_response
 
@@ -150,9 +143,7 @@ class TestInputValidation:
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
 
         with pytest.raises(ValueError, match="positive"):
-            client.chat_completion(
-                "gpt-4o", [{"role": "user", "content": "test"}], max_tokens=-1
-            )
+            client.chat_completion("gpt-4o", [{"role": "user", "content": "test"}], max_tokens=-1)
 
         with pytest.raises(ValueError, match="too large"):
             client.chat_completion(
@@ -165,9 +156,7 @@ class TestInputValidation:
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
 
         with pytest.raises(ValueError, match="between 0 and 2"):
-            client.chat_completion(
-                "gpt-4o", [{"role": "user", "content": "test"}], temperature=3.0
-            )
+            client.chat_completion("gpt-4o", [{"role": "user", "content": "test"}], temperature=3.0)
 
     @patch("blockrun_llm.client.httpx.Client")
     def test_validate_top_p(self, mock_client_class):
@@ -175,6 +164,4 @@ class TestInputValidation:
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
 
         with pytest.raises(ValueError, match="between 0 and 1"):
-            client.chat_completion(
-                "gpt-4o", [{"role": "user", "content": "test"}], top_p=1.5
-            )
+            client.chat_completion("gpt-4o", [{"role": "user", "content": "test"}], top_p=1.5)
