@@ -43,7 +43,12 @@ import httpx
 from eth_account import Account
 from dotenv import load_dotenv
 
-from .types import ChatResponse, APIError, PaymentError
+from .types import (
+    ChatResponse,
+    APIError,
+    PaymentError,
+    SearchParameters,
+)
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
 from .validation import (
     validate_private_key,
@@ -60,6 +65,80 @@ from .validation import (
 # Load environment variables
 load_dotenv()
 
+
+# =============================================================================
+# Standalone Functions (no wallet required)
+# =============================================================================
+
+def list_models(api_url: str = "https://blockrun.ai/api") -> List[Dict[str, Any]]:
+    """
+    List available LLM models with pricing (no wallet required).
+
+    This is a standalone function that queries the public API endpoint.
+    No wallet or authentication needed.
+
+    Args:
+        api_url: API endpoint (default: https://blockrun.ai/api)
+
+    Returns:
+        List of model dicts with id, name, provider, pricing, context window, etc.
+
+    Example:
+        from blockrun_llm import list_models
+        models = list_models()
+        for m in models:
+            print(f"{m['id']}: ${m.get('inputPrice', 'N/A')}/M input")
+    """
+    with httpx.Client(timeout=30) as client:
+        # Use /pricing endpoint which includes full model details
+        response = client.get(f"{api_url.rstrip('/')}/pricing")
+        if response.status_code != 200:
+            raise APIError(
+                f"Failed to list models: {response.status_code}",
+                response.status_code,
+                {},
+            )
+        data = response.json()
+        return data.get("models", [])
+
+
+def list_image_models(api_url: str = "https://blockrun.ai/api") -> List[Dict[str, Any]]:
+    """
+    List available image generation models without requiring wallet.
+
+    This is a standalone function that queries the public API endpoint.
+    No wallet or authentication needed.
+
+    Args:
+        api_url: API endpoint (default: https://blockrun.ai/api)
+
+    Returns:
+        List of image model dicts with id, pricing, etc.
+        Returns empty list if endpoint not available.
+
+    Example:
+        from blockrun_llm import list_image_models
+        models = list_image_models()
+        for m in models:
+            print(f"{m['id']}: ${m.get('pricePerImage', 'N/A')}/image")
+    """
+    with httpx.Client(timeout=30) as client:
+        response = client.get(f"{api_url.rstrip('/')}/v1/images/models")
+        if response.status_code == 404:
+            # Endpoint not available yet - return empty list
+            return []
+        if response.status_code != 200:
+            raise APIError(
+                f"Failed to list image models: {response.status_code}",
+                response.status_code,
+                {},
+            )
+        return response.json().get("data", [])
+
+
+# =============================================================================
+# LLM Client Class (requires wallet)
+# =============================================================================
 
 class LLMClient:
     """
@@ -134,6 +213,26 @@ class LLMClient:
         # HTTP client
         self._client = httpx.Client(timeout=timeout)
 
+        # Session spending tracking
+        self._session_total_usd: float = 0.0
+        self._session_calls: int = 0
+
+    def get_spending(self) -> Dict[str, Any]:
+        """
+        Get current session spending.
+
+        Returns:
+            Dict with total_usd and calls count
+
+        Example:
+            spending = client.get_spending()
+            print(f"Spent ${spending['total_usd']:.4f} across {spending['calls']} calls")
+        """
+        return {
+            "total_usd": self._session_total_usd,
+            "calls": self._session_calls,
+        }
+
     def chat(
         self,
         model: str,
@@ -142,23 +241,38 @@ class LLMClient:
         system: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        search: Optional[bool] = None,
+        search_parameters: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Simple 1-line chat interface.
 
         Args:
-            model: Model ID (e.g., "openai/gpt-4o", "anthropic/claude-sonnet-4", "google/gemini-2.5-pro")
+            model: Model ID (e.g., "openai/gpt-4o", "anthropic/claude-sonnet-4", "xai/grok-3")
             prompt: User message
             system: Optional system prompt
             max_tokens: Max tokens to generate (default: 1024)
             temperature: Sampling temperature
+            search: Enable xAI Live Search (shortcut for search_parameters={"mode": "on"})
+            search_parameters: Full xAI Live Search configuration (for Grok models)
+                See: https://docs.x.ai/docs/guides/live-search
 
         Returns:
             Assistant's response text
 
         Example:
-            response = client.chat("gpt-4o", "What is the capital of France?")
-            print(response)  # "The capital of France is Paris."
+            response = client.chat("openai/gpt-4o", "What is the capital of France?")
+
+            # Check spending after calls
+            spending = client.get_spending()
+            print(f"Spent ${spending['total_usd']:.4f}")
+
+            # With xAI Live Search (for real-time X/Twitter data)
+            response = client.chat(
+                "xai/grok-3",
+                "What are the latest posts from @blockrunai?",
+                search=True  # Enable live search
+            )
         """
         messages: List[Dict[str, str]] = []
 
@@ -172,6 +286,8 @@ class LLMClient:
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
+            search=search,
+            search_parameters=search_parameters,
         )
 
         return result.choices[0].message.content
@@ -184,6 +300,8 @@ class LLMClient:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
+        search: Optional[bool] = None,
+        search_parameters: Optional[Dict[str, Any]] = None,
     ) -> ChatResponse:
         """
         Full chat completion interface (OpenAI-compatible).
@@ -194,9 +312,14 @@ class LLMClient:
             max_tokens: Max tokens to generate
             temperature: Sampling temperature
             top_p: Nucleus sampling parameter
+            search: Enable xAI Live Search (shortcut for search_parameters={"mode": "on"})
+            search_parameters: Full xAI Live Search configuration (for Grok models)
 
         Returns:
-            ChatResponse object with choices and usage
+            ChatResponse object with choices, usage, and citations (if search enabled)
+
+        Raises:
+            PaymentError: If budget is set and would be exceeded
 
         Example:
             messages = [
@@ -204,6 +327,14 @@ class LLMClient:
                 {"role": "user", "content": "Hello!"}
             ]
             result = client.chat_completion("gpt-4o", messages)
+
+            # With xAI Live Search
+            result = client.chat_completion(
+                "xai/grok-3",
+                [{"role": "user", "content": "Latest news about AI?"}],
+                search=True
+            )
+            print(result.citations)  # URLs of sources used
         """
         # Validate inputs
         validate_model(model)
@@ -222,6 +353,13 @@ class LLMClient:
             body["temperature"] = temperature
         if top_p is not None:
             body["top_p"] = top_p
+
+        # Handle xAI Live Search parameters
+        if search_parameters is not None:
+            body["search_parameters"] = search_parameters
+        elif search is True:
+            # Simple shortcut: search=True enables live search with defaults
+            body["search_parameters"] = {"mode": "on"}
 
         # Make request (with automatic payment handling)
         return self._request_with_payment("/v1/chat/completions", body)
@@ -277,12 +415,15 @@ class LLMClient:
         """
         # Get payment required header (x402 library uses lowercase)
         payment_header = response.headers.get("payment-required")
+        price_info = {}
         if not payment_header:
             # Try to get from response body
             try:
                 resp_body = response.json()
                 if "x402" in resp_body:
                     payment_header = resp_body
+                # Extract price info for spending report
+                price_info = resp_body.get("price", {})
             except Exception:
                 pass
 
@@ -297,6 +438,9 @@ class LLMClient:
 
         # Extract payment details
         details = extract_payment_details(payment_required)
+
+        # Get the cost being paid
+        cost_usd = float(price_info.get("amount", 0)) if price_info else float(details.get("amount", 0)) / 1e6
 
         # Create signed payment payload (v2 format)
         # SECURITY: Signing happens locally - only the signature is sent to server
@@ -342,11 +486,18 @@ class LLMClient:
                 sanitize_error_response(error_body),
             )
 
-        return ChatResponse(**retry_response.json())
+        # Parse response
+        chat_response = ChatResponse(**retry_response.json())
+
+        # Update session spending
+        self._session_calls += 1
+        self._session_total_usd += cost_usd
+
+        return chat_response
 
     def list_models(self) -> List[Dict[str, Any]]:
         """
-        List available models with pricing.
+        List available LLM models with pricing.
 
         Returns:
             List of model information dicts
@@ -365,6 +516,55 @@ class LLMClient:
             )
 
         return response.json().get("data", [])
+
+    def list_image_models(self) -> List[Dict[str, Any]]:
+        """
+        List available image generation models with pricing.
+
+        Returns:
+            List of image model information dicts
+        """
+        response = self._client.get(f"{self.api_url}/v1/images/models")
+
+        if response.status_code != 200:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"Failed to list image models: {response.status_code}",
+                response.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        return response.json().get("data", [])
+
+    def list_all_models(self) -> List[Dict[str, Any]]:
+        """
+        List all available models (both LLM and image) with pricing.
+
+        Returns:
+            List of all model information dicts with 'type' field ('llm' or 'image')
+
+        Example:
+            models = client.list_all_models()
+            for model in models:
+                if model['type'] == 'llm':
+                    print(f"LLM: {model['id']} - ${model['inputPrice']}/M input")
+                else:
+                    print(f"Image: {model['id']} - ${model['pricePerImage']}/image")
+        """
+        # Get LLM models
+        llm_models = self.list_models()
+        for model in llm_models:
+            model["type"] = "llm"
+
+        # Get image models
+        image_models = self.list_image_models()
+        for model in image_models:
+            model["type"] = "image"
+
+        return llm_models + image_models
 
     def get_wallet_address(self) -> str:
         """Get the wallet address being used for payments."""
@@ -438,8 +638,10 @@ class AsyncLLMClient:
         system: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        search: Optional[bool] = None,
+        search_parameters: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Async 1-line chat interface."""
+        """Async 1-line chat interface with optional xAI Live Search."""
         messages: List[Dict[str, str]] = []
 
         if system:
@@ -452,6 +654,8 @@ class AsyncLLMClient:
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
+            search=search,
+            search_parameters=search_parameters,
         )
 
         return result.choices[0].message.content
@@ -464,8 +668,10 @@ class AsyncLLMClient:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
+        search: Optional[bool] = None,
+        search_parameters: Optional[Dict[str, Any]] = None,
     ) -> ChatResponse:
-        """Async full chat completion interface."""
+        """Async full chat completion interface with optional xAI Live Search."""
         # Validate inputs
         validate_model(model)
         validate_max_tokens(max_tokens)
@@ -482,6 +688,12 @@ class AsyncLLMClient:
             body["temperature"] = temperature
         if top_p is not None:
             body["top_p"] = top_p
+
+        # Handle xAI Live Search parameters
+        if search_parameters is not None:
+            body["search_parameters"] = search_parameters
+        elif search is True:
+            body["search_parameters"] = {"mode": "on"}
 
         return await self._request_with_payment("/v1/chat/completions", body)
 
@@ -584,7 +796,7 @@ class AsyncLLMClient:
         return ChatResponse(**retry_response.json())
 
     async def list_models(self) -> List[Dict[str, Any]]:
-        """List available models asynchronously."""
+        """List available LLM models asynchronously."""
         response = await self._client.get(f"{self.api_url}/v1/models")
 
         if response.status_code != 200:
@@ -599,6 +811,42 @@ class AsyncLLMClient:
             )
 
         return response.json().get("data", [])
+
+    async def list_image_models(self) -> List[Dict[str, Any]]:
+        """List available image generation models asynchronously."""
+        response = await self._client.get(f"{self.api_url}/v1/images/models")
+
+        if response.status_code != 200:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"Failed to list image models: {response.status_code}",
+                response.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        return response.json().get("data", [])
+
+    async def list_all_models(self) -> List[Dict[str, Any]]:
+        """
+        List all available models (both LLM and image) asynchronously.
+
+        Returns:
+            List of all model information dicts with 'type' field ('llm' or 'image')
+        """
+        # Get LLM models
+        llm_models = await self.list_models()
+        for model in llm_models:
+            model["type"] = "llm"
+
+        # Get image models
+        image_models = await self.list_image_models()
+        for model in image_models:
+            model["type"] = "image"
+
+        return llm_models + image_models
 
     def get_wallet_address(self) -> str:
         """Get the wallet address."""

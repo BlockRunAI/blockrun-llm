@@ -1,18 +1,24 @@
 """
 BlockRun LLM SDK - Pay-per-request AI via x402 on Base
 
+**BlockRun assumes Claude Code as the agent runtime.**
+
 Usage:
     from blockrun_llm import LLMClient
 
     client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY from env
-    response = client.chat("gpt-4o", "Hello!")
+    response = client.chat("openai/gpt-4o", "Hello!")
     print(response)
+
+    # Check spending
+    spending = client.get_spending()
+    print(f"Spent ${spending['total_usd']:.4f} across {spending['calls']} calls")
 
 Async usage:
     from blockrun_llm import AsyncLLMClient
 
     async with AsyncLLMClient() as client:
-        response = await client.chat("gpt-4o", "Hello!")
+        response = await client.chat("openai/gpt-4o", "Hello!")
         print(response)
 
 Image generation:
@@ -23,7 +29,7 @@ Image generation:
     print(result.data[0].url)
 """
 
-from .client import LLMClient, AsyncLLMClient
+from .client import LLMClient, AsyncLLMClient, list_models, list_image_models
 from .image import ImageClient
 from .types import (
     ChatMessage,
@@ -34,6 +40,12 @@ from .types import (
     ImageResponse,
     ImageData,
     ImageModel,
+    # xAI Live Search types
+    SearchParameters,
+    WebSearchSource,
+    XSearchSource,
+    NewsSearchSource,
+    RssSearchSource,
 )
 from .wallet import (
     get_or_create_wallet,
@@ -52,10 +64,13 @@ from .wallet import (
     WALLET_DIR,
 )
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
+    # Standalone functions (no wallet required)
+    "list_models",
+    "list_image_models",
     "ImageClient",
     "ChatMessage",
     "ChatResponse",
@@ -65,6 +80,12 @@ __all__ = [
     "ImageResponse",
     "ImageData",
     "ImageModel",
+    # xAI Live Search types
+    "SearchParameters",
+    "WebSearchSource",
+    "XSearchSource",
+    "NewsSearchSource",
+    "RssSearchSource",
     # Wallet utilities
     "get_or_create_wallet",
     "get_wallet_address",
