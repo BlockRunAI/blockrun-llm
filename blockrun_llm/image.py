@@ -75,16 +75,21 @@ class ImageClient:
         Raises:
             ValueError: If no private key is provided or found in env
         """
-        # Get private key from param or environment
+        # Get private key from param, environment, or ~/.blockrun/.session file
+        from .wallet import load_wallet
         key = (
             private_key
             or os.environ.get("BLOCKRUN_WALLET_KEY")
             or os.environ.get("BASE_CHAIN_WALLET_KEY")
+            or load_wallet()  # Loads from ~/.blockrun/.session
         )
         if not key:
             raise ValueError(
-                "Private key required. Either pass private_key parameter or set "
-                "BLOCKRUN_WALLET_KEY environment variable."
+                "Private key required. Either:\n"
+                "  1. Pass private_key parameter\n"
+                "  2. Set BLOCKRUN_WALLET_KEY environment variable\n"
+                "  3. Place key in ~/.blockrun/.session\n"
+                "NOTE: Your key never leaves your machine - only signatures are sent."
             )
 
         # Validate private key format

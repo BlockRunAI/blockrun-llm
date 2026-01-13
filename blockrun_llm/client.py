@@ -97,17 +97,21 @@ class LLMClient:
             Your private key NEVER leaves your machine. It is only used to sign
             EIP-712 typed data locally. Only the signature is sent to the server.
         """
-        # Get private key from param or environment
+        # Get private key from param, environment, or ~/.blockrun/.session file
         # SECURITY: Key is stored in memory only, used for LOCAL signing
+        from .wallet import load_wallet
         key = (
             private_key
             or os.environ.get("BLOCKRUN_WALLET_KEY")
             or os.environ.get("BASE_CHAIN_WALLET_KEY")
+            or load_wallet()  # Loads from ~/.blockrun/.session
         )
         if not key:
             raise ValueError(
-                "Private key required. Either pass private_key parameter or set "
-                "BLOCKRUN_WALLET_KEY environment variable. "
+                "Private key required. Either:\n"
+                "  1. Pass private_key parameter\n"
+                "  2. Set BLOCKRUN_WALLET_KEY environment variable\n"
+                "  3. Place key in ~/.blockrun/.session\n"
                 "NOTE: Your key never leaves your machine - only signatures are sent."
             )
 
@@ -395,14 +399,20 @@ class AsyncLLMClient:
         api_url: Optional[str] = None,
         timeout: float = 60.0,
     ):
+        from .wallet import load_wallet
         key = (
             private_key
             or os.environ.get("BLOCKRUN_WALLET_KEY")
             or os.environ.get("BASE_CHAIN_WALLET_KEY")
+            or load_wallet()  # Loads from ~/.blockrun/.session
         )
         if not key:
             raise ValueError(
-                "Private key required. Set BLOCKRUN_WALLET_KEY env or pass private_key."
+                "Private key required. Either:\n"
+                "  1. Pass private_key parameter\n"
+                "  2. Set BLOCKRUN_WALLET_KEY environment variable\n"
+                "  3. Place key in ~/.blockrun/.session\n"
+                "NOTE: Your key never leaves your machine - only signatures are sent."
             )
 
         # Validate private key format
