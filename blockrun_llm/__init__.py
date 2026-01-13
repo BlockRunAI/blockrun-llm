@@ -35,8 +35,24 @@ from .types import (
     ImageData,
     ImageModel,
 )
+from .wallet import (
+    get_or_create_wallet,
+    get_wallet_address,
+    format_wallet_created_message,
+    format_needs_funding_message,
+    format_funding_message_compact,
+    format_error_message,
+    generate_wallet_qr_ascii,
+    get_payment_links,
+    get_eip681_uri,
+    save_wallet_qr,
+    open_wallet_qr,
+    load_wallet,
+    WALLET_FILE,
+    WALLET_DIR,
+)
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -49,4 +65,19 @@ __all__ = [
     "ImageResponse",
     "ImageData",
     "ImageModel",
+    # Wallet utilities
+    "get_or_create_wallet",
+    "get_wallet_address",
+    "format_wallet_created_message",
+    "format_needs_funding_message",
+    "format_funding_message_compact",
+    "format_error_message",
+    "generate_wallet_qr_ascii",
+    "get_payment_links",
+    "get_eip681_uri",
+    "save_wallet_qr",
+    "open_wallet_qr",
+    "load_wallet",
+    "WALLET_FILE",
+    "WALLET_DIR",
 ]
