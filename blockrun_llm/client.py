@@ -100,6 +100,7 @@ class LLMClient:
         # Get private key from param, environment, or ~/.blockrun/.session file
         # SECURITY: Key is stored in memory only, used for LOCAL signing
         from .wallet import load_wallet
+
         key = (
             private_key
             or os.environ.get("BLOCKRUN_WALLET_KEY")
@@ -400,6 +401,7 @@ class AsyncLLMClient:
         timeout: float = 60.0,
     ):
         from .wallet import load_wallet
+
         key = (
             private_key
             or os.environ.get("BLOCKRUN_WALLET_KEY")

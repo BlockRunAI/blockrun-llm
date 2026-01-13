@@ -77,6 +77,7 @@ class ImageClient:
         """
         # Get private key from param, environment, or ~/.blockrun/.session file
         from .wallet import load_wallet
+
         key = (
             private_key
             or os.environ.get("BLOCKRUN_WALLET_KEY")

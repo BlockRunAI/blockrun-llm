@@ -160,7 +160,7 @@ def generate_wallet_qr_ascii(address: str) -> str:
         try:
             cached = QR_ASCII_FILE.read_text()
             # Format: first line is address, rest is QR
-            lines = cached.split('\n', 1)
+            lines = cached.split("\n", 1)
             if len(lines) == 2 and lines[0] == address:
                 return lines[1]
         except Exception:
@@ -219,7 +219,9 @@ def save_wallet_qr(address: str, path: Optional[str] = None, with_logo: bool = T
         eip681_uri = get_eip681_uri(address)
 
         # Use high error correction when adding logo
-        error_correction = qrcode.constants.ERROR_CORRECT_H if with_logo else qrcode.constants.ERROR_CORRECT_L
+        error_correction = (
+            qrcode.constants.ERROR_CORRECT_H if with_logo else qrcode.constants.ERROR_CORRECT_L
+        )
 
         qr = qrcode.QRCode(
             version=4,
@@ -230,7 +232,7 @@ def save_wallet_qr(address: str, path: Optional[str] = None, with_logo: bool = T
         qr.add_data(eip681_uri)
         qr.make(fit=True)
 
-        img = qr.make_image(fill_color="black", back_color="white").convert('RGB')
+        img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
 
         # Add Base logo to center
         if with_logo:
@@ -301,13 +303,10 @@ def get_payment_links(address: str) -> dict:
     return {
         # View address on basescan
         "basescan": f"https://basescan.org/address/{address}",
-
         # EIP-681 payment link (opens wallet apps)
         "wallet_link": f"ethereum:{USDC_BASE_CONTRACT}@{BASE_CHAIN_ID}/transfer?address={address}",
-
         # Simple ethereum link (some wallets)
         "ethereum": f"ethereum:{address}@{BASE_CHAIN_ID}",
-
         # BlockRun funding page (if available)
         "blockrun": f"https://blockrun.ai/fund?address={address}",
     }
@@ -443,8 +442,8 @@ Time: {timestamp}
 OS: {os_info}"""
 
     # URL encode for GitHub issue link
-    encoded_title = error[:50].replace(' ', '+').replace('\n', '')
-    encoded_body = template.replace('\n', '%0A').replace(' ', '+')
+    encoded_title = error[:50].replace(" ", "+").replace("\n", "")
+    encoded_body = template.replace("\n", "%0A").replace(" ", "+")
 
     return f"""
 Something went wrong: {error}
