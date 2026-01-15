@@ -155,13 +155,16 @@ def generate_wallet_qr_ascii(address: str) -> str:
     # Use EIP-681 format for MetaMask compatibility
     eip681_uri = get_eip681_uri(address)
 
+    # Cache key includes EIP-681 URI to invalidate old format caches
+    cache_key = f"v2:{eip681_uri}"
+
     # Try to load from cache first
     if QR_ASCII_FILE.exists():
         try:
             cached = QR_ASCII_FILE.read_text()
-            # Format: first line is address, rest is QR
+            # Format: first line is cache key (v2:eip681_uri), rest is QR
             lines = cached.split("\n", 1)
-            if len(lines) == 2 and lines[0] == address:
+            if len(lines) == 2 and lines[0] == cache_key:
                 return lines[1]
         except Exception:
             pass
@@ -184,10 +187,10 @@ def generate_wallet_qr_ascii(address: str) -> str:
         qr.print_ascii(out=f, invert=True)
         qr_ascii = f.getvalue()
 
-        # Cache it
+        # Cache it with versioned key
         try:
             WALLET_DIR.mkdir(exist_ok=True)
-            QR_ASCII_FILE.write_text(f"{address}\n{qr_ascii}")
+            QR_ASCII_FILE.write_text(f"{cache_key}\n{qr_ascii}")
         except Exception:
             pass
 

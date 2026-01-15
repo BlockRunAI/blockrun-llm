@@ -60,6 +60,7 @@ from .wallet import (
     save_wallet_qr,
     open_wallet_qr,
     load_wallet,
+    create_wallet as generate_wallet,  # User-friendly alias
     WALLET_FILE,
     WALLET_DIR,
 )
@@ -89,6 +90,7 @@ __all__ = [
     # Wallet utilities
     "get_or_create_wallet",
     "get_wallet_address",
+    "generate_wallet",
     "format_wallet_created_message",
     "format_needs_funding_message",
     "format_funding_message_compact",
