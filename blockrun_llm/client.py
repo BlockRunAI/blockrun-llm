@@ -170,8 +170,8 @@ class LLMClient:
             api_url: API endpoint URL (default: https://blockrun.ai/api)
             timeout: Request timeout in seconds (default: 60)
 
-        Note:
-            If no wallet exists, one will be auto-created at ~/.blockrun/.session
+        Raises:
+            ValueError: If no wallet is configured. For agent use, call setup_agent_wallet() first.
 
         Security:
             Your private key NEVER leaves your machine. It is only used to sign
@@ -179,7 +179,7 @@ class LLMClient:
         """
         # Get private key from param, environment, or ~/.blockrun/.session file
         # SECURITY: Key is stored in memory only, used for LOCAL signing
-        from .wallet import load_wallet, get_or_create_wallet, format_wallet_created_message
+        from .wallet import load_wallet
 
         key = (
             private_key
@@ -188,12 +188,12 @@ class LLMClient:
             or load_wallet()  # Loads from ~/.blockrun/.session
         )
         if not key:
-            # Auto-create wallet if none exists
-            import sys
-
-            address, key, is_new = get_or_create_wallet()
-            if is_new:
-                print(format_wallet_created_message(address), file=sys.stderr)
+            raise ValueError(
+                "No wallet configured. Either:\n"
+                "  1. Set BLOCKRUN_WALLET_KEY environment variable\n"
+                "  2. Pass private_key to LLMClient()\n"
+                "  3. For agent use: call setup_agent_wallet() first"
+            )
 
         # Normalize private key format (add 0x prefix if missing)
         if key and not key.startswith("0x"):
@@ -646,10 +646,10 @@ class AsyncLLMClient:
         """
         Initialize the async BlockRun LLM client.
 
-        Note:
-            If no wallet exists, one will be auto-created at ~/.blockrun/.session
+        Raises:
+            ValueError: If no wallet is configured
         """
-        from .wallet import load_wallet, get_or_create_wallet, format_wallet_created_message
+        from .wallet import load_wallet
 
         key = (
             private_key
@@ -658,12 +658,12 @@ class AsyncLLMClient:
             or load_wallet()  # Loads from ~/.blockrun/.session
         )
         if not key:
-            # Auto-create wallet if none exists
-            import sys
-
-            address, key, is_new = get_or_create_wallet()
-            if is_new:
-                print(format_wallet_created_message(address), file=sys.stderr)
+            raise ValueError(
+                "No wallet configured. Either:\n"
+                "  1. Set BLOCKRUN_WALLET_KEY environment variable\n"
+                "  2. Pass private_key to AsyncLLMClient()\n"
+                "  3. For agent use: call setup_agent_wallet() first"
+            )
 
         # Normalize private key format (add 0x prefix if missing)
         if key and not key.startswith("0x"):

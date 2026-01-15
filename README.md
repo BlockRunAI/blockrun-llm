@@ -1,6 +1,6 @@
 # BlockRun LLM SDK
 
-Pay-per-request access to GPT-4o, Claude 4, Gemini 2.5, and more via x402 micropayments on Base.
+Pay-per-request access to GPT-5.2, Claude 4, Gemini 2.5, Grok, and more via x402 micropayments on Base.
 
 **BlockRun assumes Claude Code as the agent runtime.**
 
@@ -20,7 +20,7 @@ pip install blockrun-llm
 from blockrun_llm import LLMClient
 
 client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY (never sent to server)
-response = client.chat("openai/gpt-4o", "Hello!")
+response = client.chat("openai/gpt-5.2", "Hello!")
 ```
 
 That's it. The SDK handles x402 payment automatically.
@@ -120,7 +120,7 @@ from blockrun_llm import LLMClient
 
 client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY (never sent to server)
 
-response = client.chat("openai/gpt-4o", "Explain quantum computing")
+response = client.chat("openai/gpt-5.2", "Explain quantum computing")
 print(response)
 
 # With system prompt
@@ -161,7 +161,7 @@ from blockrun_llm import LLMClient
 
 client = LLMClient()
 
-response = client.chat("openai/gpt-4o", "Explain quantum computing")
+response = client.chat("openai/gpt-5.2", "Explain quantum computing")
 print(response)
 
 # Check how much was spent
@@ -181,7 +181,7 @@ messages = [
     {"role": "user", "content": "How do I read a file in Python?"}
 ]
 
-result = client.chat_completion("openai/gpt-4o", messages)
+result = client.chat_completion("openai/gpt-5.2", messages)
 print(result.choices[0].message.content)
 ```
 
@@ -194,12 +194,12 @@ from blockrun_llm import AsyncLLMClient
 async def main():
     async with AsyncLLMClient() as client:
         # Simple chat
-        response = await client.chat("openai/gpt-4o", "Hello!")
+        response = await client.chat("openai/gpt-5.2", "Hello!")
         print(response)
 
         # Multiple requests concurrently
         tasks = [
-            client.chat("openai/gpt-4o", "What is 2+2?"),
+            client.chat("openai/gpt-5.2", "What is 2+2?"),
             client.chat("anthropic/claude-sonnet-4", "What is 3+3?"),
             client.chat("google/gemini-2.5-flash", "What is 4+4?"),
         ]
@@ -249,7 +249,7 @@ from blockrun_llm import LLMClient, APIError, PaymentError
 client = LLMClient()
 
 try:
-    response = client.chat("openai/gpt-4o", "Hello!")
+    response = client.chat("openai/gpt-5.2", "Hello!")
 except PaymentError as e:
     print(f"Payment failed: {e}")
     # Check your USDC balance
