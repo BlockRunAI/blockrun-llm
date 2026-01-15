@@ -7,10 +7,16 @@ Provides frictionless wallet setup for new users:
 - Generates EIP-681 QR codes for easy MetaMask funding
 """
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
+
 from eth_account import Account
+
+if TYPE_CHECKING:
+    from blockrun_llm import LLMClient
 
 # Wallet storage location
 WALLET_DIR = Path.home() / ".blockrun"
@@ -446,6 +452,7 @@ def setup_agent_wallet(silent: bool = False) -> "LLMClient":
 
     # Import here to avoid circular import
     from .client import LLMClient
+
     return LLMClient(private_key=key)
 
 
