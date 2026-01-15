@@ -47,7 +47,6 @@ from .types import (
     ChatResponse,
     APIError,
     PaymentError,
-    SearchParameters,
 )
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
 from .validation import (
