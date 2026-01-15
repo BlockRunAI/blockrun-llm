@@ -1,24 +1,25 @@
 """
 BlockRun LLM SDK - Pay-per-request AI via x402 on Base
 
-**BlockRun assumes Claude Code as the agent runtime.**
-
-Usage:
+For developers (bring your own wallet):
     from blockrun_llm import LLMClient
 
     client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY from env
-    response = client.chat("openai/gpt-4o", "Hello!")
+    response = client.chat("openai/gpt-5.2", "Hello!")
     print(response)
 
-    # Check spending
-    spending = client.get_spending()
-    print(f"Spent ${spending['total_usd']:.4f} across {spending['calls']} calls")
+For agents (Claude Code skills, auto-creates wallet):
+    from blockrun_llm import setup_agent_wallet
+
+    client = setup_agent_wallet()  # Auto-creates wallet, shows QR
+    response = client.chat("openai/gpt-5.2", "Hello!")
+    print(response)
 
 Async usage:
     from blockrun_llm import AsyncLLMClient
 
     async with AsyncLLMClient() as client:
-        response = await client.chat("openai/gpt-4o", "Hello!")
+        response = await client.chat("openai/gpt-5.2", "Hello!")
         print(response)
 
 Image generation:
@@ -48,6 +49,7 @@ from .types import (
     RssSearchSource,
 )
 from .wallet import (
+    setup_agent_wallet,  # Entry point for agents (auto-creates wallet)
     get_or_create_wallet,
     get_wallet_address,
     format_wallet_created_message,
@@ -65,10 +67,12 @@ from .wallet import (
     WALLET_DIR,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.3.5"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
+    # Entry point for agents (auto-creates wallet)
+    "setup_agent_wallet",
     # Standalone functions (no wallet required)
     "list_models",
     "list_image_models",

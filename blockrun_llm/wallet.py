@@ -418,6 +418,37 @@ def format_funding_message_compact(address: str) -> str:
 Check my balance: {links['basescan']}"""
 
 
+def setup_agent_wallet(silent: bool = False) -> "LLMClient":
+    """
+    Set up wallet for agent use and return an LLMClient.
+
+    This is the entry point for Claude Code skills and other agent runtimes.
+    It auto-creates a wallet if needed and shows the welcome/funding message.
+
+    Args:
+        silent: If True, don't print welcome message (default: False)
+
+    Returns:
+        Configured LLMClient ready for use
+
+    Example:
+        from blockrun_llm import setup_agent_wallet
+
+        client = setup_agent_wallet()  # Shows welcome message if new wallet
+        response = client.chat("openai/gpt-5.2", "Hello!")
+    """
+    import sys
+
+    address, key, is_new = get_or_create_wallet()
+
+    if is_new and not silent:
+        print(format_wallet_created_message(address), file=sys.stderr)
+
+    # Import here to avoid circular import
+    from .client import LLMClient
+    return LLMClient(private_key=key)
+
+
 # GitHub issue link for error reporting
 ISSUES_URL = "https://github.com/BlockRunAI/blockrun-llm/issues"
 
