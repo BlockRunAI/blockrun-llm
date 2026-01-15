@@ -2,6 +2,8 @@
 
 Pay-per-request access to GPT-4o, Claude 4, Gemini 2.5, and more via x402 micropayments on Base.
 
+**BlockRun assumes Claude Code as the agent runtime.**
+
 **Network:** Base (Chain ID: 8453)
 **Payment:** USDC
 **Protocol:** x402 v2 (CDP Facilitator)
@@ -127,6 +129,44 @@ response = client.chat(
     "Write a haiku",
     system="You are a creative poet."
 )
+```
+
+### Real-time X/Twitter Search (xAI Live Search)
+
+```python
+from blockrun_llm import LLMClient
+
+client = LLMClient()
+
+# Simple: Enable live search with search=True (default 10 sources, ~$0.26)
+response = client.chat(
+    "xai/grok-3",
+    "What are the latest posts from @blockrunai?",
+    search=True
+)
+print(response)
+
+# Custom: Limit sources to reduce cost (5 sources, ~$0.13)
+response = client.chat(
+    "xai/grok-3",
+    "What's trending on X?",
+    search_parameters={"mode": "on", "max_search_results": 5}
+)
+```
+
+### Check Spending
+
+```python
+from blockrun_llm import LLMClient
+
+client = LLMClient()
+
+response = client.chat("openai/gpt-4o", "Explain quantum computing")
+print(response)
+
+# Check how much was spent
+spending = client.get_spending()
+print(f"Spent ${spending['total_usd']:.4f} across {spending['calls']} calls")
 ```
 
 ### Full Chat Completion

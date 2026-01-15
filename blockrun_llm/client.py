@@ -169,8 +169,8 @@ class LLMClient:
             api_url: API endpoint URL (default: https://blockrun.ai/api)
             timeout: Request timeout in seconds (default: 60)
 
-        Raises:
-            ValueError: If no private key is provided or found in env
+        Note:
+            If no wallet exists, one will be auto-created at ~/.blockrun/.session
 
         Security:
             Your private key NEVER leaves your machine. It is only used to sign
@@ -178,7 +178,7 @@ class LLMClient:
         """
         # Get private key from param, environment, or ~/.blockrun/.session file
         # SECURITY: Key is stored in memory only, used for LOCAL signing
-        from .wallet import load_wallet
+        from .wallet import load_wallet, get_or_create_wallet, format_wallet_created_message
 
         key = (
             private_key
@@ -187,13 +187,15 @@ class LLMClient:
             or load_wallet()  # Loads from ~/.blockrun/.session
         )
         if not key:
-            raise ValueError(
-                "Private key required. Either:\n"
-                "  1. Pass private_key parameter\n"
-                "  2. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  3. Place key in ~/.blockrun/.session\n"
-                "NOTE: Your key never leaves your machine - only signatures are sent."
-            )
+            # Auto-create wallet if none exists
+            import sys
+            address, key, is_new = get_or_create_wallet()
+            if is_new:
+                print(format_wallet_created_message(address), file=sys.stderr)
+
+        # Normalize private key format (add 0x prefix if missing)
+        if key and not key.startswith("0x"):
+            key = "0x" + key
 
         # Validate private key format
         validate_private_key(key)
@@ -570,6 +572,44 @@ class LLMClient:
         """Get the wallet address being used for payments."""
         return self.account.address
 
+    def get_balance(self) -> float:
+        """
+        Get USDC balance on Base network.
+
+        Returns:
+            float: USDC balance (6 decimal places normalized)
+
+        Example:
+            balance = client.get_balance()
+            print(f"Balance: ${balance:.2f} USDC")
+        """
+        # USDC contract on Base
+        usdc_contract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+        # balanceOf(address) function selector
+        selector = "0x70a08231"
+        # Pad wallet address to 32 bytes
+        padded_address = self.account.address[2:].lower().zfill(64)
+        data = selector + padded_address
+
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "eth_call",
+            "params": [
+                {"to": usdc_contract, "data": data},
+                "latest"
+            ],
+            "id": 1
+        }
+
+        # Use public Base RPC
+        response = httpx.post("https://mainnet.base.org", json=payload, timeout=10)
+        result = response.json().get("result", "0x0")
+
+        # Convert from hex and normalize (USDC has 6 decimals)
+        balance_raw = int(result, 16)
+        return balance_raw / 1_000_000
+
     def close(self):
         """Close the HTTP client."""
         self._client.close()
@@ -600,7 +640,13 @@ class AsyncLLMClient:
         api_url: Optional[str] = None,
         timeout: float = 60.0,
     ):
-        from .wallet import load_wallet
+        """
+        Initialize the async BlockRun LLM client.
+
+        Note:
+            If no wallet exists, one will be auto-created at ~/.blockrun/.session
+        """
+        from .wallet import load_wallet, get_or_create_wallet, format_wallet_created_message
 
         key = (
             private_key
@@ -609,13 +655,15 @@ class AsyncLLMClient:
             or load_wallet()  # Loads from ~/.blockrun/.session
         )
         if not key:
-            raise ValueError(
-                "Private key required. Either:\n"
-                "  1. Pass private_key parameter\n"
-                "  2. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  3. Place key in ~/.blockrun/.session\n"
-                "NOTE: Your key never leaves your machine - only signatures are sent."
-            )
+            # Auto-create wallet if none exists
+            import sys
+            address, key, is_new = get_or_create_wallet()
+            if is_new:
+                print(format_wallet_created_message(address), file=sys.stderr)
+
+        # Normalize private key format (add 0x prefix if missing)
+        if key and not key.startswith("0x"):
+            key = "0x" + key
 
         # Validate private key format
         validate_private_key(key)
@@ -693,6 +741,7 @@ class AsyncLLMClient:
         if search_parameters is not None:
             body["search_parameters"] = search_parameters
         elif search is True:
+            # Simple shortcut: search=True enables live search with defaults
             body["search_parameters"] = {"mode": "on"}
 
         return await self._request_with_payment("/v1/chat/completions", body)
@@ -851,6 +900,45 @@ class AsyncLLMClient:
     def get_wallet_address(self) -> str:
         """Get the wallet address."""
         return self.account.address
+
+    async def get_balance(self) -> float:
+        """
+        Get USDC balance on Base network.
+
+        Returns:
+            float: USDC balance (6 decimal places normalized)
+
+        Example:
+            balance = await client.get_balance()
+            print(f"Balance: ${balance:.2f} USDC")
+        """
+        # USDC contract on Base
+        usdc_contract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+        # balanceOf(address) function selector
+        selector = "0x70a08231"
+        # Pad wallet address to 32 bytes
+        padded_address = self.account.address[2:].lower().zfill(64)
+        data = selector + padded_address
+
+        payload = {
+            "jsonrpc": "2.0",
+            "method": "eth_call",
+            "params": [
+                {"to": usdc_contract, "data": data},
+                "latest"
+            ],
+            "id": 1
+        }
+
+        # Use public Base RPC
+        async with httpx.AsyncClient(timeout=10) as http_client:
+            response = await http_client.post("https://mainnet.base.org", json=payload)
+        result = response.json().get("result", "0x0")
+
+        # Convert from hex and normalize (USDC has 6 decimals)
+        balance_raw = int(result, 16)
+        return balance_raw / 1_000_000
 
     async def close(self):
         """Close the async HTTP client."""

@@ -18,14 +18,24 @@ class TestLLMClientInit:
         assert client is not None
         assert client.get_wallet_address().startswith("0x")
 
-    def test_init_missing_key(self):
-        """Should raise ValueError when private key is missing."""
-        with pytest.raises(ValueError, match="Private key required"):
-            LLMClient(private_key=None)
+    def test_init_missing_key_auto_creates_wallet(self, monkeypatch, tmp_path):
+        """Should auto-create wallet when private key is missing."""
+        monkeypatch.delenv("BLOCKRUN_WALLET_KEY", raising=False)
+        monkeypatch.delenv("BASE_CHAIN_WALLET_KEY", raising=False)
+        # Mock wallet directory to use tmp_path
+        monkeypatch.setattr("blockrun_llm.wallet.WALLET_DIR", tmp_path)
+        monkeypatch.setattr("blockrun_llm.wallet.WALLET_FILE", tmp_path / ".session")
+        # Mock load_wallet to return None (no session file)
+        monkeypatch.setattr("blockrun_llm.wallet.load_wallet", lambda: None)
+        # Should auto-create wallet instead of raising ValueError
+        client = LLMClient(private_key=None)
+        # Verify wallet was created
+        assert client.get_wallet_address().startswith("0x")
 
     def test_init_invalid_key_format(self):
-        """Should raise ValueError for invalid key format."""
-        with pytest.raises(ValueError, match="must start with 0x"):
+        """Should raise ValueError for invalid key format (after 0x normalization)."""
+        # "invalid" becomes "0xinvalid" after normalization, which is too short
+        with pytest.raises(ValueError, match="66 characters"):
             LLMClient(private_key="invalid")
 
     def test_init_short_key(self):
