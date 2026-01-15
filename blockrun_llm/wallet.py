@@ -449,6 +449,27 @@ def setup_agent_wallet(silent: bool = False) -> "LLMClient":
     return LLMClient(private_key=key)
 
 
+def status() -> dict:
+    """
+    Print wallet status and return info dict.
+
+    One-command verification that shows wallet address and balance.
+    Creates wallet if needed (silently).
+
+    Returns:
+        Dict with 'address' and 'balance' keys
+
+    Example:
+        python3 -c "from blockrun_llm import status; status()"
+    """
+    client = setup_agent_wallet(silent=True)
+    addr = client.get_wallet_address()
+    bal = client.get_balance()
+    print(f"Wallet: {addr}")
+    print(f"Balance: ${bal:.2f} USDC")
+    return {"address": addr, "balance": bal}
+
+
 # GitHub issue link for error reporting
 ISSUES_URL = "https://github.com/BlockRunAI/blockrun-llm/issues"
 
