@@ -50,6 +50,7 @@ from .types import (
 )
 from .wallet import (
     setup_agent_wallet,  # Entry point for agents (auto-creates wallet)
+    status,  # One-command verification
     get_or_create_wallet,
     get_wallet_address,
     format_wallet_created_message,
@@ -67,12 +68,13 @@ from .wallet import (
     WALLET_DIR,
 )
 
-__version__ = "0.3.5"
+__version__ = "0.3.6"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
     # Entry point for agents (auto-creates wallet)
     "setup_agent_wallet",
+    "status",
     # Standalone functions (no wallet required)
     "list_models",
     "list_image_models",
