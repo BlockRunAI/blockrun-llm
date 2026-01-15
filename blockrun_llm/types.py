@@ -126,7 +126,9 @@ class WebSearchSource(BaseModel):
     type: Literal["web"] = "web"
     country: Optional[str] = None  # ISO alpha-2 country code
     excluded_websites: Optional[List[str]] = None  # Max 5 websites
-    allowed_websites: Optional[List[str]] = None  # Max 5 websites (mutually exclusive with excluded)
+    allowed_websites: Optional[List[str]] = (
+        None  # Max 5 websites (mutually exclusive with excluded)
+    )
     safe_search: bool = True
 
 
@@ -157,7 +159,9 @@ class RssSearchSource(BaseModel):
     links: List[str]  # RSS feed URLs (currently supports one)
 
 
-SearchSource = Union[WebSearchSource, XSearchSource, NewsSearchSource, RssSearchSource, Dict[str, Any]]
+SearchSource = Union[
+    WebSearchSource, XSearchSource, NewsSearchSource, RssSearchSource, Dict[str, Any]
+]
 
 
 class SearchParameters(BaseModel):
