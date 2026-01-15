@@ -70,6 +70,7 @@ load_dotenv()
 # Standalone Functions (no wallet required)
 # =============================================================================
 
+
 def list_models(api_url: str = "https://blockrun.ai/api") -> List[Dict[str, Any]]:
     """
     List available LLM models with pricing (no wallet required).
@@ -140,6 +141,7 @@ def list_image_models(api_url: str = "https://blockrun.ai/api") -> List[Dict[str
 # LLM Client Class (requires wallet)
 # =============================================================================
 
+
 class LLMClient:
     """
     BlockRun LLM Gateway Client.
@@ -189,6 +191,7 @@ class LLMClient:
         if not key:
             # Auto-create wallet if none exists
             import sys
+
             address, key, is_new = get_or_create_wallet()
             if is_new:
                 print(format_wallet_created_message(address), file=sys.stderr)
@@ -442,7 +445,11 @@ class LLMClient:
         details = extract_payment_details(payment_required)
 
         # Get the cost being paid
-        cost_usd = float(price_info.get("amount", 0)) if price_info else float(details.get("amount", 0)) / 1e6
+        cost_usd = (
+            float(price_info.get("amount", 0))
+            if price_info
+            else float(details.get("amount", 0)) / 1e6
+        )
 
         # Create signed payment payload (v2 format)
         # SECURITY: Signing happens locally - only the signature is sent to server
@@ -595,11 +602,8 @@ class LLMClient:
         payload = {
             "jsonrpc": "2.0",
             "method": "eth_call",
-            "params": [
-                {"to": usdc_contract, "data": data},
-                "latest"
-            ],
-            "id": 1
+            "params": [{"to": usdc_contract, "data": data}, "latest"],
+            "id": 1,
         }
 
         # Use public Base RPC
@@ -657,6 +661,7 @@ class AsyncLLMClient:
         if not key:
             # Auto-create wallet if none exists
             import sys
+
             address, key, is_new = get_or_create_wallet()
             if is_new:
                 print(format_wallet_created_message(address), file=sys.stderr)
@@ -924,11 +929,8 @@ class AsyncLLMClient:
         payload = {
             "jsonrpc": "2.0",
             "method": "eth_call",
-            "params": [
-                {"to": usdc_contract, "data": data},
-                "latest"
-            ],
-            "id": 1
+            "params": [{"to": usdc_contract, "data": data}, "latest"],
+            "id": 1,
         }
 
         # Use public Base RPC
