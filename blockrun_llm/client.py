@@ -605,13 +605,27 @@ class LLMClient:
             "id": 1,
         }
 
-        # Use public Base RPC
-        response = httpx.post("https://mainnet.base.org", json=payload, timeout=10)
-        result = response.json().get("result", "0x0")
+        # Try multiple RPCs for reliability
+        rpcs = [
+            "https://base.publicnode.com",
+            "https://mainnet.base.org",
+            "https://base.meowrpc.com",
+        ]
 
-        # Convert from hex and normalize (USDC has 6 decimals)
-        balance_raw = int(result, 16)
-        return balance_raw / 1_000_000
+        last_error = None
+        for rpc in rpcs:
+            try:
+                response = httpx.post(rpc, json=payload, timeout=10)
+                result = response.json().get("result", "0x0")
+                # Convert from hex and normalize (USDC has 6 decimals)
+                balance_raw = int(result, 16)
+                return balance_raw / 1_000_000
+            except Exception as e:
+                last_error = e
+                continue
+
+        # If all RPCs failed, raise the last error
+        raise last_error or Exception("All RPCs failed")
 
     def close(self):
         """Close the HTTP client."""
@@ -932,14 +946,28 @@ class AsyncLLMClient:
             "id": 1,
         }
 
-        # Use public Base RPC
-        async with httpx.AsyncClient(timeout=10) as http_client:
-            response = await http_client.post("https://mainnet.base.org", json=payload)
-        result = response.json().get("result", "0x0")
+        # Try multiple RPCs for reliability
+        rpcs = [
+            "https://base.publicnode.com",
+            "https://mainnet.base.org",
+            "https://base.meowrpc.com",
+        ]
 
-        # Convert from hex and normalize (USDC has 6 decimals)
-        balance_raw = int(result, 16)
-        return balance_raw / 1_000_000
+        last_error = None
+        async with httpx.AsyncClient(timeout=10) as http_client:
+            for rpc in rpcs:
+                try:
+                    response = await http_client.post(rpc, json=payload)
+                    result = response.json().get("result", "0x0")
+                    # Convert from hex and normalize (USDC has 6 decimals)
+                    balance_raw = int(result, 16)
+                    return balance_raw / 1_000_000
+                except Exception as e:
+                    last_error = e
+                    continue
+
+        # If all RPCs failed, raise the last error
+        raise last_error or Exception("All RPCs failed")
 
     async def close(self):
         """Close the async HTTP client."""
