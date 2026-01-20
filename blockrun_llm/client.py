@@ -159,7 +159,8 @@ class LLMClient:
         self,
         private_key: Optional[str] = None,
         api_url: Optional[str] = None,
-        timeout: float = 60.0,
+        timeout: float = 120.0,
+        search_timeout: float = 300.0,
     ):
         """
         Initialize the BlockRun LLM client.
@@ -168,7 +169,10 @@ class LLMClient:
             private_key: Base chain wallet private key (or set BLOCKRUN_WALLET_KEY env var)
                          NOTE: Key is used for LOCAL signing only - never transmitted
             api_url: API endpoint URL (default: https://blockrun.ai/api)
-            timeout: Request timeout in seconds (default: 60)
+            timeout: Request timeout in seconds (default: 120). Used for regular chat requests.
+            search_timeout: Timeout for xAI Live Search requests (default: 300 = 5 minutes).
+                           Live Search can be slow as it searches X, web, and news sources.
+                           Auto-detected when search_parameters or search=True is passed.
 
         Raises:
             ValueError: If no wallet is configured. For agent use, call setup_agent_wallet() first.
@@ -213,8 +217,9 @@ class LLMClient:
         self.api_url = api_url_raw.rstrip("/")
 
         self.timeout = timeout
+        self.search_timeout = search_timeout
 
-        # HTTP client
+        # HTTP client (default timeout, will be overridden for search requests)
         self._client = httpx.Client(timeout=timeout)
 
         # Session spending tracking
@@ -470,13 +475,18 @@ class LLMClient:
         )
 
         # Retry with payment (x402 library expects PAYMENT-SIGNATURE header)
-        retry_response = self._client.post(
+        # Use longer timeout for Live Search requests
+        is_search_request = "search_parameters" in body or body.get("search") is True
+        request_timeout = self.search_timeout if is_search_request else self.timeout
+
+        retry_response = httpx.post(
             url,
             json=body,
             headers={
                 "Content-Type": "application/json",
                 "PAYMENT-SIGNATURE": payment_payload,
             },
+            timeout=request_timeout,
         )
 
         # Check for errors
@@ -655,10 +665,18 @@ class AsyncLLMClient:
         self,
         private_key: Optional[str] = None,
         api_url: Optional[str] = None,
-        timeout: float = 60.0,
+        timeout: float = 120.0,
+        search_timeout: float = 300.0,
     ):
         """
         Initialize the async BlockRun LLM client.
+
+        Args:
+            private_key: Base chain wallet private key (or set BLOCKRUN_WALLET_KEY env var)
+            api_url: API endpoint URL (default: https://blockrun.ai/api)
+            timeout: Request timeout in seconds (default: 120). Used for regular chat requests.
+            search_timeout: Timeout for xAI Live Search requests (default: 300 = 5 minutes).
+                           Auto-detected when search_parameters or search=True is passed.
 
         Raises:
             ValueError: If no wallet is configured
@@ -694,6 +712,7 @@ class AsyncLLMClient:
         self.api_url = api_url_raw.rstrip("/")
 
         self.timeout = timeout
+        self.search_timeout = search_timeout
         self._client = httpx.AsyncClient(timeout=timeout)
 
     async def chat(
@@ -837,14 +856,19 @@ class AsyncLLMClient:
         )
 
         # Retry with payment (x402 library expects PAYMENT-SIGNATURE header)
-        retry_response = await self._client.post(
-            url,
-            json=body,
-            headers={
-                "Content-Type": "application/json",
-                "PAYMENT-SIGNATURE": payment_payload,
-            },
-        )
+        # Use longer timeout for Live Search requests
+        is_search_request = "search_parameters" in body or body.get("search") is True
+        request_timeout = self.search_timeout if is_search_request else self.timeout
+
+        async with httpx.AsyncClient(timeout=request_timeout) as client:
+            retry_response = await client.post(
+                url,
+                json=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "PAYMENT-SIGNATURE": payment_payload,
+                },
+            )
 
         if retry_response.status_code == 402:
             raise PaymentError("Payment was rejected. Check your wallet balance.")

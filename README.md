@@ -133,6 +133,8 @@ response = client.chat(
 
 ### Real-time X/Twitter Search (xAI Live Search)
 
+**Note:** Live Search can take 30-120+ seconds as it searches multiple sources. The SDK automatically uses a 5-minute timeout for search requests.
+
 ```python
 from blockrun_llm import LLMClient
 
@@ -152,6 +154,9 @@ response = client.chat(
     "What's trending on X?",
     search_parameters={"mode": "on", "max_search_results": 5}
 )
+
+# Custom timeout (if 5 min isn't enough)
+client = LLMClient(search_timeout=600.0)  # 10 minutes
 ```
 
 ### Check Spending
