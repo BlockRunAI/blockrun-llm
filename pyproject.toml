@@ -36,7 +36,7 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
-    "black>=23.0.0",
+    "black==24.10.0",  # Pin version for consistent formatting
     "mypy>=1.0.0",
     "ruff>=0.1.0",
 ]
