@@ -72,6 +72,7 @@ That's it. The SDK handles x402 payment automatically.
 ### Anthropic Claude
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
+| `anthropic/claude-opus-4.5` | $15.00/M | $75.00/M |
 | `anthropic/claude-opus-4` | $15.00/M | $75.00/M |
 | `anthropic/claude-sonnet-4` | $3.00/M | $15.00/M |
 | `anthropic/claude-haiku-4.5` | $1.00/M | $5.00/M |
@@ -89,13 +90,6 @@ That's it. The SDK handles x402 payment automatically.
 | `deepseek/deepseek-chat` | $0.28/M | $0.42/M |
 | `deepseek/deepseek-reasoner` | $0.28/M | $0.42/M |
 
-### Qwen (Alibaba)
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `qwen/qwen3-max` | $0.46/M | $1.84/M |
-| `qwen/qwen-plus` | $0.10/M | $0.30/M |
-| `qwen/qwen-turbo` | $0.02/M | $0.06/M |
-
 ### xAI Grok
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
@@ -108,6 +102,7 @@ That's it. The SDK handles x402 payment automatically.
 |-------|-------|
 | `openai/dall-e-3` | $0.04-0.08/image |
 | `openai/gpt-image-1` | $0.02-0.04/image |
+| `black-forest/flux-1.1-pro` | $0.04/image |
 | `google/nano-banana` | $0.05/image |
 | `google/nano-banana-pro` | $0.10-0.15/image |
 
