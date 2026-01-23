@@ -4,7 +4,10 @@ Pay-per-request access to GPT-5.2, Claude 4, Gemini 2.5, Grok, and more via x402
 
 **BlockRun assumes Claude Code as the agent runtime.**
 
-**Network:** Base (Chain ID: 8453)
+**Networks:**
+- **Mainnet:** Base (Chain ID: 8453) - Production with real USDC
+- **Testnet:** Base Sepolia (Chain ID: 84532) - Developer testing with testnet USDC
+
 **Payment:** USDC
 **Protocol:** x402 v2 (CDP Facilitator)
 
@@ -63,11 +66,13 @@ That's it. The SDK handles x402 payment automatically.
 | `openai/o3-mini` | $1.10/M | $4.40/M |
 | `openai/o4-mini` | $1.10/M | $4.40/M |
 
-### OpenAI Open-Source (Apache 2.0)
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `openai/gpt-oss-20b` | $0.03/M | $0.14/M |
-| `openai/gpt-oss-120b` | $0.18/M | $0.84/M |
+### Testnet Models (Base Sepolia)
+| Model | Price |
+|-------|-------|
+| `openai/gpt-oss-20b` | $0.001/request |
+| `openai/gpt-oss-120b` | $0.002/request |
+
+*Testnet models use flat pricing (no token counting) for simplicity.*
 
 ### Anthropic Claude
 | Model | Input Price | Output Price |
@@ -220,6 +225,46 @@ models = client.list_models()
 
 for model in models:
     print(f"{model['id']}: ${model['inputPrice']}/M input, ${model['outputPrice']}/M output")
+```
+
+## Testnet Usage
+
+For development and testing without real USDC, use the testnet:
+
+```python
+from blockrun_llm import testnet_client
+
+# Create testnet client (uses Base Sepolia)
+client = testnet_client()  # Uses BLOCKRUN_WALLET_KEY
+
+# Chat with testnet model
+response = client.chat("openai/gpt-oss-20b", "Hello!")
+print(response)
+
+# Check testnet USDC balance
+balance = client.get_balance()
+print(f"Testnet USDC: ${balance:.4f}")
+```
+
+### Testnet Setup
+
+1. Get testnet ETH from [Alchemy Base Sepolia Faucet](https://www.alchemy.com/faucets/base-sepolia)
+2. Get testnet USDC from [Circle USDC Faucet](https://faucet.circle.com/)
+3. Set your wallet key: `export BLOCKRUN_WALLET_KEY=0x...`
+
+### Available Testnet Models
+
+- `openai/gpt-oss-20b` - $0.001/request (flat price)
+- `openai/gpt-oss-120b` - $0.002/request (flat price)
+
+### Manual Testnet Configuration
+
+```python
+from blockrun_llm import LLMClient
+
+# Or configure manually
+client = LLMClient(api_url="https://testnet.blockrun.ai/api")
+response = client.chat("openai/gpt-oss-20b", "Hello!")
 ```
 
 ## Environment Variables
