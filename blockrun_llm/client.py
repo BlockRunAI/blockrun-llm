@@ -488,6 +488,7 @@ class LLMClient:
             max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
             extra=details.get("extra"),
             extensions=extensions,
+            asset=details.get("asset"),
         )
 
         # Retry with payment (x402 library expects PAYMENT-SIGNATURE header)
@@ -889,6 +890,7 @@ class AsyncLLMClient:
             max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
             extra=details.get("extra"),
             extensions=extensions,
+            asset=details.get("asset"),
         )
 
         # Retry with payment (x402 library expects PAYMENT-SIGNATURE header)

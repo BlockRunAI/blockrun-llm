@@ -14,9 +14,29 @@ from eth_account import Account
 from eth_account.messages import encode_typed_data
 
 
-# Chain and token constants
+# Chain and token constants for mainnet
 BASE_CHAIN_ID = 8453
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+# Chain and token constants for testnet (Base Sepolia)
+BASE_SEPOLIA_CHAIN_ID = 84532
+USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+
+
+def get_chain_config(network: str) -> tuple[int, str]:
+    """
+    Get chain ID and USDC contract address for a given network.
+
+    Args:
+        network: Network identifier in EIP-155 format (e.g., "eip155:8453" or "eip155:84532")
+
+    Returns:
+        Tuple of (chain_id, usdc_address)
+    """
+    if network == "eip155:84532" or network == "base-sepolia":
+        return BASE_SEPOLIA_CHAIN_ID, USDC_BASE_SEPOLIA
+    # Default to mainnet
+    return BASE_CHAIN_ID, USDC_BASE
 
 
 def create_nonce() -> str:
@@ -34,6 +54,7 @@ def create_payment_payload(
     max_timeout_seconds: int = 300,
     extra: Optional[Dict[str, str]] = None,
     extensions: Optional[Dict[str, Any]] = None,
+    asset: Optional[str] = None,
 ) -> str:
     """
     Create a signed x402 v2 payment payload.
@@ -45,11 +66,12 @@ def create_payment_payload(
         account: eth-account Account instance
         recipient: Payment recipient address (checksummed)
         amount: Amount in micro USDC (6 decimals, e.g., "1000" = $0.001)
-        network: Network identifier (default: Base mainnet)
+        network: Network identifier (e.g., "eip155:8453" for Base mainnet, "eip155:84532" for Base Sepolia)
         resource_url: URL of the resource being accessed
         resource_description: Description of the resource
         max_timeout_seconds: Max timeout for the payment (default: 300)
         extra: Extra info for USDC domain (name, version)
+        asset: USDC contract address (optional, derived from network if not provided)
 
     Returns:
         Base64-encoded signed payment payload
@@ -62,12 +84,18 @@ def create_payment_payload(
     # Generate random nonce
     nonce = create_nonce()
 
-    # EIP-712 domain for Base USDC
+    # Get chain config based on network
+    chain_id, default_usdc = get_chain_config(network)
+
+    # Use provided asset address or default for the network
+    usdc_address = asset or default_usdc
+
+    # EIP-712 domain for USDC (mainnet or testnet based on network)
     domain = {
         "name": extra.get("name", "USD Coin") if extra else "USD Coin",
         "version": extra.get("version", "2") if extra else "2",
-        "chainId": BASE_CHAIN_ID,
-        "verifyingContract": USDC_BASE,
+        "chainId": chain_id,
+        "verifyingContract": usdc_address,
     }
 
     # EIP-712 types for TransferWithAuthorization
@@ -108,7 +136,7 @@ def create_payment_payload(
             "scheme": "exact",
             "network": network,
             "amount": amount,
-            "asset": USDC_BASE,
+            "asset": usdc_address,
             "payTo": recipient,
             "maxTimeoutSeconds": max_timeout_seconds,
             "extra": extra or {"name": "USD Coin", "version": "2"},
