@@ -39,6 +39,23 @@ def get_chain_config(network: str) -> tuple[int, str]:
     return BASE_CHAIN_ID, USDC_BASE
 
 
+def get_usdc_domain_name(network: str) -> str:
+    """
+    Get the EIP-712 domain name for USDC on a given network.
+
+    Mainnet USDC uses "USD Coin", testnet USDC uses "USDC".
+
+    Args:
+        network: Network identifier in EIP-155 format
+
+    Returns:
+        The EIP-712 domain name for signing
+    """
+    if network == "eip155:84532" or network == "base-sepolia":
+        return "USDC"
+    return "USD Coin"
+
+
 def create_nonce() -> str:
     """Generate a random bytes32 nonce."""
     return "0x" + secrets.token_hex(32)
@@ -91,8 +108,9 @@ def create_payment_payload(
     usdc_address = asset or default_usdc
 
     # EIP-712 domain for USDC (mainnet or testnet based on network)
+    default_domain_name = get_usdc_domain_name(network)
     domain = {
-        "name": extra.get("name", "USD Coin") if extra else "USD Coin",
+        "name": extra.get("name", default_domain_name) if extra else default_domain_name,
         "version": extra.get("version", "2") if extra else "2",
         "chainId": chain_id,
         "verifyingContract": usdc_address,
@@ -139,7 +157,7 @@ def create_payment_payload(
             "asset": usdc_address,
             "payTo": recipient,
             "maxTimeoutSeconds": max_timeout_seconds,
-            "extra": extra or {"name": "USD Coin", "version": "2"},
+            "extra": extra or {"name": default_domain_name, "version": "2"},
         },
         "payload": {
             "signature": (
