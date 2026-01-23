@@ -30,7 +30,7 @@ Image generation:
     print(result.data[0].url)
 """
 
-from .client import LLMClient, AsyncLLMClient, list_models, list_image_models
+from .client import LLMClient, AsyncLLMClient, list_models, list_image_models, testnet_client, async_testnet_client
 from .image import ImageClient
 from .types import (
     ChatMessage,
@@ -68,10 +68,13 @@ from .wallet import (
     WALLET_DIR,
 )
 
-__version__ = "0.3.6"
+__version__ = "0.3.7"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
+    # Testnet convenience functions
+    "testnet_client",
+    "async_testnet_client",
     # Entry point for agents (auto-creates wallet)
     "setup_agent_wallet",
     "status",

@@ -150,9 +150,25 @@ class LLMClient:
 
     Security: Your private key is used ONLY for local EIP-712 signing.
     The key NEVER leaves your machine - only signatures are transmitted.
+
+    Networks:
+        - Mainnet: https://blockrun.ai/api (Base, Chain ID 8453)
+        - Testnet: https://testnet.blockrun.ai/api (Base Sepolia, Chain ID 84532)
+
+    Testnet Usage:
+        For development and testing without real USDC:
+
+        client = LLMClient(api_url="https://testnet.blockrun.ai/api")
+
+        # Or use the testnet convenience method
+        from blockrun_llm import testnet_client
+        client = testnet_client()
+
+        Note: Testnet has limited models (openai/gpt-oss-20b, openai/gpt-oss-120b)
     """
 
     DEFAULT_API_URL = "https://blockrun.ai/api"
+    TESTNET_API_URL = "https://testnet.blockrun.ai/api"
     DEFAULT_MAX_TOKENS = 1024
 
     def __init__(
@@ -588,9 +604,17 @@ class LLMClient:
         """Get the wallet address being used for payments."""
         return self.account.address
 
+    def is_testnet(self) -> bool:
+        """Check if client is configured for testnet."""
+        return "testnet.blockrun.ai" in self.api_url
+
     def get_balance(self) -> float:
         """
         Get USDC balance on Base network.
+
+        Automatically detects mainnet vs testnet based on API URL:
+        - Mainnet: Base (Chain ID 8453)
+        - Testnet: Base Sepolia (Chain ID 84532)
 
         Returns:
             float: USDC balance (6 decimal places normalized)
@@ -599,8 +623,22 @@ class LLMClient:
             balance = client.get_balance()
             print(f"Balance: ${balance:.2f} USDC")
         """
-        # USDC contract on Base
-        usdc_contract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+        # USDC contracts
+        # Mainnet: Base
+        # Testnet: Base Sepolia
+        if self.is_testnet():
+            usdc_contract = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+            rpcs = [
+                "https://sepolia.base.org",
+                "https://base-sepolia-rpc.publicnode.com",
+            ]
+        else:
+            usdc_contract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+            rpcs = [
+                "https://base.publicnode.com",
+                "https://mainnet.base.org",
+                "https://base.meowrpc.com",
+            ]
 
         # balanceOf(address) function selector
         selector = "0x70a08231"
@@ -614,13 +652,6 @@ class LLMClient:
             "params": [{"to": usdc_contract, "data": data}, "latest"],
             "id": 1,
         }
-
-        # Try multiple RPCs for reliability
-        rpcs = [
-            "https://base.publicnode.com",
-            "https://mainnet.base.org",
-            "https://base.meowrpc.com",
-        ]
 
         last_error = None
         for rpc in rpcs:
@@ -656,9 +687,14 @@ class AsyncLLMClient:
     Usage:
         async with AsyncLLMClient() as client:
             response = await client.chat("gpt-4o", "Hello!")
+
+        # For testnet:
+        async with AsyncLLMClient(api_url="https://testnet.blockrun.ai/api") as client:
+            response = await client.chat("openai/gpt-oss-20b", "Hello!")
     """
 
     DEFAULT_API_URL = "https://blockrun.ai/api"
+    TESTNET_API_URL = "https://testnet.blockrun.ai/api"
     DEFAULT_MAX_TOKENS = 1024
 
     def __init__(
@@ -943,9 +979,17 @@ class AsyncLLMClient:
         """Get the wallet address."""
         return self.account.address
 
+    def is_testnet(self) -> bool:
+        """Check if client is configured for testnet."""
+        return "testnet.blockrun.ai" in self.api_url
+
     async def get_balance(self) -> float:
         """
         Get USDC balance on Base network.
+
+        Automatically detects mainnet vs testnet based on API URL:
+        - Mainnet: Base (Chain ID 8453)
+        - Testnet: Base Sepolia (Chain ID 84532)
 
         Returns:
             float: USDC balance (6 decimal places normalized)
@@ -954,8 +998,22 @@ class AsyncLLMClient:
             balance = await client.get_balance()
             print(f"Balance: ${balance:.2f} USDC")
         """
-        # USDC contract on Base
-        usdc_contract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+        # USDC contracts
+        # Mainnet: Base
+        # Testnet: Base Sepolia
+        if self.is_testnet():
+            usdc_contract = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+            rpcs = [
+                "https://sepolia.base.org",
+                "https://base-sepolia-rpc.publicnode.com",
+            ]
+        else:
+            usdc_contract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+            rpcs = [
+                "https://base.publicnode.com",
+                "https://mainnet.base.org",
+                "https://base.meowrpc.com",
+            ]
 
         # balanceOf(address) function selector
         selector = "0x70a08231"
@@ -969,13 +1027,6 @@ class AsyncLLMClient:
             "params": [{"to": usdc_contract, "data": data}, "latest"],
             "id": 1,
         }
-
-        # Try multiple RPCs for reliability
-        rpcs = [
-            "https://base.publicnode.com",
-            "https://mainnet.base.org",
-            "https://base.meowrpc.com",
-        ]
 
         last_error = None
         async with httpx.AsyncClient(timeout=10) as http_client:
@@ -1002,3 +1053,71 @@ class AsyncLLMClient:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await self.close()
+
+
+# =============================================================================
+# Testnet Convenience Functions
+# =============================================================================
+
+
+def testnet_client(private_key: Optional[str] = None, **kwargs) -> LLMClient:
+    """
+    Create a testnet LLM client for development and testing.
+
+    This is a convenience function that creates an LLMClient configured
+    for the BlockRun testnet (Base Sepolia).
+
+    Args:
+        private_key: Base Sepolia wallet private key (or set BLOCKRUN_WALLET_KEY env var)
+        **kwargs: Additional arguments passed to LLMClient
+
+    Returns:
+        LLMClient configured for testnet
+
+    Example:
+        from blockrun_llm import testnet_client
+
+        client = testnet_client()  # Uses BLOCKRUN_WALLET_KEY
+        response = client.chat("openai/gpt-oss-20b", "Hello!")
+
+    Testnet Setup:
+        1. Get testnet ETH from https://www.alchemy.com/faucets/base-sepolia
+        2. Get testnet USDC from https://faucet.circle.com/
+        3. Use your wallet with testnet funds
+
+    Available Testnet Models:
+        - openai/gpt-oss-20b
+        - openai/gpt-oss-120b
+    """
+    return LLMClient(
+        private_key=private_key,
+        api_url=LLMClient.TESTNET_API_URL,
+        **kwargs,
+    )
+
+
+async def async_testnet_client(private_key: Optional[str] = None, **kwargs) -> AsyncLLMClient:
+    """
+    Create an async testnet LLM client for development and testing.
+
+    This is a convenience function that creates an AsyncLLMClient configured
+    for the BlockRun testnet (Base Sepolia).
+
+    Args:
+        private_key: Base Sepolia wallet private key (or set BLOCKRUN_WALLET_KEY env var)
+        **kwargs: Additional arguments passed to AsyncLLMClient
+
+    Returns:
+        AsyncLLMClient configured for testnet
+
+    Example:
+        from blockrun_llm import async_testnet_client
+
+        async with async_testnet_client() as client:
+            response = await client.chat("openai/gpt-oss-20b", "Hello!")
+    """
+    return AsyncLLMClient(
+        private_key=private_key,
+        api_url=AsyncLLMClient.TESTNET_API_URL,
+        **kwargs,
+    )
