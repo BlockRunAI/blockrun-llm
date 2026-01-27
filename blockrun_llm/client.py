@@ -480,7 +480,7 @@ class LLMClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
-            network=details.get("network", "eip155:8453"),
+            network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
             resource_url=validate_resource_url(
                 resource.get("url", f"{self.api_url}/v1/chat/completions"), self.api_url
             ),
@@ -882,7 +882,7 @@ class AsyncLLMClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
-            network=details.get("network", "eip155:8453"),
+            network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
             resource_url=validate_resource_url(
                 resource.get("url", f"{self.api_url}/v1/chat/completions"), self.api_url
             ),
