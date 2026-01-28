@@ -1123,3 +1123,68 @@ async def async_testnet_client(private_key: Optional[str] = None, **kwargs) -> A
         api_url=AsyncLLMClient.TESTNET_API_URL,
         **kwargs,
     )
+
+
+# =============================================================================
+# XRPL Chain Convenience Functions
+# =============================================================================
+
+XRPL_API_URL = "https://xrpl.blockrun.ai/api"
+
+
+def xrpl_client(private_key: Optional[str] = None, **kwargs) -> LLMClient:
+    """
+    Create an XRPL LLM client for payments with RLUSD.
+
+    This is a convenience function that creates an LLMClient configured
+    for the BlockRun XRPL endpoint (pays with RLUSD on XRP Ledger).
+
+    Args:
+        private_key: Wallet private key (or set BLOCKRUN_WALLET_KEY env var)
+        **kwargs: Additional arguments passed to LLMClient
+
+    Returns:
+        LLMClient configured for XRPL
+
+    Example:
+        from blockrun_llm import xrpl_client
+
+        client = xrpl_client()  # Uses BLOCKRUN_WALLET_KEY
+        response = client.chat("openai/gpt-4o", "Hello!")
+
+    Payment:
+        - Uses RLUSD on XRP Ledger (mainnet)
+        - Same wallet key works, payment signed via x402 protocol
+    """
+    return LLMClient(
+        private_key=private_key,
+        api_url=XRPL_API_URL,
+        **kwargs,
+    )
+
+
+async def async_xrpl_client(private_key: Optional[str] = None, **kwargs) -> AsyncLLMClient:
+    """
+    Create an async XRPL LLM client for payments with RLUSD.
+
+    This is a convenience function that creates an AsyncLLMClient configured
+    for the BlockRun XRPL endpoint (pays with RLUSD on XRP Ledger).
+
+    Args:
+        private_key: Wallet private key (or set BLOCKRUN_WALLET_KEY env var)
+        **kwargs: Additional arguments passed to AsyncLLMClient
+
+    Returns:
+        AsyncLLMClient configured for XRPL
+
+    Example:
+        from blockrun_llm import async_xrpl_client
+
+        async with async_xrpl_client() as client:
+            response = await client.chat("openai/gpt-4o", "Hello!")
+    """
+    return AsyncLLMClient(
+        private_key=private_key,
+        api_url=XRPL_API_URL,
+        **kwargs,
+    )
