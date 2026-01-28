@@ -79,7 +79,7 @@ from .wallet import (
     WALLET_DIR,
 )
 
-__version__ = "0.3.7"
+__version__ = "0.3.9"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
