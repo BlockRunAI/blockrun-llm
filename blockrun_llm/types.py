@@ -204,7 +204,6 @@ class CostEstimate(BaseModel):
     estimated_input_tokens: int
     estimated_output_tokens: int
     estimated_cost_usd: float
-    breakdown: Dict[str, Any] = Field(default_factory=dict)
 
     def __str__(self) -> str:
         return f"💰 Estimated cost: ${self.estimated_cost_usd:.6f} ({self.model})"
@@ -223,7 +222,6 @@ class SpendingReport(BaseModel):
     cost_usd: float
     session_total_usd: float
     session_calls: int
-    breakdown: Dict[str, Any] = Field(default_factory=dict)
 
     def __str__(self) -> str:
         return (
