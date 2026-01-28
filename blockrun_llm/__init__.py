@@ -1,11 +1,22 @@
 """
-BlockRun LLM SDK - Pay-per-request AI via x402 on Base
+BlockRun LLM SDK - Pay-per-request AI via x402
+
+Supported Chains:
+    - Base (default): Pay with USDC
+    - XRPL: Pay with RLUSD
 
 For developers (bring your own wallet):
     from blockrun_llm import LLMClient
 
     client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY from env
     response = client.chat("openai/gpt-5.2", "Hello!")
+    print(response)
+
+XRPL chain (RLUSD payments):
+    from blockrun_llm import xrpl_client
+
+    client = xrpl_client()  # Uses BLOCKRUN_WALLET_KEY from env
+    response = client.chat("openai/gpt-4o", "Hello!")
     print(response)
 
 For agents (Claude Code skills, auto-creates wallet):
@@ -30,7 +41,7 @@ Image generation:
     print(result.data[0].url)
 """
 
-from .client import LLMClient, AsyncLLMClient, list_models, list_image_models, testnet_client, async_testnet_client
+from .client import LLMClient, AsyncLLMClient, list_models, list_image_models, testnet_client, async_testnet_client, xrpl_client, async_xrpl_client, XRPL_API_URL
 from .image import ImageClient
 from .types import (
     ChatMessage,
@@ -75,6 +86,10 @@ __all__ = [
     # Testnet convenience functions
     "testnet_client",
     "async_testnet_client",
+    # XRPL chain convenience functions
+    "xrpl_client",
+    "async_xrpl_client",
+    "XRPL_API_URL",
     # Entry point for agents (auto-creates wallet)
     "setup_agent_wallet",
     "status",
