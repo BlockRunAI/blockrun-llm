@@ -60,9 +60,13 @@ from .validation import (
     validate_resource_url,
 )
 
+from . import __version__
 
 # Load environment variables
 load_dotenv()
+
+# User-Agent for client identification in server logs
+USER_AGENT = f"blockrun-python/{__version__}"
 
 
 # =============================================================================
@@ -404,7 +408,7 @@ class LLMClient:
         response = self._client.post(
             url,
             json=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
         )
 
         # Handle 402 Payment Required
@@ -501,6 +505,7 @@ class LLMClient:
             json=body,
             headers={
                 "Content-Type": "application/json",
+                "User-Agent": USER_AGENT,
                 "PAYMENT-SIGNATURE": payment_payload,
             },
             timeout=request_timeout,
@@ -827,7 +832,7 @@ class AsyncLLMClient:
         response = await self._client.post(
             url,
             json=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "User-Agent": USER_AGENT},
         )
 
         if response.status_code == 402:
@@ -904,6 +909,7 @@ class AsyncLLMClient:
                 json=body,
                 headers={
                     "Content-Type": "application/json",
+                    "User-Agent": USER_AGENT,
                     "PAYMENT-SIGNATURE": payment_payload,
                 },
             )
