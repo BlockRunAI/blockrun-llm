@@ -63,10 +63,12 @@ from .validation import (
 # Load environment variables
 load_dotenv()
 
+
 # User-Agent for client identification in server logs
 # Version read lazily to avoid circular import with __init__.py
 def _get_user_agent() -> str:
     from . import __version__
+
     return f"blockrun-python/{__version__}"
 
 
