@@ -47,7 +47,11 @@ from .types import (
     ChatResponse,
     APIError,
     PaymentError,
+    RoutingDecision,
+    SmartChatResponse,
+    RoutingProfile,
 )
+from .router import route as route_request
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
 from .validation import (
     validate_private_key,
@@ -249,6 +253,101 @@ class LLMClient:
         self._session_total_usd: float = 0.0
         self._session_calls: int = 0
 
+        # Model pricing cache for smart routing
+        self._model_pricing_cache: Optional[Dict[str, Dict[str, float]]] = None
+
+    def _get_model_pricing(self) -> Dict[str, Dict[str, float]]:
+        """
+        Get model pricing for smart routing.
+
+        Returns:
+            Dict mapping model_id -> {"input_price": x, "output_price": y}
+        """
+        if self._model_pricing_cache is not None:
+            return self._model_pricing_cache
+
+        models = self.list_models()
+        pricing: Dict[str, Dict[str, float]] = {}
+        for model in models:
+            model_id = model.get("id", "")
+            input_price = model.get("inputPrice", model.get("input_price", 0))
+            output_price = model.get("outputPrice", model.get("output_price", 0))
+            pricing[model_id] = {
+                "input_price": float(input_price),
+                "output_price": float(output_price),
+            }
+        self._model_pricing_cache = pricing
+        return pricing
+
+    def smart_chat(
+        self,
+        prompt: str,
+        *,
+        system: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        routing_profile: RoutingProfile = "auto",
+    ) -> SmartChatResponse:
+        """
+        Smart chat with automatic model routing.
+
+        Routes requests to the cheapest capable model using ClawRouter's
+        14-dimension rule-based scoring algorithm (<1ms, 100% local).
+
+        Args:
+            prompt: User message
+            system: Optional system prompt
+            max_tokens: Max tokens to generate (default: 1024)
+            temperature: Sampling temperature
+            routing_profile: "free" | "eco" | "auto" | "premium"
+                - free: nvidia/gpt-oss-120b only (FREE)
+                - eco: Cheapest models per tier (DeepSeek, xAI)
+                - auto: Best balance of cost/quality (default)
+                - premium: Top-tier models (OpenAI, Anthropic)
+
+        Returns:
+            SmartChatResponse with response, model, and routing decision
+
+        Example:
+            result = client.smart_chat("What is 2+2?")
+            print(result.response)  # '4'
+            print(result.model)     # 'google/gemini-2.5-flash'
+            print(f"Saved {result.routing.savings * 100:.0f}%")
+
+            # With routing profile
+            result = client.smart_chat(
+                "Prove the Riemann hypothesis",
+                routing_profile="premium"  # Use top-tier models for complex tasks
+            )
+        """
+        # Get model pricing for routing decision
+        model_pricing = self._get_model_pricing()
+        max_output_tokens = max_tokens or self.DEFAULT_MAX_TOKENS
+
+        # Route the request
+        decision = route_request(
+            prompt=prompt,
+            system_prompt=system,
+            max_output_tokens=max_output_tokens,
+            model_pricing=model_pricing,
+            routing_profile=routing_profile,
+        )
+
+        # Make the chat request with selected model
+        response = self.chat(
+            model=decision["model"],
+            prompt=prompt,
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+        return SmartChatResponse(
+            response=response,
+            model=decision["model"],
+            routing=RoutingDecision(**decision),
+        )
+
     def get_spending(self) -> Dict[str, Any]:
         """
         Get current session spending.
@@ -327,13 +426,15 @@ class LLMClient:
     def chat_completion(
         self,
         model: str,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         *,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         search: Optional[bool] = None,
         search_parameters: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
     ) -> ChatResponse:
         """
         Full chat completion interface (OpenAI-compatible).
@@ -346,6 +447,8 @@ class LLMClient:
             top_p: Nucleus sampling parameter
             search: Enable xAI Live Search (shortcut for search_parameters={"mode": "on"})
             search_parameters: Full xAI Live Search configuration (for Grok models)
+            tools: List of tool definitions for function calling
+            tool_choice: Tool selection strategy ("none", "auto", "required", or specific tool)
 
         Returns:
             ChatResponse object with choices, usage, and citations (if search enabled)
@@ -367,6 +470,26 @@ class LLMClient:
                 search=True
             )
             print(result.citations)  # URLs of sources used
+
+            # With tool calling
+            tools = [{
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"}
+                        },
+                        "required": ["location"]
+                    }
+                }
+            }]
+            result = client.chat_completion("gpt-4o", messages, tools=tools)
+            if result.choices[0].message.tool_calls:
+                for tc in result.choices[0].message.tool_calls:
+                    print(f"Call: {tc.function.name}({tc.function.arguments})")
         """
         # Validate inputs
         validate_model(model)
@@ -392,6 +515,12 @@ class LLMClient:
         elif search is True:
             # Simple shortcut: search=True enables live search with defaults
             body["search_parameters"] = {"mode": "on"}
+
+        # Handle tool calling
+        if tools is not None:
+            body["tools"] = tools
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
 
         # Make request (with automatic payment handling)
         return self._request_with_payment("/v1/chat/completions", body)
@@ -793,15 +922,17 @@ class AsyncLLMClient:
     async def chat_completion(
         self,
         model: str,
-        messages: List[Dict[str, str]],
+        messages: List[Dict[str, Any]],
         *,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
         search: Optional[bool] = None,
         search_parameters: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
     ) -> ChatResponse:
-        """Async full chat completion interface with optional xAI Live Search."""
+        """Async full chat completion interface with optional xAI Live Search and tool calling."""
         # Validate inputs
         validate_model(model)
         validate_max_tokens(max_tokens)
@@ -825,6 +956,12 @@ class AsyncLLMClient:
         elif search is True:
             # Simple shortcut: search=True enables live search with defaults
             body["search_parameters"] = {"mode": "on"}
+
+        # Handle tool calling
+        if tools is not None:
+            body["tools"] = tools
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
 
         return await self._request_with_payment("/v1/chat/completions", body)
 

@@ -4,11 +4,51 @@ from typing import List, Optional, Literal, Dict, Any, Union
 from pydantic import BaseModel
 
 
+# Tool calling types (OpenAI compatible)
+class FunctionDefinition(BaseModel):
+    """Function definition for tool calling."""
+
+    name: str
+    description: Optional[str] = None
+    parameters: Optional[Dict[str, Any]] = None
+    strict: Optional[bool] = None
+
+
+class Tool(BaseModel):
+    """Tool definition for chat completions."""
+
+    type: Literal["function"] = "function"
+    function: FunctionDefinition
+
+
+class FunctionCall(BaseModel):
+    """Function call details within a tool call."""
+
+    name: str
+    arguments: str
+
+
+class ToolCall(BaseModel):
+    """Tool call made by the assistant."""
+
+    id: str
+    type: Literal["function"] = "function"
+    function: FunctionCall
+
+
+# Tool choice can be a string or object specifying which tool to use
+ToolChoiceFunction = Dict[str, Any]  # {"type": "function", "function": {"name": "..."}}
+ToolChoice = Union[Literal["none", "auto", "required"], ToolChoiceFunction]
+
+
 class ChatMessage(BaseModel):
     """A single chat message."""
 
-    role: Literal["system", "user", "assistant"]
-    content: str
+    role: Literal["system", "user", "assistant", "tool"]
+    content: Optional[str] = None
+    name: Optional[str] = None  # For tool messages
+    tool_call_id: Optional[str] = None  # For tool result messages
+    tool_calls: Optional[List[ToolCall]] = None  # For assistant messages with tool calls
 
 
 class ChatChoice(BaseModel):
@@ -16,7 +56,7 @@ class ChatChoice(BaseModel):
 
     index: int
     message: ChatMessage
-    finish_reason: Optional[str] = None
+    finish_reason: Optional[Literal["stop", "length", "content_filter", "tool_calls"]] = None
 
 
 class ChatUsage(BaseModel):
@@ -250,3 +290,37 @@ class ChatResponseWithCost(BaseModel):
     def cost(self) -> float:
         """Shortcut to get cost of this call."""
         return self.spending_report.cost_usd
+
+
+# Smart routing types (ClawRouter integration)
+RoutingProfile = Literal["free", "eco", "auto", "premium"]
+RoutingTier = Literal["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
+
+
+class RoutingDecision(BaseModel):
+    """Result of smart routing decision."""
+
+    model: str
+    tier: RoutingTier
+    confidence: float
+    method: Literal["rules"]
+    reasoning: str
+    cost_estimate: float
+    baseline_cost: float
+    savings: float  # 0-1 percentage
+
+
+class SmartChatResponse(BaseModel):
+    """
+    Response from smart_chat with routing information.
+
+    Example:
+        result = client.smart_chat("What is 2+2?")
+        print(result.response)  # '4'
+        print(result.model)     # 'google/gemini-2.5-flash'
+        print(f"Saved {result.routing.savings * 100:.0f}%")
+    """
+
+    response: str
+    model: str
+    routing: RoutingDecision

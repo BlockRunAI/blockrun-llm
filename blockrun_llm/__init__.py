@@ -68,6 +68,9 @@ from .types import (
     XSearchSource,
     NewsSearchSource,
     RssSearchSource,
+    # Smart routing types
+    RoutingDecision,
+    SmartChatResponse,
 )
 from .wallet import (
     setup_agent_wallet,  # Entry point for agents (auto-creates wallet)
@@ -89,7 +92,7 @@ from .wallet import (
     WALLET_DIR,
 )
 
-__version__ = "0.3.9"
+__version__ = "0.4.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -121,6 +124,9 @@ __all__ = [
     "XSearchSource",
     "NewsSearchSource",
     "RssSearchSource",
+    # Smart routing types
+    "RoutingDecision",
+    "SmartChatResponse",
     # Wallet utilities
     "get_or_create_wallet",
     "get_wallet_address",
