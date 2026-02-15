@@ -108,6 +108,7 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 | `openai/gpt-5-mini` | $0.25/M | $2.00/M |
 | `openai/gpt-5-nano` | $0.05/M | $0.40/M |
 | `openai/gpt-5.2-pro` | $21.00/M | $168.00/M |
+| `openai/gpt-5.2-codex` | $2.50/M | $10.00/M |
 
 ### OpenAI GPT-4 Family
 | Model | Input Price | Output Price |
@@ -138,6 +139,7 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 ### Anthropic Claude
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
+| `anthropic/claude-opus-4.6` | $5.00/M | $25.00/M |
 | `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M |
 | `anthropic/claude-opus-4` | $15.00/M | $75.00/M |
 | `anthropic/claude-sonnet-4` | $3.00/M | $15.00/M |
@@ -188,6 +190,8 @@ All models below have been tested end-to-end via the Python SDK (Feb 2026):
 | Provider | Model | Status |
 |----------|-------|--------|
 | OpenAI | `openai/gpt-4o-mini` | Passed |
+| OpenAI | `openai/gpt-5.2-codex` | Passed |
+| Anthropic | `anthropic/claude-opus-4.6` | Passed |
 | Anthropic | `anthropic/claude-sonnet-4` | Passed |
 | Google | `google/gemini-2.5-flash` | Passed |
 | DeepSeek | `deepseek/deepseek-chat` | Passed |
