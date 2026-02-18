@@ -108,7 +108,7 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 | `openai/gpt-5-mini` | $0.25/M | $2.00/M |
 | `openai/gpt-5-nano` | $0.05/M | $0.40/M |
 | `openai/gpt-5.2-pro` | $21.00/M | $168.00/M |
-| `openai/gpt-5.2-codex` | $2.50/M | $10.00/M |
+| `openai/gpt-5.2-codex` | $1.75/M | $14.00/M |
 
 ### OpenAI GPT-4 Family
 | Model | Input Price | Output Price |
@@ -142,6 +142,7 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 | `anthropic/claude-opus-4.6` | $5.00/M | $25.00/M |
 | `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M |
 | `anthropic/claude-opus-4` | $15.00/M | $75.00/M |
+| `anthropic/claude-sonnet-4.6` | $3.00/M | $15.00/M |
 | `anthropic/claude-sonnet-4` | $3.00/M | $15.00/M |
 | `anthropic/claude-haiku-4.5` | $1.00/M | $5.00/M |
 
@@ -150,7 +151,7 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 |-------|-------------|--------------|
 | `google/gemini-3-pro-preview` | $2.00/M | $12.00/M |
 | `google/gemini-2.5-pro` | $1.25/M | $10.00/M |
-| `google/gemini-2.5-flash` | $0.15/M | $0.60/M |
+| `google/gemini-2.5-flash` | $0.30/M | $2.50/M |
 
 ### DeepSeek
 | Model | Input Price | Output Price |
@@ -162,7 +163,6 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
 | `xai/grok-3` | $3.00/M | $15.00/M | 131K | Flagship |
-| `xai/grok-3-fast` | $5.00/M | $25.00/M | 131K | Tool calling optimized |
 | `xai/grok-3-mini` | $0.30/M | $0.50/M | 131K | Fast & affordable |
 | `xai/grok-4-1-fast-reasoning` | $0.20/M | $0.50/M | **2M** | Latest, chain-of-thought |
 | `xai/grok-4-1-fast-non-reasoning` | $0.20/M | $0.50/M | **2M** | Latest, direct response |
@@ -175,13 +175,13 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 ### Moonshot Kimi
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
-| `moonshot/kimi-k2.5` | $0.50/M | $2.40/M |
+| `moonshot/kimi-k2.5` | $0.60/M | $3.00/M |
 
 ### NVIDIA (Free & Hosted)
 | Model | Input Price | Output Price | Notes |
 |-------|-------------|--------------|-------|
 | `nvidia/gpt-oss-120b` | **FREE** | **FREE** | OpenAI open-weight 120B (Apache 2.0) |
-| `nvidia/kimi-k2.5` | $0.55/M | $2.50/M | Moonshot 1T MoE with vision |
+| `nvidia/kimi-k2.5` | $0.60/M | $3.00/M | Moonshot 1T MoE with vision |
 
 ### E2E Verified Models
 
@@ -195,7 +195,7 @@ All models below have been tested end-to-end via the Python SDK (Feb 2026):
 | Anthropic | `anthropic/claude-sonnet-4` | Passed |
 | Google | `google/gemini-2.5-flash` | Passed |
 | DeepSeek | `deepseek/deepseek-chat` | Passed |
-| xAI | `xai/grok-3-fast` | Passed |
+| xAI | `xai/grok-3` | Passed |
 | Moonshot | `moonshot/kimi-k2.5` | Passed |
 
 ### Image Generation

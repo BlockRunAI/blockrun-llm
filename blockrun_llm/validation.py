@@ -26,6 +26,9 @@ KNOWN_PROVIDERS = {
     "mistralai",
     "meta-llama",
     "together",
+    "xai",
+    "moonshot",
+    "nvidia",
 }
 
 
