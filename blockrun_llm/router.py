@@ -52,45 +52,153 @@ class ScoringResult(TypedDict):
 # Multilingual keywords for 14-dimension scoring
 
 CODE_KEYWORDS = [
-    "function", "class", "import", "def", "SELECT", "async", "await",
-    "const", "let", "var", "return", "```",
-    "函数", "类", "导入", "定义", "查询", "异步", "等待", "常量", "变量", "返回",
-    "関数", "クラス", "インポート", "非同期", "定数", "変数",
-    "функция", "класс", "импорт", "определ", "запрос", "асинхронный",
+    "function",
+    "class",
+    "import",
+    "def",
+    "SELECT",
+    "async",
+    "await",
+    "const",
+    "let",
+    "var",
+    "return",
+    "```",
+    "函数",
+    "类",
+    "导入",
+    "定义",
+    "查询",
+    "异步",
+    "等待",
+    "常量",
+    "变量",
+    "返回",
+    "関数",
+    "クラス",
+    "インポート",
+    "非同期",
+    "定数",
+    "変数",
+    "функция",
+    "класс",
+    "импорт",
+    "определ",
+    "запрос",
+    "асинхронный",
 ]
 
 REASONING_KEYWORDS = [
-    "prove", "theorem", "derive", "step by step", "chain of thought",
-    "formally", "mathematical", "proof", "logically",
-    "证明", "定理", "推导", "逐步", "思维链", "形式化", "数学", "逻辑",
-    "доказать", "теорема", "вывести", "шаг за шагом", "логически",
+    "prove",
+    "theorem",
+    "derive",
+    "step by step",
+    "chain of thought",
+    "formally",
+    "mathematical",
+    "proof",
+    "logically",
+    "证明",
+    "定理",
+    "推导",
+    "逐步",
+    "思维链",
+    "形式化",
+    "数学",
+    "逻辑",
+    "доказать",
+    "теорема",
+    "вывести",
+    "шаг за шагом",
+    "логически",
 ]
 
 SIMPLE_KEYWORDS = [
-    "what is", "define", "translate", "hello", "yes or no",
-    "capital of", "how old", "who is", "when was",
-    "什么是", "定义", "翻译", "你好", "是否", "首都",
-    "что такое", "определение", "перевести", "привет",
+    "what is",
+    "define",
+    "translate",
+    "hello",
+    "yes or no",
+    "capital of",
+    "how old",
+    "who is",
+    "when was",
+    "什么是",
+    "定义",
+    "翻译",
+    "你好",
+    "是否",
+    "首都",
+    "что такое",
+    "определение",
+    "перевести",
+    "привет",
 ]
 
 TECHNICAL_KEYWORDS = [
-    "algorithm", "optimize", "architecture", "distributed",
-    "kubernetes", "microservice", "database", "infrastructure",
-    "算法", "优化", "架构", "分布式", "微服务", "数据库",
+    "algorithm",
+    "optimize",
+    "architecture",
+    "distributed",
+    "kubernetes",
+    "microservice",
+    "database",
+    "infrastructure",
+    "算法",
+    "优化",
+    "架构",
+    "分布式",
+    "微服务",
+    "数据库",
 ]
 
 CREATIVE_KEYWORDS = [
-    "story", "poem", "compose", "brainstorm", "creative", "imagine", "write a",
-    "故事", "诗", "创作", "头脑风暴", "创意", "想象",
+    "story",
+    "poem",
+    "compose",
+    "brainstorm",
+    "creative",
+    "imagine",
+    "write a",
+    "故事",
+    "诗",
+    "创作",
+    "头脑风暴",
+    "创意",
+    "想象",
 ]
 
 AGENTIC_KEYWORDS = [
-    "read file", "read the file", "look at", "check the", "open the",
-    "edit", "modify", "update the", "change the", "write to", "create file",
-    "execute", "deploy", "install", "npm", "pip", "compile",
-    "after that", "and also", "once done", "step 1", "step 2",
-    "fix", "debug", "until it works", "keep trying", "iterate",
-    "make sure", "verify", "confirm",
+    "read file",
+    "read the file",
+    "look at",
+    "check the",
+    "open the",
+    "edit",
+    "modify",
+    "update the",
+    "change the",
+    "write to",
+    "create file",
+    "execute",
+    "deploy",
+    "install",
+    "npm",
+    "pip",
+    "compile",
+    "after that",
+    "and also",
+    "once done",
+    "step 1",
+    "step 2",
+    "fix",
+    "debug",
+    "until it works",
+    "keep trying",
+    "iterate",
+    "make sure",
+    "verify",
+    "confirm",
 ]
 
 # Tier boundaries on weighted score axis
@@ -122,7 +230,11 @@ AUTO_TIERS: Dict[Tier, TierConfig] = {
     },
     "MEDIUM": {
         "primary": "xai/grok-code-fast-1",
-        "fallback": ["google/gemini-2.5-flash", "deepseek/deepseek-chat", "xai/grok-4-1-fast-non-reasoning"],
+        "fallback": [
+            "google/gemini-2.5-flash",
+            "deepseek/deepseek-chat",
+            "xai/grok-4-1-fast-non-reasoning",
+        ],
     },
     "COMPLEX": {
         "primary": "google/gemini-3-pro-preview",
@@ -302,10 +414,7 @@ def classify_by_rules(
         agentic_score = 0.0
 
     # Compute weighted score
-    weighted_score = sum(
-        scores.get(dim, 0) * weight
-        for dim, weight in DIMENSION_WEIGHTS.items()
-    )
+    weighted_score = sum(scores.get(dim, 0) * weight for dim, weight in DIMENSION_WEIGHTS.items())
 
     # Check for reasoning override (2+ reasoning markers = REASONING)
     reasoning_matches = [kw for kw in REASONING_KEYWORDS if kw.lower() in user_text]
@@ -327,13 +436,13 @@ def classify_by_rules(
         tier = "MEDIUM"
         distance = min(
             weighted_score - TIER_BOUNDARIES["simple_medium"],
-            TIER_BOUNDARIES["medium_complex"] - weighted_score
+            TIER_BOUNDARIES["medium_complex"] - weighted_score,
         )
     elif weighted_score < TIER_BOUNDARIES["complex_reasoning"]:
         tier = "COMPLEX"
         distance = min(
             weighted_score - TIER_BOUNDARIES["medium_complex"],
-            TIER_BOUNDARIES["complex_reasoning"] - weighted_score
+            TIER_BOUNDARIES["complex_reasoning"] - weighted_score,
         )
     else:
         tier = "REASONING"
