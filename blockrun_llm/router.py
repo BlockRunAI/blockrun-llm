@@ -16,7 +16,7 @@ Usage:
 
 import re
 import math
-from typing import Dict, List, Optional, Literal, TypedDict, Any
+from typing import Dict, List, Optional, Literal, TypedDict
 
 
 # Type definitions
