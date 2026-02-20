@@ -10,7 +10,8 @@ Pay-per-request access to GPT-5.2, Claude 4, Gemini 2.5, Grok, and more via x402
 |-------|---------|---------|--------|
 | **Base** | Base Mainnet (Chain ID: 8453) | USDC | ✅ Primary |
 | **Base Testnet** | Base Sepolia (Chain ID: 84532) | Testnet USDC | ✅ Development |
-| **XRPL** | XRP Ledger Mainnet | RLUSD | ✅ New |
+
+> **XRPL (RLUSD):** Use [blockrun-llm-xrpl](https://pypi.org/project/blockrun-llm-xrpl/) for XRPL payments
 
 **Protocol:** x402 v2
 
@@ -363,49 +364,6 @@ client = LLMClient(api_url="https://testnet.blockrun.ai/api")
 response = client.chat("openai/gpt-oss-20b", "Hello!")
 ```
 
-## XRPL Chain (RLUSD Payments)
-
-BlockRun now supports payments with RLUSD on the XRP Ledger. Same models, same API - just a different payment rail.
-
-```python
-from blockrun_llm import xrpl_client
-
-# Create XRPL client (pays with RLUSD)
-client = xrpl_client()  # Uses BLOCKRUN_WALLET_KEY
-
-# Chat with any model
-response = client.chat("openai/gpt-4o", "Hello!")
-print(response)
-
-# Check RLUSD balance
-balance = client.get_balance()
-print(f"RLUSD: ${balance:.4f}")
-```
-
-### Async XRPL Usage
-
-```python
-import asyncio
-from blockrun_llm import async_xrpl_client
-
-async def main():
-    async with async_xrpl_client() as client:
-        response = await client.chat("openai/gpt-4o", "Hello!")
-        print(response)
-
-asyncio.run(main())
-```
-
-### Manual XRPL Configuration
-
-```python
-from blockrun_llm import LLMClient
-
-# Or configure manually
-client = LLMClient(api_url="https://xrpl.blockrun.ai/api")
-response = client.chat("openai/gpt-4o", "Hello!")
-```
-
 ## Environment Variables
 
 | Variable | Description | Required |
@@ -508,9 +466,9 @@ pip install --upgrade blockrun-llm  # Get security patches
 ## Links
 
 - [Website](https://blockrun.ai)
-- [Documentation](https://docs.blockrun.ai)
-- [GitHub](https://github.com/blockrun/blockrun-llm)
-- [Discord](https://discord.gg/blockrun)
+- [Documentation](https://github.com/BlockRunAI/awesome-blockrun/tree/main/docs)
+- [GitHub](https://github.com/blockrunai/blockrun-llm)
+- [Telegram](https://t.me/+mroQv4-4hGgzOGUx)
 
 ## License
 
