@@ -43,7 +43,7 @@ dev = [
 
 [project.urls]
 Homepage = "https://blockrun.ai"
-Documentation = "https://docs.blockrun.ai"
+Documentation = "https://github.com/BlockRunAI/awesome-blockrun/tree/main/docs"
 Repository = "https://github.com/BlockRunAI/blockrun-llm"
 
 [tool.hatch.build.targets.wheel]

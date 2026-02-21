@@ -1,6 +1,6 @@
 # BlockRun LLM SDK
 
-Pay-per-request access to GPT-5.2, Claude 4, Gemini 2.5, Grok, and more via x402 micropayments.
+Pay-per-request access to GPT-5.2, Claude 4, Gemini 3.1, Grok, and more via x402 micropayments.
 
 **BlockRun assumes Claude Code as the agent runtime.**
 
@@ -87,7 +87,7 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 |------|---------------|-------------------|
 | SIMPLE | "What is 2+2?", definitions | nvidia/kimi-k2.5 |
 | MEDIUM | Code snippets, explanations | xai/grok-code-fast-1 |
-| COMPLEX | Architecture, long documents | google/gemini-3-pro-preview |
+| COMPLEX | Architecture, long documents | google/gemini-3.1-pro-preview |
 | REASONING | Proofs, multi-step reasoning | xai/grok-4-1-fast-reasoning |
 
 ## How It Works
