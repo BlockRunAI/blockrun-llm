@@ -226,7 +226,7 @@ DIMENSION_WEIGHTS = {
 AUTO_TIERS: Dict[Tier, TierConfig] = {
     "SIMPLE": {
         "primary": "nvidia/kimi-k2.5",
-        "fallback": ["google/gemini-2.5-flash", "nvidia/gpt-oss-120b", "deepseek/deepseek-chat"],
+        "fallback": ["google/gemini-2.5-flash-lite", "nvidia/gpt-oss-120b", "deepseek/deepseek-chat"],
     },
     "MEDIUM": {
         "primary": "xai/grok-code-fast-1",
@@ -237,8 +237,8 @@ AUTO_TIERS: Dict[Tier, TierConfig] = {
         ],
     },
     "COMPLEX": {
-        "primary": "google/gemini-3-pro-preview",
-        "fallback": ["google/gemini-2.5-flash", "google/gemini-2.5-pro", "deepseek/deepseek-chat"],
+        "primary": "google/gemini-3.1-pro-preview",
+        "fallback": ["google/gemini-3-flash-preview", "google/gemini-2.5-pro", "deepseek/deepseek-chat"],
     },
     "REASONING": {
         "primary": "xai/grok-4-1-fast-reasoning",
@@ -276,7 +276,7 @@ PREMIUM_TIERS: Dict[Tier, TierConfig] = {
     },
     "COMPLEX": {
         "primary": "anthropic/claude-opus-4.5",
-        "fallback": ["openai/gpt-5.2-pro", "google/gemini-3-pro-preview", "openai/gpt-5.2"],
+        "fallback": ["openai/gpt-5.2-pro", "google/gemini-3.1-pro-preview", "openai/gpt-5.2"],
     },
     "REASONING": {
         "primary": "openai/o3",
