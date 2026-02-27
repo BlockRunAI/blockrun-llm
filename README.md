@@ -10,6 +10,7 @@ Pay-per-request access to GPT-5.2, Claude 4, Gemini 3.1, Grok, and more via x402
 |-------|---------|---------|--------|
 | **Base** | Base Mainnet (Chain ID: 8453) | USDC | ✅ Primary |
 | **Base Testnet** | Base Sepolia (Chain ID: 84532) | Testnet USDC | ✅ Development |
+| **Solana** | Solana Mainnet | USDC (SPL) | ✅ New |
 
 > **XRPL (RLUSD):** Use [blockrun-llm-xrpl](https://pypi.org/project/blockrun-llm-xrpl/) for XRPL payments
 
@@ -18,7 +19,8 @@ Pay-per-request access to GPT-5.2, Claude 4, Gemini 3.1, Grok, and more via x402
 ## Installation
 
 ```bash
-pip install blockrun-llm
+pip install blockrun-llm          # Base (EVM) payments
+pip install blockrun-llm[solana]  # + Solana payments
 ```
 
 ## Quick Start
@@ -31,6 +33,36 @@ response = client.chat("openai/gpt-5.2", "Hello!")
 ```
 
 That's it. The SDK handles x402 payment automatically.
+
+## Solana Support
+
+Pay for AI calls with Solana USDC via [sol.blockrun.ai](https://sol.blockrun.ai):
+
+```python
+from blockrun_llm import SolanaLLMClient
+
+# SOLANA_WALLET_KEY env var (bs58-encoded Solana secret key)
+client = SolanaLLMClient()
+
+# Or pass key directly
+client = SolanaLLMClient(private_key="your-bs58-solana-key")
+
+# Same API as LLMClient
+response = client.chat("openai/gpt-4o", "gm Solana")
+print(response)
+
+# Live Search with Grok (Solana payment)
+tweet = client.chat("xai/grok-3-mini", "What is trending on X?", search=True)
+```
+
+**Setup:**
+```bash
+pip install blockrun-llm[solana]
+export SOLANA_WALLET_KEY="your-bs58-solana-key"
+```
+
+**Endpoint:** `https://sol.blockrun.ai/api`
+**Payment:** Solana USDC (SPL Token, mainnet)
 
 ## Smart Routing (ClawRouter)
 
