@@ -31,6 +31,7 @@ Image generation:
 
 Other Chains:
     - XRPL (RLUSD): Use blockrun-llm-xrpl (pip install blockrun-llm-xrpl)
+    - Solana (USDC): Use SolanaLLMClient (pip install blockrun-llm[solana])
 """
 
 from .client import (
@@ -41,6 +42,7 @@ from .client import (
     testnet_client,
     async_testnet_client,
 )
+from .solana_client import SolanaLLMClient
 from .image import ImageClient
 from .types import (
     ChatMessage,
@@ -81,10 +83,11 @@ from .wallet import (
     WALLET_DIR,
 )
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
+    "SolanaLLMClient",
     # Testnet convenience functions
     "testnet_client",
     "async_testnet_client",
