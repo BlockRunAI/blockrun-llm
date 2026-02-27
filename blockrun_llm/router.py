@@ -237,7 +237,7 @@ AUTO_TIERS: Dict[Tier, TierConfig] = {
         ],
     },
     "COMPLEX": {
-        "primary": "google/gemini-3.1-pro-preview",
+        "primary": "google/gemini-3.1-pro",
         "fallback": ["google/gemini-3-flash-preview", "google/gemini-2.5-pro", "deepseek/deepseek-chat"],
     },
     "REASONING": {
@@ -276,7 +276,7 @@ PREMIUM_TIERS: Dict[Tier, TierConfig] = {
     },
     "COMPLEX": {
         "primary": "anthropic/claude-opus-4.5",
-        "fallback": ["openai/gpt-5.2-pro", "google/gemini-3.1-pro-preview", "openai/gpt-5.2"],
+        "fallback": ["openai/gpt-5.2-pro", "google/gemini-3.1-pro", "openai/gpt-5.2"],
     },
     "REASONING": {
         "primary": "openai/o3",

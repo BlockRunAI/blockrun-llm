@@ -87,7 +87,7 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 |------|---------------|-------------------|
 | SIMPLE | "What is 2+2?", definitions | nvidia/kimi-k2.5 |
 | MEDIUM | Code snippets, explanations | xai/grok-code-fast-1 |
-| COMPLEX | Architecture, long documents | google/gemini-3.1-pro-preview |
+| COMPLEX | Architecture, long documents | google/gemini-3.1-pro |
 | REASONING | Proofs, multi-step reasoning | xai/grok-4-1-fast-reasoning |
 
 ## How It Works
@@ -150,9 +150,15 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 ### Google Gemini
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
-| `google/gemini-3-pro-preview` | $2.00/M | $12.00/M |
+| `google/gemini-3.1-pro` | $2.00/M | $12.00/M |
 | `google/gemini-2.5-pro` | $1.25/M | $10.00/M |
+| `google/gemini-3-flash-preview` | $0.50/M | $3.00/M |
 | `google/gemini-2.5-flash` | $0.30/M | $2.50/M |
+
+### MiniMax
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `minimax/minimax-m2.5` | $0.30/M | $1.20/M |
 
 ### DeepSeek
 | Model | Input Price | Output Price |
