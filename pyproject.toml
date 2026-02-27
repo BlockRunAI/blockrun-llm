@@ -40,6 +40,10 @@ dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",
 ]
+solana = [
+    "solders>=0.21.0",
+    "base58>=2.1.0",
+]
 
 [project.urls]
 Homepage = "https://blockrun.ai"
