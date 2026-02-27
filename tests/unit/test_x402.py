@@ -221,3 +221,46 @@ class TestExtractPaymentDetails:
 
         details = extract_payment_details(payment_required)
         assert details["resource"]["url"] == "https://api.blockrun.ai/test"
+
+
+class TestCreateSolanaPaymentPayload:
+    """Tests for Solana payment payload creation."""
+
+    TEST_BS58_KEY = "5MaiiCavjCmn9Hs1o3eznqDEhRwxo7pXiAYez7keQUviQeRjpzKCY8trDwpvBMTKTpNFbCJsBZthJ4tCs6o62rr"
+    TEST_FEE_PAYER = "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"
+    TEST_RECIPIENT = "AQqnMFBwGZEoti85aTVRy8XYpKrho7GaMDx9ZB3CEeKA"
+
+    def test_payload_structure(self):
+        """Should create valid Solana payment payload."""
+        from blockrun_llm.x402 import create_solana_payment_payload
+        import json, base64
+
+        payload = create_solana_payment_payload(
+            private_key=self.TEST_BS58_KEY,
+            recipient=self.TEST_RECIPIENT,
+            amount="1000",
+            fee_payer=self.TEST_FEE_PAYER,
+        )
+
+        assert isinstance(payload, str)
+        decoded = json.loads(base64.b64decode(payload))
+        assert decoded["x402Version"] == 2
+        assert "transaction" in decoded["payload"]
+        assert decoded["accepted"]["network"].startswith("solana:")
+        assert decoded["accepted"]["asset"] == "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+
+    def test_payload_transaction_is_base64(self):
+        """Transaction field should be base64-encoded."""
+        from blockrun_llm.x402 import create_solana_payment_payload
+        import json, base64
+
+        payload = create_solana_payment_payload(
+            private_key=self.TEST_BS58_KEY,
+            recipient=self.TEST_RECIPIENT,
+            amount="1000",
+            fee_payer=self.TEST_FEE_PAYER,
+        )
+        decoded = json.loads(base64.b64decode(payload))
+        # Should be valid base64
+        tx_bytes = base64.b64decode(decoded["payload"]["transaction"])
+        assert len(tx_bytes) > 0
