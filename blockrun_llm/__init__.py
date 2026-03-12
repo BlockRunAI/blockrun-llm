@@ -90,8 +90,18 @@ from .wallet import (
     WALLET_FILE,
     WALLET_DIR,
 )
+from .solana_wallet import (
+    setup_agent_solana_wallet,
+    get_solana_usdc_balance,
+    generate_solana_qr_ascii,
+    open_solana_wallet_qr,
+    get_or_create_solana_wallet,
+    create_solana_wallet,
+    load_solana_wallet,
+    get_solana_public_key,
+)
 
-__version__ = "0.6.0"
+__version__ = "0.6.1"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -147,4 +157,13 @@ __all__ = [
     "load_wallet",
     "WALLET_FILE",
     "WALLET_DIR",
+    # Solana wallet utilities
+    "setup_agent_solana_wallet",
+    "get_solana_usdc_balance",
+    "generate_solana_qr_ascii",
+    "open_solana_wallet_qr",
+    "get_or_create_solana_wallet",
+    "create_solana_wallet",
+    "load_solana_wallet",
+    "get_solana_public_key",
 ]
