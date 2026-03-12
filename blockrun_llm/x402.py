@@ -268,10 +268,15 @@ def _get_ata(owner: str, mint: str) -> str:
 def _get_latest_blockhash(rpc_url: str) -> str:
     """Fetch latest blockhash from Solana RPC."""
     import httpx
+
     resp = httpx.post(
         rpc_url,
-        json={"jsonrpc": "2.0", "id": 1, "method": "getLatestBlockhash",
-              "params": [{"commitment": "finalized"}]},
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getLatestBlockhash",
+            "params": [{"commitment": "finalized"}],
+        },
         timeout=10,
     )
     resp.raise_for_status()
@@ -343,6 +348,7 @@ def create_solana_payment_payload(
 
     # setComputeUnitLimit instruction: discriminator=2, units=u32 LE
     import struct
+
     limit_data = bytes([2]) + struct.pack("<I", DEFAULT_COMPUTE_UNIT_LIMIT)
     limit_ix = Instruction(compute_budget_id, limit_data, [])
 

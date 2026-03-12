@@ -246,6 +246,79 @@ All models below have been tested end-to-end via the Python SDK (Feb 2026):
 | `google/nano-banana` | $0.05/image |
 | `google/nano-banana-pro` | $0.10-0.15/image |
 
+## X/Twitter Data (Powered by AttentionVC)
+
+Access X/Twitter user profiles, followers, and followings via [AttentionVC](https://attentionvc.ai) partner API. No API keys needed — pay-per-request via x402.
+
+```python
+from blockrun_llm import LLMClient
+
+client = LLMClient()
+
+# Look up user profiles ($0.002/user, min $0.02)
+users = client.x_user_lookup(["elonmusk", "blockaborr"])
+for user in users.users:
+    print(f"@{user.userName}: {user.followers} followers")
+
+# Get followers ($0.05/page, ~200 accounts)
+result = client.x_followers("blockaborr")
+for f in result.followers:
+    print(f"  @{f.screen_name}")
+
+# Paginate through all followers
+while result.has_next_page:
+    result = client.x_followers("blockaborr", cursor=result.next_cursor)
+
+# Get followings ($0.05/page)
+followings = client.x_followings("blockaborr")
+```
+
+Works on all clients: `LLMClient` (Base), `AsyncLLMClient`, and `SolanaLLMClient`.
+
+## Standalone Search
+
+Search web, X/Twitter, and news without using a chat model:
+
+```python
+from blockrun_llm import LLMClient
+
+client = LLMClient()
+
+result = client.search("latest AI agent frameworks 2026")
+print(result.summary)
+for cite in result.citations or []:
+    print(f"  - {cite}")
+
+# Filter by source type and date range
+result = client.search(
+    "BlockRun x402",
+    sources=["web", "x"],
+    from_date="2026-01-01",
+    max_results=5,
+)
+```
+
+## Image Editing (img2img)
+
+Edit existing images with text prompts:
+
+```python
+from blockrun_llm import LLMClient, ImageClient
+
+# Via LLMClient
+client = LLMClient()
+result = client.image_edit(
+    prompt="Make the sky purple and add northern lights",
+    image="data:image/png;base64,...",  # base64 or URL
+    model="openai/gpt-image-1",
+)
+print(result.data[0].url)
+
+# Via ImageClient
+img_client = ImageClient()
+result = img_client.edit("Add a rainbow", image="https://example.com/photo.jpg")
+```
+
 ## Usage Examples
 
 ### Simple Chat

@@ -324,3 +324,80 @@ class SmartChatResponse(BaseModel):
     response: str
     model: str
     routing: RoutingDecision
+
+
+# Standalone search response
+class SearchResult(BaseModel):
+    """Response from standalone search endpoint."""
+
+    query: str
+    summary: str
+    citations: Optional[List[Dict[str, str]]] = None
+    sources_used: Optional[int] = None
+    model: Optional[str] = None
+
+
+# X/Twitter types
+class XUser(BaseModel):
+    """X/Twitter user profile."""
+
+    id: str
+    userName: str
+    name: str
+    profilePicture: Optional[str] = None
+    description: Optional[str] = None
+    followers: Optional[int] = None
+    following: Optional[int] = None
+    isBlueVerified: Optional[bool] = None
+    verifiedType: Optional[str] = None
+    location: Optional[str] = None
+    joined: Optional[str] = None
+
+
+class XUserLookupResponse(BaseModel):
+    """Response from X/Twitter user lookup."""
+
+    users: List[XUser]
+    not_found: Optional[List[str]] = None
+    total_requested: Optional[int] = None
+    total_found: Optional[int] = None
+
+
+class XFollower(BaseModel):
+    """X/Twitter follower/following profile."""
+
+    id: str
+    name: Optional[str] = None
+    screen_name: Optional[str] = None
+    userName: Optional[str] = None
+    location: Optional[str] = None
+    description: Optional[str] = None
+    protected: Optional[bool] = None
+    verified: Optional[bool] = None
+    followers_count: Optional[int] = None
+    following_count: Optional[int] = None
+    favourites_count: Optional[int] = None
+    statuses_count: Optional[int] = None
+    created_at: Optional[str] = None
+    profile_image_url_https: Optional[str] = None
+    can_dm: Optional[bool] = None
+
+
+class XFollowersResponse(BaseModel):
+    """Response from X/Twitter followers endpoint."""
+
+    followers: List[XFollower]
+    has_next_page: Optional[bool] = None
+    next_cursor: Optional[str] = None
+    total_returned: Optional[int] = None
+    username: Optional[str] = None
+
+
+class XFollowingsResponse(BaseModel):
+    """Response from X/Twitter followings endpoint."""
+
+    followings: List[XFollower]
+    has_next_page: Optional[bool] = None
+    next_cursor: Optional[str] = None
+    total_returned: Optional[int] = None
+    username: Optional[str] = None
