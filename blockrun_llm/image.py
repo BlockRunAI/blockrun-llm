@@ -27,7 +27,7 @@ Usage:
 """
 
 import os
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 import httpx
 from eth_account import Account
 from dotenv import load_dotenv
