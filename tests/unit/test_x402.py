@@ -235,7 +235,8 @@ class TestCreateSolanaPaymentPayload:
     def test_payload_structure(self):
         """Should create valid Solana payment payload."""
         from blockrun_llm.x402 import create_solana_payment_payload
-        import json, base64
+        import json
+        import base64
 
         payload = create_solana_payment_payload(
             private_key=self.TEST_BS58_KEY,
@@ -254,7 +255,8 @@ class TestCreateSolanaPaymentPayload:
     def test_payload_transaction_is_base64(self):
         """Transaction field should be base64-encoded."""
         from blockrun_llm.x402 import create_solana_payment_payload
-        import json, base64
+        import json
+        import base64
 
         payload = create_solana_payment_payload(
             private_key=self.TEST_BS58_KEY,

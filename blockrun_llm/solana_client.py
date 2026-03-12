@@ -29,10 +29,8 @@ from .types import (
     PaymentError,
     SearchResult,
     XUserLookupResponse,
-    XUser,
     XFollowersResponse,
     XFollowingsResponse,
-    XFollower,
 )
 from .x402 import (
     create_solana_payment_payload,
@@ -174,7 +172,8 @@ class SolanaLLMClient:
         payment_header = response.headers.get("payment-required")
         if not payment_header:
             try:
-                import base64, json
+                import base64
+                import json
 
                 resp_body = response.json()
                 if resp_body.get("accepts") or resp_body.get("x402Version"):
@@ -276,7 +275,8 @@ class SolanaLLMClient:
         payment_header = response.headers.get("payment-required")
         if not payment_header:
             try:
-                import base64, json
+                import base64
+                import json
 
                 resp_body = response.json()
                 if resp_body.get("accepts") or resp_body.get("x402Version"):

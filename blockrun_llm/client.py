@@ -53,10 +53,8 @@ from .types import (
     RoutingProfile,
     SearchResult,
     XUserLookupResponse,
-    XUser,
     XFollowersResponse,
     XFollowingsResponse,
-    XFollower,
 )
 from .router import route as route_request
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
