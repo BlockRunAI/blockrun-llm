@@ -4,6 +4,7 @@ BlockRun Solana Wallet Management.
 Stores keys as bs58-encoded strings at ~/.blockrun/.solana-session.
 Requires: solders>=0.21.0, base58>=2.1.0
 """
+
 from __future__ import annotations
 
 import os
@@ -58,6 +59,7 @@ def solana_key_to_bytes(private_key: str) -> bytes:
     """
     try:
         import base58  # type: ignore
+
         decoded = base58.b58decode(private_key)
         if len(decoded) != 64:
             raise ValueError(f"Expected 64 bytes, got {len(decoded)}")
@@ -114,7 +116,11 @@ def get_or_create_solana_wallet() -> Dict[str, object]:
 
     file_key = load_solana_wallet()
     if file_key:
-        return {"private_key": file_key, "address": get_solana_public_key(file_key), "is_new": False}
+        return {
+            "private_key": file_key,
+            "address": get_solana_public_key(file_key),
+            "is_new": False,
+        }
 
     wallet = create_solana_wallet()
     save_solana_wallet(wallet["private_key"])

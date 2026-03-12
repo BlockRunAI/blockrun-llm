@@ -38,18 +38,25 @@ Usage:
 """
 
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 import httpx
 from eth_account import Account
 from dotenv import load_dotenv
 
 from .types import (
     ChatResponse,
+    ImageResponse,
     APIError,
     PaymentError,
     RoutingDecision,
     SmartChatResponse,
     RoutingProfile,
+    SearchResult,
+    XUserLookupResponse,
+    XUser,
+    XFollowersResponse,
+    XFollowingsResponse,
+    XFollower,
 )
 from .router import route as route_request
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
@@ -667,6 +674,248 @@ class LLMClient:
 
         return chat_response
 
+    def _request_with_payment_raw(self, endpoint: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Make a request with automatic x402 payment handling, returning raw JSON.
+
+        Same flow as _request_with_payment() but returns Dict instead of ChatResponse.
+        Used for endpoints that don't return the chat completion shape.
+        """
+        url = f"{self.api_url}{endpoint}"
+
+        response = self._client.post(
+            url,
+            json=body,
+            headers={"Content-Type": "application/json", "User-Agent": _get_user_agent()},
+        )
+
+        if response.status_code == 402:
+            return self._handle_payment_and_retry_raw(url, body, response)
+
+        if response.status_code != 200:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error: {response.status_code}",
+                response.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        return response.json()
+
+    def _handle_payment_and_retry_raw(
+        self,
+        url: str,
+        body: Dict[str, Any],
+        response: httpx.Response,
+    ) -> Dict[str, Any]:
+        """Handle 402 response for raw endpoints: parse requirements, sign payment, retry."""
+        payment_header = response.headers.get("payment-required")
+        price_info = {}
+        if not payment_header:
+            try:
+                resp_body = response.json()
+                if "x402" in resp_body:
+                    payment_header = resp_body
+                price_info = resp_body.get("price", {})
+            except Exception:
+                pass
+
+        if not payment_header:
+            raise PaymentError("402 response but no payment requirements found")
+
+        if isinstance(payment_header, str):
+            payment_required = parse_payment_required(payment_header)
+        else:
+            payment_required = payment_header
+
+        details = extract_payment_details(payment_required)
+
+        cost_usd = (
+            float(price_info.get("amount", 0))
+            if price_info
+            else float(details.get("amount", 0)) / 1e6
+        )
+
+        resource = details.get("resource") or {}
+        extensions = payment_required.get("extensions", {})
+        payment_payload = create_payment_payload(
+            account=self.account,
+            recipient=details["recipient"],
+            amount=details["amount"],
+            network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
+            resource_url=validate_resource_url(resource.get("url", url), self.api_url),
+            resource_description=resource.get("description", "BlockRun AI API call"),
+            max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
+            extra=details.get("extra"),
+            extensions=extensions,
+            asset=details.get("asset"),
+        )
+
+        retry_response = httpx.post(
+            url,
+            json=body,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": _get_user_agent(),
+                "PAYMENT-SIGNATURE": payment_payload,
+            },
+            timeout=self.timeout,
+        )
+
+        if retry_response.status_code == 402:
+            raise PaymentError("Payment was rejected. Check your wallet balance.")
+
+        if retry_response.status_code != 200:
+            try:
+                error_body = retry_response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error after payment: {retry_response.status_code}",
+                retry_response.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        self._session_calls += 1
+        self._session_total_usd += cost_usd
+
+        return retry_response.json()
+
+    def image_edit(
+        self,
+        prompt: str,
+        image: str,
+        *,
+        model: str = "openai/gpt-image-1",
+        mask: Optional[str] = None,
+        size: str = "1024x1024",
+        n: int = 1,
+    ) -> ImageResponse:
+        """
+        Edit an image using img2img.
+
+        Args:
+            prompt: Text description of the desired edit
+            image: Base64-encoded image or URL of the source image
+            model: Model ID (default: "openai/gpt-image-1")
+            mask: Optional base64-encoded mask image
+            size: Output image size (default: "1024x1024")
+            n: Number of images to generate (default: 1)
+
+        Returns:
+            ImageResponse with edited image URLs
+        """
+        body: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "image": image,
+            "size": size,
+            "n": n,
+        }
+        if mask is not None:
+            body["mask"] = mask
+
+        data = self._request_with_payment_raw("/v1/images/image2image", body)
+        return ImageResponse(**data)
+
+    def search(
+        self,
+        query: str,
+        *,
+        sources: Optional[List[str]] = None,
+        max_results: int = 10,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> SearchResult:
+        """
+        Standalone search (web, X/Twitter, news).
+
+        Args:
+            query: Search query
+            sources: Source types to search (e.g. ["web", "x", "news"])
+            max_results: Maximum number of results (default: 10)
+            from_date: Start date filter (YYYY-MM-DD)
+            to_date: End date filter (YYYY-MM-DD)
+
+        Returns:
+            SearchResult with summary and citations
+        """
+        body: Dict[str, Any] = {
+            "query": query,
+            "max_results": max_results,
+        }
+        if sources is not None:
+            body["sources"] = sources
+        if from_date is not None:
+            body["from_date"] = from_date
+        if to_date is not None:
+            body["to_date"] = to_date
+
+        data = self._request_with_payment_raw("/v1/search", body)
+        return SearchResult(**data)
+
+    def x_user_lookup(self, usernames: Union[List[str], str]) -> XUserLookupResponse:
+        """
+        Look up X/Twitter user profiles by username.
+
+        Powered by AttentionVC. $0.002 per user (min $0.02, max $0.20).
+
+        Args:
+            usernames: Single username or list of usernames (without @)
+
+        Returns:
+            XUserLookupResponse with user profiles
+        """
+        if isinstance(usernames, str):
+            usernames = [usernames]
+
+        body: Dict[str, Any] = {"usernames": usernames}
+        data = self._request_with_payment_raw("/v1/x/users/lookup", body)
+        return XUserLookupResponse(**data)
+
+    def x_followers(self, username: str, *, cursor: Optional[str] = None) -> XFollowersResponse:
+        """
+        Get followers of an X/Twitter user.
+
+        Powered by AttentionVC. $0.05 per page (~200 accounts).
+
+        Args:
+            username: X/Twitter username (without @)
+            cursor: Pagination cursor from previous response
+
+        Returns:
+            XFollowersResponse with follower list
+        """
+        body: Dict[str, Any] = {"username": username}
+        if cursor is not None:
+            body["cursor"] = cursor
+
+        data = self._request_with_payment_raw("/v1/x/users/followers", body)
+        return XFollowersResponse(**data)
+
+    def x_followings(self, username: str, *, cursor: Optional[str] = None) -> XFollowingsResponse:
+        """
+        Get accounts an X/Twitter user is following.
+
+        Powered by AttentionVC. $0.05 per page (~200 accounts).
+
+        Args:
+            username: X/Twitter username (without @)
+            cursor: Pagination cursor from previous response
+
+        Returns:
+            XFollowingsResponse with following list
+        """
+        body: Dict[str, Any] = {"username": username}
+        if cursor is not None:
+            body["cursor"] = cursor
+
+        data = self._request_with_payment_raw("/v1/x/users/followings", body)
+        return XFollowingsResponse(**data)
+
     def list_models(self) -> List[Dict[str, Any]]:
         """
         List available LLM models with pricing.
@@ -1069,6 +1318,181 @@ class AsyncLLMClient:
             )
 
         return ChatResponse(**retry_response.json())
+
+    async def _request_with_payment_raw(
+        self, endpoint: str, body: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Make async request with automatic payment handling, returning raw JSON."""
+        url = f"{self.api_url}{endpoint}"
+
+        response = await self._client.post(
+            url,
+            json=body,
+            headers={"Content-Type": "application/json", "User-Agent": _get_user_agent()},
+        )
+
+        if response.status_code == 402:
+            return await self._handle_payment_and_retry_raw(url, body, response)
+
+        if response.status_code != 200:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error: {response.status_code}",
+                response.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        return response.json()
+
+    async def _handle_payment_and_retry_raw(
+        self,
+        url: str,
+        body: Dict[str, Any],
+        response: httpx.Response,
+    ) -> Dict[str, Any]:
+        """Handle 402 response asynchronously for raw endpoints."""
+        payment_header = response.headers.get("payment-required")
+        if not payment_header:
+            try:
+                resp_body = response.json()
+                if "x402" in resp_body:
+                    payment_header = resp_body
+            except Exception:
+                pass
+
+        if not payment_header:
+            raise PaymentError("402 response but no payment requirements found")
+
+        if isinstance(payment_header, str):
+            payment_required = parse_payment_required(payment_header)
+        else:
+            payment_required = payment_header
+
+        details = extract_payment_details(payment_required)
+
+        resource = details.get("resource") or {}
+        extensions = payment_required.get("extensions", {})
+        payment_payload = create_payment_payload(
+            account=self.account,
+            recipient=details["recipient"],
+            amount=details["amount"],
+            network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
+            resource_url=validate_resource_url(resource.get("url", url), self.api_url),
+            resource_description=resource.get("description", "BlockRun AI API call"),
+            max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
+            extra=details.get("extra"),
+            extensions=extensions,
+            asset=details.get("asset"),
+        )
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            retry_response = await client.post(
+                url,
+                json=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": _get_user_agent(),
+                    "PAYMENT-SIGNATURE": payment_payload,
+                },
+            )
+
+        if retry_response.status_code == 402:
+            raise PaymentError("Payment was rejected. Check your wallet balance.")
+
+        if retry_response.status_code != 200:
+            try:
+                error_body = retry_response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error after payment: {retry_response.status_code}",
+                retry_response.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        return retry_response.json()
+
+    async def image_edit(
+        self,
+        prompt: str,
+        image: str,
+        *,
+        model: str = "openai/gpt-image-1",
+        mask: Optional[str] = None,
+        size: str = "1024x1024",
+        n: int = 1,
+    ) -> ImageResponse:
+        """Async image editing (img2img)."""
+        body: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "image": image,
+            "size": size,
+            "n": n,
+        }
+        if mask is not None:
+            body["mask"] = mask
+
+        data = await self._request_with_payment_raw("/v1/images/image2image", body)
+        return ImageResponse(**data)
+
+    async def search(
+        self,
+        query: str,
+        *,
+        sources: Optional[List[str]] = None,
+        max_results: int = 10,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> SearchResult:
+        """Async standalone search."""
+        body: Dict[str, Any] = {
+            "query": query,
+            "max_results": max_results,
+        }
+        if sources is not None:
+            body["sources"] = sources
+        if from_date is not None:
+            body["from_date"] = from_date
+        if to_date is not None:
+            body["to_date"] = to_date
+
+        data = await self._request_with_payment_raw("/v1/search", body)
+        return SearchResult(**data)
+
+    async def x_user_lookup(self, usernames: Union[List[str], str]) -> XUserLookupResponse:
+        """Async X/Twitter user lookup. Powered by AttentionVC."""
+        if isinstance(usernames, str):
+            usernames = [usernames]
+
+        body: Dict[str, Any] = {"usernames": usernames}
+        data = await self._request_with_payment_raw("/v1/x/users/lookup", body)
+        return XUserLookupResponse(**data)
+
+    async def x_followers(
+        self, username: str, *, cursor: Optional[str] = None
+    ) -> XFollowersResponse:
+        """Async get X/Twitter followers. Powered by AttentionVC."""
+        body: Dict[str, Any] = {"username": username}
+        if cursor is not None:
+            body["cursor"] = cursor
+
+        data = await self._request_with_payment_raw("/v1/x/users/followers", body)
+        return XFollowersResponse(**data)
+
+    async def x_followings(
+        self, username: str, *, cursor: Optional[str] = None
+    ) -> XFollowingsResponse:
+        """Async get X/Twitter followings. Powered by AttentionVC."""
+        body: Dict[str, Any] = {"username": username}
+        if cursor is not None:
+            body["cursor"] = cursor
+
+        data = await self._request_with_payment_raw("/v1/x/users/followings", body)
+        return XFollowingsResponse(**data)
 
     async def list_models(self) -> List[Dict[str, Any]]:
         """List available LLM models asynchronously."""

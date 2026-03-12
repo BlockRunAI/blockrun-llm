@@ -1,9 +1,12 @@
 """Unit tests for SolanaLLMClient."""
+
 import pytest
 import os
 from blockrun_llm.solana_client import SolanaLLMClient
 
-TEST_BS58_KEY = "5MaiiCavjCmn9Hs1o3eznqDEhRwxo7pXiAYez7keQUviQeRjpzKCY8trDwpvBMTKTpNFbCJsBZthJ4tCs6o62rr"
+TEST_BS58_KEY = (
+    "5MaiiCavjCmn9Hs1o3eznqDEhRwxo7pXiAYez7keQUviQeRjpzKCY8trDwpvBMTKTpNFbCJsBZthJ4tCs6o62rr"
+)
 
 
 class TestSolanaLLMClientInit:
@@ -30,8 +33,7 @@ class TestSolanaLLMClientInit:
 
     def test_custom_api_url(self):
         client = SolanaLLMClient(
-            private_key=TEST_BS58_KEY,
-            api_url="https://custom.example.com/api"
+            private_key=TEST_BS58_KEY, api_url="https://custom.example.com/api"
         )
         assert not client.is_solana()
 

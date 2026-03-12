@@ -1,4 +1,5 @@
 """Unit tests for Solana wallet utilities."""
+
 import pytest
 from blockrun_llm.solana_wallet import (
     create_solana_wallet,
@@ -7,7 +8,9 @@ from blockrun_llm.solana_wallet import (
 )
 
 # A valid test bs58 secret key (64 bytes encoded)
-TEST_BS58_KEY = "5MaiiCavjCmn9Hs1o3eznqDEhRwxo7pXiAYez7keQUviQeRjpzKCY8trDwpvBMTKTpNFbCJsBZthJ4tCs6o62rr"
+TEST_BS58_KEY = (
+    "5MaiiCavjCmn9Hs1o3eznqDEhRwxo7pXiAYez7keQUviQeRjpzKCY8trDwpvBMTKTpNFbCJsBZthJ4tCs6o62rr"
+)
 
 
 class TestCreateSolanaWallet:
@@ -43,4 +46,5 @@ class TestGetSolanaPublicKey:
         assert len(addr) >= 32
         # Should be valid base58 (only alphanumeric, no 0/O/I/l)
         import re
-        assert re.match(r'^[1-9A-HJ-NP-Za-km-z]+$', addr)
+
+        assert re.match(r"^[1-9A-HJ-NP-Za-km-z]+$", addr)

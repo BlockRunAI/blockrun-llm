@@ -62,6 +62,14 @@ from .types import (
     # Smart routing types
     RoutingDecision,
     SmartChatResponse,
+    # Standalone search
+    SearchResult,
+    # X/Twitter types
+    XUser,
+    XUserLookupResponse,
+    XFollower,
+    XFollowersResponse,
+    XFollowingsResponse,
 )
 from .wallet import (
     setup_agent_wallet,  # Entry point for agents (auto-creates wallet)
@@ -83,7 +91,7 @@ from .wallet import (
     WALLET_DIR,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -115,6 +123,14 @@ __all__ = [
     # Smart routing types
     "RoutingDecision",
     "SmartChatResponse",
+    # Standalone search
+    "SearchResult",
+    # X/Twitter types
+    "XUser",
+    "XUserLookupResponse",
+    "XFollower",
+    "XFollowersResponse",
+    "XFollowingsResponse",
     # Wallet utilities
     "get_or_create_wallet",
     "get_wallet_address",

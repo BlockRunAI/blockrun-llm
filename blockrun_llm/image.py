@@ -27,7 +27,7 @@ Usage:
 """
 
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import httpx
 from eth_account import Account
 from dotenv import load_dotenv
@@ -145,6 +145,49 @@ class ImageClient:
 
         # Make request (with automatic payment handling)
         return self._request_with_payment("/v1/images/generations", body)
+
+    def edit(
+        self,
+        prompt: str,
+        image: str,
+        *,
+        model: Optional[str] = None,
+        mask: Optional[str] = None,
+        size: Optional[str] = None,
+        n: int = 1,
+    ) -> ImageResponse:
+        """
+        Edit an image using img2img.
+
+        Args:
+            prompt: Text description of the desired edit
+            image: Base64-encoded image or URL of the source image
+            model: Model ID (default: "openai/gpt-image-1")
+            mask: Optional base64-encoded mask image
+            size: Image size (default: "1024x1024")
+            n: Number of images to generate (default: 1)
+
+        Returns:
+            ImageResponse with edited image URLs
+
+        Example:
+            result = client.edit(
+                "Make the sky purple",
+                image="data:image/png;base64,..."
+            )
+            print(result.data[0].url)
+        """
+        body: Dict[str, Any] = {
+            "model": model or "openai/gpt-image-1",
+            "prompt": prompt,
+            "image": image,
+            "size": size or self.DEFAULT_SIZE,
+            "n": n,
+        }
+        if mask is not None:
+            body["mask"] = mask
+
+        return self._request_with_payment("/v1/images/image2image", body)
 
     def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ImageResponse:
         """
