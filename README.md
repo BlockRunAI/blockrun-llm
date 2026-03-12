@@ -19,8 +19,10 @@ Pay-per-request access to GPT-5.2, Claude 4, Gemini 3.1, Grok, and more via x402
 ## Installation
 
 ```bash
-pip install blockrun-llm          # Base (EVM) payments
-pip install blockrun-llm[solana]  # + Solana payments
+pip install blockrun-llm              # Base chain (EVM/USDC) — includes all core deps
+pip install blockrun-llm[solana]      # Base + Solana (USDC SPL) payments
+pip install blockrun-llm[dev]         # Base + dev tools (pytest, black, ruff, mypy)
+pip install blockrun-llm[dev,solana]  # Everything
 ```
 
 ## Quick Start
