@@ -561,6 +561,7 @@ class LLMClient:
         # Auto-retry on transient server errors
         if response.status_code in (502, 503):
             import time
+
             time.sleep(1)
             response = self._client.post(url, json=body, headers=req_headers)
 
@@ -665,6 +666,7 @@ class LLMClient:
         )
         if retry_response.status_code in (502, 503):
             import time
+
             time.sleep(1)
             retry_response = self._client.post(
                 url, json=body, headers=payment_headers, timeout=request_timeout
@@ -696,6 +698,7 @@ class LLMClient:
 
         # Save full response locally (cost log + response archive)
         from .cache import save_to_cache
+
         save_to_cache("/v1/chat/completions", body, response_data, cost_usd=cost_usd)
 
         return chat_response
@@ -723,6 +726,7 @@ class LLMClient:
         # Auto-retry on transient server errors
         if response.status_code in (502, 503):
             import time
+
             time.sleep(1)
             response = self._client.post(url, json=body, headers=req_headers)
 
@@ -806,6 +810,7 @@ class LLMClient:
         )
         if retry_response.status_code in (502, 503):
             import time
+
             time.sleep(1)
             retry_response = self._client.post(
                 url, json=body, headers=payment_headers, timeout=self.timeout
@@ -1522,6 +1527,7 @@ class AsyncLLMClient:
         # Auto-retry on transient server errors
         if response.status_code in (502, 503):
             import asyncio
+
             await asyncio.sleep(1)
             response = await self._client.post(url, json=body, headers=req_headers)
 
@@ -1605,6 +1611,7 @@ class AsyncLLMClient:
         )
         if retry_response.status_code in (502, 503):
             import asyncio
+
             await asyncio.sleep(1)
             retry_response = await self._client.post(
                 url, json=body, headers=payment_headers, timeout=request_timeout
@@ -1631,11 +1638,16 @@ class AsyncLLMClient:
             price_info = resp_body.get("price", {})
         except Exception:
             pass
-        cost_usd = float(price_info.get("amount", 0)) if price_info else float(details.get("amount", 0)) / 1e6
+        cost_usd = (
+            float(price_info.get("amount", 0))
+            if price_info
+            else float(details.get("amount", 0)) / 1e6
+        )
         self._last_call_cost = cost_usd
 
         response_data = retry_response.json()
         from .cache import save_to_cache
+
         save_to_cache("/v1/chat/completions", body, response_data, cost_usd=cost_usd)
 
         return ChatResponse(**response_data)
@@ -1659,6 +1671,7 @@ class AsyncLLMClient:
         # Auto-retry on transient server errors
         if response.status_code in (502, 503):
             import asyncio
+
             await asyncio.sleep(1)
             response = await self._client.post(url, json=body, headers=req_headers)
 
@@ -1733,6 +1746,7 @@ class AsyncLLMClient:
         )
         if retry_response.status_code in (502, 503):
             import asyncio
+
             await asyncio.sleep(1)
             retry_response = await self._client.post(
                 url, json=body, headers=payment_headers, timeout=self.timeout
