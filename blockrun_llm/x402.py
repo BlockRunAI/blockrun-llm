@@ -244,7 +244,7 @@ USDC_SOLANA = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
 # SPL program IDs
 TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-ASSOCIATED_TOKEN_PROGRAM_ID = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bRS"
+ASSOCIATED_TOKEN_PROGRAM_ID = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 
 # Compute budget defaults (match @x402/svm)
 DEFAULT_COMPUTE_UNIT_PRICE_MICROLAMPORTS = 1
@@ -383,7 +383,8 @@ def create_solana_payment_payload(
 
     # Partial sign: user signs, fee_payer (CDP) co-signs on server side
     # fee_payer is always first signer (index 0), owner is second (index 1)
-    msg_bytes = bytes(message)
+    # v0 messages must be signed with the 0x80 version prefix included
+    msg_bytes = b'\x80' + bytes(message)
     user_sig = keypair.sign_message(msg_bytes)
     null_sig = Signature.default()  # placeholder for fee_payer
     tx = VersionedTransaction.populate(message, [null_sig, user_sig])
