@@ -55,6 +55,18 @@ from .types import (
     XUserLookupResponse,
     XFollowersResponse,
     XFollowingsResponse,
+    XUserInfoResponse,
+    XVerifiedFollowersResponse,
+    XTweetsResponse,
+    XMentionsResponse,
+    XTweetLookupResponse,
+    XTweetRepliesResponse,
+    XTweetThreadResponse,
+    XSearchResponse,
+    XTrendingResponse,
+    XArticlesRisingResponse,
+    XAuthorAnalyticsResponse,
+    XCompareAuthorsResponse,
 )
 from .router import route as route_request
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
@@ -914,6 +926,256 @@ class LLMClient:
         data = self._request_with_payment_raw("/v1/x/users/followings", body)
         return XFollowingsResponse(**data)
 
+    def x_user_info(self, username: str) -> XUserInfoResponse:
+        """
+        Get detailed profile info for a single X/Twitter user.
+
+        Powered by AttentionVC. $0.002 per request.
+
+        Args:
+            username: X/Twitter username (without @)
+
+        Returns:
+            XUserInfoResponse with detailed profile data
+        """
+        body: Dict[str, Any] = {"username": username}
+        data = self._request_with_payment_raw("/v1/x/users/info", body)
+        return XUserInfoResponse(**data)
+
+    def x_verified_followers(
+        self, user_id: str, *, cursor: Optional[str] = None
+    ) -> XVerifiedFollowersResponse:
+        """
+        Get verified (blue-check) followers of an X/Twitter user.
+
+        Powered by AttentionVC. $0.048 per page.
+
+        Args:
+            user_id: X/Twitter user ID (not username)
+            cursor: Pagination cursor from previous response
+
+        Returns:
+            XVerifiedFollowersResponse with verified follower list
+        """
+        body: Dict[str, Any] = {"userId": user_id}
+        if cursor is not None:
+            body["cursor"] = cursor
+
+        data = self._request_with_payment_raw("/v1/x/users/verified-followers", body)
+        return XVerifiedFollowersResponse(**data)
+
+    def x_user_tweets(
+        self,
+        username: str,
+        *,
+        include_replies: bool = False,
+        cursor: Optional[str] = None,
+    ) -> XTweetsResponse:
+        """
+        Get tweets posted by an X/Twitter user.
+
+        Powered by AttentionVC. $0.032 per page.
+
+        Args:
+            username: X/Twitter username (without @)
+            include_replies: Include reply tweets (default: False)
+            cursor: Pagination cursor from previous response
+
+        Returns:
+            XTweetsResponse with tweet list
+        """
+        body: Dict[str, Any] = {"username": username, "includeReplies": include_replies}
+        if cursor is not None:
+            body["cursor"] = cursor
+
+        data = self._request_with_payment_raw("/v1/x/users/tweets", body)
+        return XTweetsResponse(**data)
+
+    def x_user_mentions(
+        self,
+        username: str,
+        *,
+        since_time: Optional[str] = None,
+        until_time: Optional[str] = None,
+        cursor: Optional[str] = None,
+    ) -> XMentionsResponse:
+        """
+        Get tweets that mention an X/Twitter user.
+
+        Powered by AttentionVC. $0.032 per page.
+
+        Args:
+            username: X/Twitter username (without @)
+            since_time: Start time filter (ISO8601 or Unix timestamp)
+            until_time: End time filter (ISO8601 or Unix timestamp)
+            cursor: Pagination cursor from previous response
+
+        Returns:
+            XMentionsResponse with mention tweets
+        """
+        body: Dict[str, Any] = {"username": username}
+        if since_time is not None:
+            body["sinceTime"] = since_time
+        if until_time is not None:
+            body["untilTime"] = until_time
+        if cursor is not None:
+            body["cursor"] = cursor
+
+        data = self._request_with_payment_raw("/v1/x/users/mentions", body)
+        return XMentionsResponse(**data)
+
+    def x_tweet_lookup(self, tweet_ids: Union[List[str], str]) -> XTweetLookupResponse:
+        """
+        Fetch full tweet data for up to 200 tweet IDs.
+
+        Powered by AttentionVC. $0.16 per batch.
+
+        Args:
+            tweet_ids: Single tweet ID or list of tweet IDs (max 200)
+
+        Returns:
+            XTweetLookupResponse with tweet data
+        """
+        if isinstance(tweet_ids, str):
+            tweet_ids = [tweet_ids]
+
+        body: Dict[str, Any] = {"tweet_ids": tweet_ids}
+        data = self._request_with_payment_raw("/v1/x/tweets/lookup", body)
+        return XTweetLookupResponse(**data)
+
+    def x_tweet_replies(
+        self,
+        tweet_id: str,
+        *,
+        query_type: str = "Latest",
+        cursor: Optional[str] = None,
+    ) -> XTweetRepliesResponse:
+        """
+        Get replies to a specific tweet.
+
+        Powered by AttentionVC. $0.032 per page.
+
+        Args:
+            tweet_id: The tweet ID to get replies for
+            query_type: Sort order - 'Latest' or 'Default'
+            cursor: Pagination cursor from previous response
+
+        Returns:
+            XTweetRepliesResponse with reply tweets
+        """
+        body: Dict[str, Any] = {"tweetId": tweet_id, "queryType": query_type}
+        if cursor is not None:
+            body["cursor"] = cursor
+
+        data = self._request_with_payment_raw("/v1/x/tweets/replies", body)
+        return XTweetRepliesResponse(**data)
+
+    def x_tweet_thread(
+        self, tweet_id: str, *, cursor: Optional[str] = None
+    ) -> XTweetThreadResponse:
+        """
+        Get the full thread context for a tweet.
+
+        Powered by AttentionVC. $0.032 per page.
+
+        Args:
+            tweet_id: The tweet ID to get thread for
+            cursor: Pagination cursor from previous response
+
+        Returns:
+            XTweetThreadResponse with thread tweets
+        """
+        body: Dict[str, Any] = {"tweetId": tweet_id}
+        if cursor is not None:
+            body["cursor"] = cursor
+
+        data = self._request_with_payment_raw("/v1/x/tweets/thread", body)
+        return XTweetThreadResponse(**data)
+
+    def x_search(
+        self,
+        query: str,
+        *,
+        query_type: str = "Latest",
+        cursor: Optional[str] = None,
+    ) -> XSearchResponse:
+        """
+        Search X/Twitter with advanced query operators.
+
+        Powered by AttentionVC. $0.032 per page.
+
+        Args:
+            query: Search query (supports Twitter search operators)
+            query_type: Sort order - 'Latest', 'Top', or 'Default'
+            cursor: Pagination cursor from previous response
+
+        Returns:
+            XSearchResponse with matching tweets
+        """
+        body: Dict[str, Any] = {"query": query, "queryType": query_type}
+        if cursor is not None:
+            body["cursor"] = cursor
+
+        data = self._request_with_payment_raw("/v1/x/search", body)
+        return XSearchResponse(**data)
+
+    def x_trending(self) -> XTrendingResponse:
+        """
+        Get current trending topics on X/Twitter.
+
+        Powered by AttentionVC. $0.002 per request.
+
+        Returns:
+            XTrendingResponse with trending topics
+        """
+        data = self._request_with_payment_raw("/v1/x/trending", {})
+        return XTrendingResponse(**data)
+
+    def x_articles_rising(self) -> XArticlesRisingResponse:
+        """
+        Get rising/viral articles from X/Twitter.
+
+        Powered by AttentionVC intelligence layer. $0.05 per request.
+
+        Returns:
+            XArticlesRisingResponse with rising articles
+        """
+        data = self._request_with_payment_raw("/v1/x/articles/rising", {})
+        return XArticlesRisingResponse(**data)
+
+    def x_author_analytics(self, handle: str) -> XAuthorAnalyticsResponse:
+        """
+        Get author analytics and intelligence metrics for an X/Twitter user.
+
+        Powered by AttentionVC intelligence layer. $0.02 per request.
+
+        Args:
+            handle: X/Twitter handle (without @)
+
+        Returns:
+            XAuthorAnalyticsResponse with analytics data
+        """
+        body: Dict[str, Any] = {"handle": handle}
+        data = self._request_with_payment_raw("/v1/x/authors", body)
+        return XAuthorAnalyticsResponse(**data)
+
+    def x_compare_authors(self, handle1: str, handle2: str) -> XCompareAuthorsResponse:
+        """
+        Compare two X/Twitter authors side-by-side with intelligence metrics.
+
+        Powered by AttentionVC intelligence layer. $0.05 per request.
+
+        Args:
+            handle1: First X/Twitter handle (without @)
+            handle2: Second X/Twitter handle (without @)
+
+        Returns:
+            XCompareAuthorsResponse with comparison data
+        """
+        body: Dict[str, Any] = {"handle1": handle1, "handle2": handle2}
+        data = self._request_with_payment_raw("/v1/x/compare", body)
+        return XCompareAuthorsResponse(**data)
+
     def list_models(self) -> List[Dict[str, Any]]:
         """
         List available LLM models with pricing.
@@ -1491,6 +1753,106 @@ class AsyncLLMClient:
 
         data = await self._request_with_payment_raw("/v1/x/users/followings", body)
         return XFollowingsResponse(**data)
+
+    async def x_user_info(self, username: str) -> XUserInfoResponse:
+        """Async get single X/Twitter user info. Powered by AttentionVC."""
+        body: Dict[str, Any] = {"username": username}
+        data = await self._request_with_payment_raw("/v1/x/users/info", body)
+        return XUserInfoResponse(**data)
+
+    async def x_verified_followers(
+        self, user_id: str, *, cursor: Optional[str] = None
+    ) -> XVerifiedFollowersResponse:
+        """Async get verified followers. Powered by AttentionVC."""
+        body: Dict[str, Any] = {"userId": user_id}
+        if cursor is not None:
+            body["cursor"] = cursor
+        data = await self._request_with_payment_raw("/v1/x/users/verified-followers", body)
+        return XVerifiedFollowersResponse(**data)
+
+    async def x_user_tweets(
+        self, username: str, *, include_replies: bool = False, cursor: Optional[str] = None
+    ) -> XTweetsResponse:
+        """Async get user tweets. Powered by AttentionVC."""
+        body: Dict[str, Any] = {"username": username, "includeReplies": include_replies}
+        if cursor is not None:
+            body["cursor"] = cursor
+        data = await self._request_with_payment_raw("/v1/x/users/tweets", body)
+        return XTweetsResponse(**data)
+
+    async def x_user_mentions(
+        self, username: str, *, since_time: Optional[str] = None, until_time: Optional[str] = None, cursor: Optional[str] = None
+    ) -> XMentionsResponse:
+        """Async get user mentions. Powered by AttentionVC."""
+        body: Dict[str, Any] = {"username": username}
+        if since_time is not None:
+            body["sinceTime"] = since_time
+        if until_time is not None:
+            body["untilTime"] = until_time
+        if cursor is not None:
+            body["cursor"] = cursor
+        data = await self._request_with_payment_raw("/v1/x/users/mentions", body)
+        return XMentionsResponse(**data)
+
+    async def x_tweet_lookup(self, tweet_ids: Union[List[str], str]) -> XTweetLookupResponse:
+        """Async batch tweet lookup. Powered by AttentionVC."""
+        if isinstance(tweet_ids, str):
+            tweet_ids = [tweet_ids]
+        body: Dict[str, Any] = {"tweet_ids": tweet_ids}
+        data = await self._request_with_payment_raw("/v1/x/tweets/lookup", body)
+        return XTweetLookupResponse(**data)
+
+    async def x_tweet_replies(
+        self, tweet_id: str, *, query_type: str = "Latest", cursor: Optional[str] = None
+    ) -> XTweetRepliesResponse:
+        """Async get tweet replies. Powered by AttentionVC."""
+        body: Dict[str, Any] = {"tweetId": tweet_id, "queryType": query_type}
+        if cursor is not None:
+            body["cursor"] = cursor
+        data = await self._request_with_payment_raw("/v1/x/tweets/replies", body)
+        return XTweetRepliesResponse(**data)
+
+    async def x_tweet_thread(
+        self, tweet_id: str, *, cursor: Optional[str] = None
+    ) -> XTweetThreadResponse:
+        """Async get tweet thread. Powered by AttentionVC."""
+        body: Dict[str, Any] = {"tweetId": tweet_id}
+        if cursor is not None:
+            body["cursor"] = cursor
+        data = await self._request_with_payment_raw("/v1/x/tweets/thread", body)
+        return XTweetThreadResponse(**data)
+
+    async def x_search(
+        self, query: str, *, query_type: str = "Latest", cursor: Optional[str] = None
+    ) -> XSearchResponse:
+        """Async X/Twitter search. Powered by AttentionVC."""
+        body: Dict[str, Any] = {"query": query, "queryType": query_type}
+        if cursor is not None:
+            body["cursor"] = cursor
+        data = await self._request_with_payment_raw("/v1/x/search", body)
+        return XSearchResponse(**data)
+
+    async def x_trending(self) -> XTrendingResponse:
+        """Async get trending topics. Powered by AttentionVC."""
+        data = await self._request_with_payment_raw("/v1/x/trending", {})
+        return XTrendingResponse(**data)
+
+    async def x_articles_rising(self) -> XArticlesRisingResponse:
+        """Async get rising articles. Powered by AttentionVC."""
+        data = await self._request_with_payment_raw("/v1/x/articles/rising", {})
+        return XArticlesRisingResponse(**data)
+
+    async def x_author_analytics(self, handle: str) -> XAuthorAnalyticsResponse:
+        """Async get author analytics. Powered by AttentionVC."""
+        body: Dict[str, Any] = {"handle": handle}
+        data = await self._request_with_payment_raw("/v1/x/authors", body)
+        return XAuthorAnalyticsResponse(**data)
+
+    async def x_compare_authors(self, handle1: str, handle2: str) -> XCompareAuthorsResponse:
+        """Async compare two authors. Powered by AttentionVC."""
+        body: Dict[str, Any] = {"handle1": handle1, "handle2": handle2}
+        data = await self._request_with_payment_raw("/v1/x/compare", body)
+        return XCompareAuthorsResponse(**data)
 
     async def list_models(self) -> List[Dict[str, Any]]:
         """List available LLM models asynchronously."""
