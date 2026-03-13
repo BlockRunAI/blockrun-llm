@@ -268,3 +268,23 @@ class TestCreateSolanaPaymentPayload:
         # Should be valid base64
         tx_bytes = base64.b64decode(decoded["payload"]["transaction"])
         assert len(tx_bytes) > 0
+
+
+class TestAssociatedTokenProgramId:
+    """Verify the Associated Token Program ID is correct."""
+
+    def test_associated_token_program_id(self):
+        """ASSOCIATED_TOKEN_PROGRAM_ID must match Solana mainnet."""
+        from blockrun_llm.x402 import ASSOCIATED_TOKEN_PROGRAM_ID
+
+        assert ASSOCIATED_TOKEN_PROGRAM_ID == "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+
+    def test_ata_derivation(self):
+        """ATA derivation must match on-chain addresses."""
+        from blockrun_llm.x402 import _get_ata, USDC_SOLANA
+
+        # Known wallet -> known USDC ATA (verified on-chain)
+        owner = "CtJTYWPQSL5jw9B2JRHmpQjYCSSgUX3LRvmMBhq55HmQ"
+        expected_ata = "HZPPxg9ZyoHu4f2pj5uEEXsArLA2rnL9FtDgC8rrAp5Q"
+
+        assert _get_ata(owner, USDC_SOLANA) == expected_ata
