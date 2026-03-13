@@ -44,15 +44,37 @@ from .types import (
     XAuthorAnalyticsResponse,
     XCompareAuthorsResponse,
 )
-from .x402 import (
-    create_solana_payment_payload,
-    extract_solana_payment_details,
-    parse_payment_required,
-)
 from .solana_wallet import get_solana_public_key
-from .validation import validate_api_url, sanitize_error_response, validate_resource_url
+from .validation import validate_api_url, sanitize_error_response
+
+try:
+    from x402 import x402ClientSync
+    from x402.mechanisms.svm import KeypairSigner
+    from x402.mechanisms.svm.exact.register import register_exact_svm_client
+    from x402.http.utils import decode_payment_required_header, encode_payment_signature_header
+except ImportError:
+    raise ImportError(
+        "Solana payment requires the x402 SDK. "
+        "Install with: pip install blockrun-llm[solana]"
+    )
 
 SOLANA_API_URL = "https://sol.blockrun.ai/api"
+
+
+def _create_signer(private_key: str) -> KeypairSigner:
+    """Create a KeypairSigner, handling both full keypair and seed-only formats."""
+    try:
+        return KeypairSigner.from_base58(private_key)
+    except (ValueError, Exception):
+        # Fallback: key may be a raw seed (32 bytes) rather than a full keypair (64 bytes)
+        import base58
+        from solders.keypair import Keypair
+
+        secret = base58.b58decode(private_key)
+        keypair = Keypair.from_seed(secret[:32])
+        return KeypairSigner(keypair)
+
+
 DEFAULT_MAX_TOKENS = 1024
 DEFAULT_TIMEOUT = 60.0
 
@@ -94,6 +116,11 @@ class SolanaLLMClient:
         self._session_calls = 0
         self._last_call_cost: float = 0.0
         self._address: Optional[str] = None
+
+        # Initialize x402 SDK client for Solana payment signing
+        self._x402_client = x402ClientSync()
+        signer = _create_signer(self._private_key)
+        register_exact_svm_client(self._x402_client, signer, rpc_url=rpc_url)
 
     def get_wallet_address(self) -> str:
         if not self._address:
@@ -165,6 +192,22 @@ class SolanaLLMClient:
         resp.raise_for_status()
         return resp.json().get("data", [])
 
+    @staticmethod
+    def _extract_payment_header(response: httpx.Response) -> Optional[str]:
+        """Extract x402 payment header from a 402 response (header or body)."""
+        payment_header = response.headers.get("payment-required")
+        if not payment_header:
+            try:
+                import base64
+                import json
+
+                resp_body = response.json()
+                if resp_body.get("accepts") or resp_body.get("x402Version"):
+                    payment_header = base64.b64encode(json.dumps(resp_body).encode()).decode()
+            except Exception:
+                pass
+        return payment_header
+
     def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ChatResponse:
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
@@ -196,56 +239,19 @@ class SolanaLLMClient:
     def _handle_payment_and_retry(
         self, url: str, body: Dict[str, Any], response: httpx.Response
     ) -> ChatResponse:
-        payment_header = response.headers.get("payment-required")
-        if not payment_header:
-            try:
-                import base64
-                import json
-
-                resp_body = response.json()
-                if resp_body.get("accepts") or resp_body.get("x402Version"):
-                    payment_header = base64.b64encode(json.dumps(resp_body).encode()).decode()
-            except Exception:
-                pass
-
+        payment_header = self._extract_payment_header(response)
         if not payment_header:
             raise PaymentError("402 response but no payment requirements found")
 
-        payment_required = parse_payment_required(payment_header)
-        details = extract_solana_payment_details(payment_required)
-
-        if not details["network"].startswith("solana:"):
-            raise PaymentError(
-                f"Expected Solana network, got: {details['network']}. "
-                "Use LLMClient for Base payments."
-            )
-
-        fee_payer = (details.get("extra") or {}).get("feePayer")
-        if not fee_payer:
-            raise PaymentError("Missing feePayer in 402 extra field")
-
-        resource_info = details.get("resource") or {}
-        resource_url = validate_resource_url(
-            resource_info.get("url") or f"{self._api_url}/v1/chat/completions",
-            self._api_url,
-        )
-
-        payment_payload = create_solana_payment_payload(
-            private_key=self._private_key,
-            recipient=details["recipient"],
-            amount=details["amount"],
-            fee_payer=fee_payer,
-            resource_url=resource_url,
-            resource_description=resource_info.get("description") or "BlockRun Solana AI API call",
-            max_timeout_seconds=details["max_timeout_seconds"],
-            extra=details.get("extra"),
-            rpc_url=self._rpc_url,
-        )
+        # Use x402 SDK to decode 402 response and create signed payment
+        payment_required = decode_payment_required_header(payment_header)
+        payment_payload = self._x402_client.create_payment_payload(payment_required)
+        encoded_payment = encode_payment_signature_header(payment_payload)
 
         payment_headers = {
             "Content-Type": "application/json",
             "User-Agent": _get_user_agent(),
-            "PAYMENT-SIGNATURE": payment_payload,
+            "PAYMENT-SIGNATURE": encoded_payment,
         }
 
         # Retry with payment, with one automatic retry on 502/503
@@ -269,7 +275,7 @@ class SolanaLLMClient:
                 sanitize_error_response(error_body),
             )
 
-        cost_usd = float(details["amount"]) / 1e6
+        cost_usd = float(payment_payload.accepted.amount) / 1e6
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
@@ -323,56 +329,19 @@ class SolanaLLMClient:
         self, url: str, body: Dict[str, Any], response: httpx.Response
     ) -> Dict[str, Any]:
         """Handle 402 for raw endpoints with Solana payment."""
-        payment_header = response.headers.get("payment-required")
-        if not payment_header:
-            try:
-                import base64
-                import json
-
-                resp_body = response.json()
-                if resp_body.get("accepts") or resp_body.get("x402Version"):
-                    payment_header = base64.b64encode(json.dumps(resp_body).encode()).decode()
-            except Exception:
-                pass
-
+        payment_header = self._extract_payment_header(response)
         if not payment_header:
             raise PaymentError("402 response but no payment requirements found")
 
-        payment_required = parse_payment_required(payment_header)
-        details = extract_solana_payment_details(payment_required)
-
-        if not details["network"].startswith("solana:"):
-            raise PaymentError(
-                f"Expected Solana network, got: {details['network']}. "
-                "Use LLMClient for Base payments."
-            )
-
-        fee_payer = (details.get("extra") or {}).get("feePayer")
-        if not fee_payer:
-            raise PaymentError("Missing feePayer in 402 extra field")
-
-        resource_info = details.get("resource") or {}
-        resource_url = validate_resource_url(
-            resource_info.get("url") or url,
-            self._api_url,
-        )
-
-        payment_payload = create_solana_payment_payload(
-            private_key=self._private_key,
-            recipient=details["recipient"],
-            amount=details["amount"],
-            fee_payer=fee_payer,
-            resource_url=resource_url,
-            resource_description=resource_info.get("description") or "BlockRun Solana AI API call",
-            max_timeout_seconds=details["max_timeout_seconds"],
-            extra=details.get("extra"),
-            rpc_url=self._rpc_url,
-        )
+        # Use x402 SDK to decode 402 response and create signed payment
+        payment_required = decode_payment_required_header(payment_header)
+        payment_payload = self._x402_client.create_payment_payload(payment_required)
+        encoded_payment = encode_payment_signature_header(payment_payload)
 
         payment_headers = {
             "Content-Type": "application/json",
             "User-Agent": _get_user_agent(),
-            "PAYMENT-SIGNATURE": payment_payload,
+            "PAYMENT-SIGNATURE": encoded_payment,
         }
 
         # Retry with payment, with one automatic retry on 502/503
@@ -396,7 +365,7 @@ class SolanaLLMClient:
                 sanitize_error_response(error_body),
             )
 
-        cost_usd = float(details["amount"]) / 1e6
+        cost_usd = float(payment_payload.accepted.amount) / 1e6
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "blockrun-llm"
-version = "0.7.5"
+version = "0.8.0"
 description = "BlockRun SDK - Pay-per-request AI (LLM & Image) via x402 on Base and Solana"
 readme = "README.md"
 license = "MIT"
@@ -41,8 +41,7 @@ dev = [
     "ruff>=0.1.0",
 ]
 solana = [
-    "solders>=0.21.0",
-    "base58>=2.1.0",
+    "x402[svm]>=2.0.0",
 ]
 
 [project.urls]
