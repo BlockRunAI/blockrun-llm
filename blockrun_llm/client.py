@@ -269,6 +269,7 @@ class LLMClient:
         # Session spending tracking
         self._session_total_usd: float = 0.0
         self._session_calls: int = 0
+        self._last_call_cost: float = 0.0
 
         # Model pricing cache for smart routing
         self._model_pricing_cache: Optional[Dict[str, Dict[str, float]]] = None
@@ -685,11 +686,17 @@ class LLMClient:
             )
 
         # Parse response
-        chat_response = ChatResponse(**retry_response.json())
+        response_data = retry_response.json()
+        chat_response = ChatResponse(**response_data)
 
         # Update session spending
         self._session_calls += 1
         self._session_total_usd += cost_usd
+        self._last_call_cost = cost_usd
+
+        # Save full response locally (cost log + response archive)
+        from .cache import save_to_cache
+        save_to_cache("/v1/chat/completions", body, response_data, cost_usd=cost_usd)
 
         return chat_response
 
@@ -699,7 +706,15 @@ class LLMClient:
 
         Same flow as _request_with_payment() but returns Dict instead of ChatResponse.
         Used for endpoints that don't return the chat completion shape.
+        Checks local cache first to avoid paying twice for the same data.
         """
+        from .cache import get_cached, save_to_cache
+
+        # Check cache first — don't pay twice for same data
+        cached = get_cached(endpoint, body)
+        if cached is not None:
+            return cached
+
         url = f"{self.api_url}{endpoint}"
         req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
 
@@ -712,7 +727,10 @@ class LLMClient:
             response = self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
-            return self._handle_payment_and_retry_raw(url, body, response)
+            result = self._handle_payment_and_retry_raw(url, body, response)
+            # Save paid response to cache
+            save_to_cache(endpoint, body, result, cost_usd=self._last_call_cost)
+            return result
 
         if response.status_code != 200:
             try:
@@ -809,6 +827,7 @@ class LLMClient:
 
         self._session_calls += 1
         self._session_total_usd += cost_usd
+        self._last_call_cost = cost_usd
 
         return retry_response.json()
 
@@ -1415,6 +1434,7 @@ class AsyncLLMClient:
         self.timeout = timeout
         self.search_timeout = search_timeout
         self._client = httpx.AsyncClient(timeout=timeout)
+        self._last_call_cost: float = 0.0
 
     async def chat(
         self,
@@ -1604,12 +1624,33 @@ class AsyncLLMClient:
                 sanitize_error_response(error_body),
             )
 
-        return ChatResponse(**retry_response.json())
+        # Extract cost and save locally
+        price_info = {}
+        try:
+            resp_body = response.json()
+            price_info = resp_body.get("price", {})
+        except Exception:
+            pass
+        cost_usd = float(price_info.get("amount", 0)) if price_info else float(details.get("amount", 0)) / 1e6
+        self._last_call_cost = cost_usd
+
+        response_data = retry_response.json()
+        from .cache import save_to_cache
+        save_to_cache("/v1/chat/completions", body, response_data, cost_usd=cost_usd)
+
+        return ChatResponse(**response_data)
 
     async def _request_with_payment_raw(
         self, endpoint: str, body: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Make async request with automatic payment handling, returning raw JSON."""
+        from .cache import get_cached, save_to_cache
+
+        # Check cache first
+        cached = get_cached(endpoint, body)
+        if cached is not None:
+            return cached
+
         url = f"{self.api_url}{endpoint}"
         req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
 
@@ -1622,7 +1663,9 @@ class AsyncLLMClient:
             response = await self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
-            return await self._handle_payment_and_retry_raw(url, body, response)
+            result = await self._handle_payment_and_retry_raw(url, body, response)
+            save_to_cache(endpoint, body, result, cost_usd=self._last_call_cost)
+            return result
 
         if response.status_code != 200:
             try:
@@ -1708,6 +1751,9 @@ class AsyncLLMClient:
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
+
+        cost_usd = float(details.get("amount", 0)) / 1e6
+        self._last_call_cost = cost_usd
 
         return retry_response.json()
 

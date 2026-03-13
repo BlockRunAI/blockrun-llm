@@ -92,6 +92,7 @@ class SolanaLLMClient:
         self._client = httpx.Client(timeout=timeout)
         self._session_total_usd = 0.0
         self._session_calls = 0
+        self._last_call_cost: float = 0.0
         self._address: Optional[str] = None
 
     def get_wallet_address(self) -> str:
@@ -271,11 +272,24 @@ class SolanaLLMClient:
         cost_usd = float(details["amount"]) / 1e6
         self._session_calls += 1
         self._session_total_usd += cost_usd
+        self._last_call_cost = cost_usd
 
-        return ChatResponse(**retry_response.json())
+        # Save full response locally
+        response_data = retry_response.json()
+        from .cache import save_to_cache
+        save_to_cache("/v1/chat/completions", body, response_data, cost_usd=cost_usd)
+
+        return ChatResponse(**response_data)
 
     def _request_with_payment_raw(self, endpoint: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Make a request with Solana x402 payment, returning raw JSON."""
+        from .cache import get_cached, save_to_cache
+
+        # Check cache first — don't pay twice for same data
+        cached = get_cached(endpoint, body)
+        if cached is not None:
+            return cached
+
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
 
@@ -288,7 +302,9 @@ class SolanaLLMClient:
             response = self._client.post(url, json=body, headers=headers)
 
         if response.status_code == 402:
-            return self._handle_payment_and_retry_raw(url, body, response)
+            result = self._handle_payment_and_retry_raw(url, body, response)
+            save_to_cache(endpoint, body, result, cost_usd=self._last_call_cost)
+            return result
 
         if not response.is_success:
             try:
@@ -383,6 +399,7 @@ class SolanaLLMClient:
         cost_usd = float(details["amount"]) / 1e6
         self._session_calls += 1
         self._session_total_usd += cost_usd
+        self._last_call_cost = cost_usd
 
         return retry_response.json()
 

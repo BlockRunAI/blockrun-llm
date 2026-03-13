@@ -113,8 +113,9 @@ from .solana_wallet import (
     load_solana_wallet,
     get_solana_public_key,
 )
+from .cache import clear_cache, get_cost_log_summary
 
-__version__ = "0.7.2"
+__version__ = "0.7.4"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
