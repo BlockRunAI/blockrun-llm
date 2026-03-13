@@ -102,6 +102,11 @@ class SolanaLLMClient:
     def is_solana(self) -> bool:
         return "sol.blockrun.ai" in self._api_url
 
+    def get_balance(self) -> float:
+        """Get USDC balance on Solana (matches LLMClient.get_balance() API)."""
+        from .solana_wallet import get_solana_usdc_balance
+        return get_solana_usdc_balance(self.get_wallet_address(), rpc_url=self._rpc_url)
+
     def get_spending(self) -> Dict[str, Any]:
         return {"total_usd": self._session_total_usd, "calls": self._session_calls}
 
