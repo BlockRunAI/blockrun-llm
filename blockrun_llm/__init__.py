@@ -70,6 +70,19 @@ from .types import (
     XFollower,
     XFollowersResponse,
     XFollowingsResponse,
+    XUserInfoResponse,
+    XVerifiedFollowersResponse,
+    XTweet,
+    XTweetsResponse,
+    XMentionsResponse,
+    XTweetLookupResponse,
+    XTweetRepliesResponse,
+    XTweetThreadResponse,
+    XSearchResponse,
+    XTrendingResponse,
+    XArticlesRisingResponse,
+    XAuthorAnalyticsResponse,
+    XCompareAuthorsResponse,
 )
 from .wallet import (
     setup_agent_wallet,  # Entry point for agents (auto-creates wallet)
@@ -101,7 +114,7 @@ from .solana_wallet import (
     get_solana_public_key,
 )
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -141,6 +154,19 @@ __all__ = [
     "XFollower",
     "XFollowersResponse",
     "XFollowingsResponse",
+    "XUserInfoResponse",
+    "XVerifiedFollowersResponse",
+    "XTweet",
+    "XTweetsResponse",
+    "XMentionsResponse",
+    "XTweetLookupResponse",
+    "XTweetRepliesResponse",
+    "XTweetThreadResponse",
+    "XSearchResponse",
+    "XTrendingResponse",
+    "XArticlesRisingResponse",
+    "XAuthorAnalyticsResponse",
+    "XCompareAuthorsResponse",
     # Wallet utilities
     "get_or_create_wallet",
     "get_wallet_address",
