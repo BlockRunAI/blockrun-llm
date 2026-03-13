@@ -223,101 +223,70 @@ class TestExtractPaymentDetails:
         assert details["resource"]["url"] == "https://api.blockrun.ai/test"
 
 
-class TestCreateSolanaPaymentPayload:
-    """Tests for Solana payment payload creation."""
+class TestSolanaX402SdkIntegration:
+    """Tests for Solana x402 SDK integration."""
 
-    TEST_BS58_KEY = (
-        "5MaiiCavjCmn9Hs1o3eznqDEhRwxo7pXiAYez7keQUviQeRjpzKCY8trDwpvBMTKTpNFbCJsBZthJ4tCs6o62rr"
-    )
+    USDC_SOLANA = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
     TEST_FEE_PAYER = "2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"
-    TEST_RECIPIENT = "AQqnMFBwGZEoti85aTVRy8XYpKrho7GaMDx9ZB3CEeKA"
+    TEST_SOL_RECIPIENT = "AQqnMFBwGZEoti85aTVRy8XYpKrho7GaMDx9ZB3CEeKA"
 
-    def test_payload_structure(self):
-        """Should create valid Solana payment payload."""
-        from blockrun_llm.x402 import create_solana_payment_payload
-        import json
-        import base64
+    def test_decode_solana_payment_required(self):
+        """Should decode a Solana 402 PaymentRequired header."""
+        from x402.http.utils import decode_payment_required_header
 
-        payload = create_solana_payment_payload(
-            private_key=self.TEST_BS58_KEY,
-            recipient=self.TEST_RECIPIENT,
-            amount="1000",
-            fee_payer=self.TEST_FEE_PAYER,
-        )
+        data = {
+            "x402Version": 2,
+            "accepts": [
+                {
+                    "scheme": "exact",
+                    "network": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+                    "amount": "1000",
+                    "asset": self.USDC_SOLANA,
+                    "payTo": self.TEST_SOL_RECIPIENT,
+                    "maxTimeoutSeconds": 300,
+                    "extra": {"feePayer": self.TEST_FEE_PAYER},
+                }
+            ],
+        }
+        encoded = base64.b64encode(json.dumps(data).encode()).decode()
+        result = decode_payment_required_header(encoded)
 
-        assert isinstance(payload, str)
-        decoded = json.loads(base64.b64decode(payload))
-        assert decoded["x402Version"] == 2
-        assert "transaction" in decoded["payload"]
-        assert decoded["accepted"]["network"].startswith("solana:")
-        assert decoded["accepted"]["asset"] == "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        assert result.x402_version == 2
+        assert len(result.accepts) == 1
+        assert str(result.accepts[0].network).startswith("solana:")
+        assert result.accepts[0].pay_to == self.TEST_SOL_RECIPIENT
+        assert result.accepts[0].amount == "1000"
+        assert result.accepts[0].extra["feePayer"] == self.TEST_FEE_PAYER
 
-    def test_payload_transaction_is_base64(self):
-        """Transaction field should be base64-encoded."""
-        from blockrun_llm.x402 import create_solana_payment_payload
-        import json
-        import base64
-
-        payload = create_solana_payment_payload(
-            private_key=self.TEST_BS58_KEY,
-            recipient=self.TEST_RECIPIENT,
-            amount="1000",
-            fee_payer=self.TEST_FEE_PAYER,
-        )
-        decoded = json.loads(base64.b64decode(payload))
-        # Should be valid base64
-        tx_bytes = base64.b64decode(decoded["payload"]["transaction"])
-        assert len(tx_bytes) > 0
-
-
-    def test_v0_signature_includes_version_prefix(self):
-        """User signature must be over 0x80 + message_body for v0 transactions."""
-        from blockrun_llm.x402 import create_solana_payment_payload
-        from solders.transaction import VersionedTransaction
+    def test_keypair_signer_address(self):
+        """KeypairSigner should derive correct public key from bs58 secret."""
+        from x402.mechanisms.svm import KeypairSigner
         from solders.keypair import Keypair
-        import json
-        import base64
-        import base58
 
-        payload = create_solana_payment_payload(
-            private_key=self.TEST_BS58_KEY,
-            recipient=self.TEST_RECIPIENT,
-            amount="1000",
-            fee_payer=self.TEST_FEE_PAYER,
-        )
-        decoded = json.loads(base64.b64decode(payload))
-        tx_bytes = base64.b64decode(decoded["payload"]["transaction"])
-        tx = VersionedTransaction.from_bytes(tx_bytes)
+        # Generate a valid keypair and get its base58 representation
+        kp = Keypair()
+        expected_address = str(kp.pubkey())
 
-        # Recover the user keypair
-        secret = base58.b58decode(self.TEST_BS58_KEY)
-        keypair = Keypair.from_seed(secret[:32])
+        signer = KeypairSigner.from_base58(str(kp))
+        assert signer.address == expected_address
 
-        # The signing data for v0 must include the 0x80 prefix
-        msg_with_prefix = b'\x80' + bytes(tx.message)
-
-        # Verify the user's signature (index 1) is over the prefixed message
-        from nacl.signing import VerifyKey
-        vk = VerifyKey(bytes(keypair.pubkey()))
-        # Should not raise
-        vk.verify(msg_with_prefix, bytes(tx.signatures[1]))
-
-
-class TestAssociatedTokenProgramId:
-    """Verify the Associated Token Program ID is correct."""
-
-    def test_associated_token_program_id(self):
-        """ASSOCIATED_TOKEN_PROGRAM_ID must match Solana mainnet."""
-        from blockrun_llm.x402 import ASSOCIATED_TOKEN_PROGRAM_ID
-
-        assert ASSOCIATED_TOKEN_PROGRAM_ID == "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-
-    def test_ata_derivation(self):
-        """ATA derivation must match on-chain addresses."""
-        from blockrun_llm.x402 import _get_ata, USDC_SOLANA
+    def test_ata_derivation_uses_correct_program_id(self):
+        """ATA derivation must use the correct Associated Token Program ID."""
+        from x402.mechanisms.svm import derive_ata
 
         # Known wallet -> known USDC ATA (verified on-chain)
         owner = "CtJTYWPQSL5jw9B2JRHmpQjYCSSgUX3LRvmMBhq55HmQ"
         expected_ata = "HZPPxg9ZyoHu4f2pj5uEEXsArLA2rnL9FtDgC8rrAp5Q"
 
-        assert _get_ata(owner, USDC_SOLANA) == expected_ata
+        result = derive_ata(owner, self.USDC_SOLANA, self.TOKEN_PROGRAM_ID)
+        assert result == expected_ata
+
+    def test_is_solana_network(self):
+        """Should correctly identify Solana networks."""
+        from blockrun_llm.x402 import is_solana_network
+
+        assert is_solana_network("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp")
+        assert is_solana_network("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1")
+        assert not is_solana_network("eip155:8453")
+        assert not is_solana_network("base-sepolia")
