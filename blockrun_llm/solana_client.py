@@ -461,7 +461,12 @@ class SolanaLLMClient:
         return XTweetsResponse(**data)
 
     def x_user_mentions(
-        self, username: str, *, since_time: Optional[str] = None, until_time: Optional[str] = None, cursor: Optional[str] = None
+        self,
+        username: str,
+        *,
+        since_time: Optional[str] = None,
+        until_time: Optional[str] = None,
+        cursor: Optional[str] = None,
     ) -> XMentionsResponse:
         """Get user mentions (Solana payment). Powered by AttentionVC."""
         body: Dict[str, Any] = {"username": username}
