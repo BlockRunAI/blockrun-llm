@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
+
+if TYPE_CHECKING:
+    from .solana_client import SolanaLLMClient
 
 WALLET_DIR = Path.home() / ".blockrun"
 SOLANA_WALLET_FILE = WALLET_DIR / ".solana-session"
