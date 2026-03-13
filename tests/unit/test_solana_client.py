@@ -5,7 +5,7 @@ import os
 from blockrun_llm.solana_client import SolanaLLMClient
 
 TEST_BS58_KEY = (
-    "5MaiiCavjCmn9Hs1o3eznqDEhRwxo7pXiAYez7keQUviQeRjpzKCY8trDwpvBMTKTpNFbCJsBZthJ4tCs6o62rr"
+    "433C7KFcM4y1ZEVdZYSH7wheSNAM384UcbgXEyD5FV7Q2HsQ1BwjEDx4GbBZUqPkZTVhFPyLyuZnzK8wCeAkU7wG"
 )
 
 
