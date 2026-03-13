@@ -193,4 +193,7 @@ __all__ = [
     "create_solana_wallet",
     "load_solana_wallet",
     "get_solana_public_key",
+    # Cache utilities
+    "clear_cache",
+    "get_cost_log_summary",
 ]
