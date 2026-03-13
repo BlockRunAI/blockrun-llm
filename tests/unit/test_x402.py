@@ -268,3 +268,56 @@ class TestCreateSolanaPaymentPayload:
         # Should be valid base64
         tx_bytes = base64.b64decode(decoded["payload"]["transaction"])
         assert len(tx_bytes) > 0
+
+
+    def test_v0_signature_includes_version_prefix(self):
+        """User signature must be over 0x80 + message_body for v0 transactions."""
+        from blockrun_llm.x402 import create_solana_payment_payload
+        from solders.transaction import VersionedTransaction
+        from solders.keypair import Keypair
+        import json
+        import base64
+        import base58
+
+        payload = create_solana_payment_payload(
+            private_key=self.TEST_BS58_KEY,
+            recipient=self.TEST_RECIPIENT,
+            amount="1000",
+            fee_payer=self.TEST_FEE_PAYER,
+        )
+        decoded = json.loads(base64.b64decode(payload))
+        tx_bytes = base64.b64decode(decoded["payload"]["transaction"])
+        tx = VersionedTransaction.from_bytes(tx_bytes)
+
+        # Recover the user keypair
+        secret = base58.b58decode(self.TEST_BS58_KEY)
+        keypair = Keypair.from_seed(secret[:32])
+
+        # The signing data for v0 must include the 0x80 prefix
+        msg_with_prefix = b'\x80' + bytes(tx.message)
+
+        # Verify the user's signature (index 1) is over the prefixed message
+        from nacl.signing import VerifyKey
+        vk = VerifyKey(bytes(keypair.pubkey()))
+        # Should not raise
+        vk.verify(msg_with_prefix, bytes(tx.signatures[1]))
+
+
+class TestAssociatedTokenProgramId:
+    """Verify the Associated Token Program ID is correct."""
+
+    def test_associated_token_program_id(self):
+        """ASSOCIATED_TOKEN_PROGRAM_ID must match Solana mainnet."""
+        from blockrun_llm.x402 import ASSOCIATED_TOKEN_PROGRAM_ID
+
+        assert ASSOCIATED_TOKEN_PROGRAM_ID == "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+
+    def test_ata_derivation(self):
+        """ATA derivation must match on-chain addresses."""
+        from blockrun_llm.x402 import _get_ata, USDC_SOLANA
+
+        # Known wallet -> known USDC ATA (verified on-chain)
+        owner = "CtJTYWPQSL5jw9B2JRHmpQjYCSSgUX3LRvmMBhq55HmQ"
+        expected_ata = "HZPPxg9ZyoHu4f2pj5uEEXsArLA2rnL9FtDgC8rrAp5Q"
+
+        assert _get_ata(owner, USDC_SOLANA) == expected_ata
