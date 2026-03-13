@@ -552,13 +552,16 @@ class LLMClient:
         4. Retry with X-Payment header
         """
         url = f"{self.api_url}{endpoint}"
+        req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
 
         # First attempt (will likely return 402)
-        response = self._client.post(
-            url,
-            json=body,
-            headers={"Content-Type": "application/json", "User-Agent": _get_user_agent()},
-        )
+        response = self._client.post(url, json=body, headers=req_headers)
+
+        # Auto-retry on transient server errors
+        if response.status_code in (502, 503):
+            import time
+            time.sleep(1)
+            response = self._client.post(url, json=body, headers=req_headers)
 
         # Handle 402 Payment Required
         if response.status_code == 402:
@@ -649,16 +652,22 @@ class LLMClient:
         is_search_request = "search_parameters" in body or body.get("search") is True
         request_timeout = self.search_timeout if is_search_request else self.timeout
 
-        retry_response = httpx.post(
-            url,
-            json=body,
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": _get_user_agent(),
-                "PAYMENT-SIGNATURE": payment_payload,
-            },
-            timeout=request_timeout,
+        payment_headers = {
+            "Content-Type": "application/json",
+            "User-Agent": _get_user_agent(),
+            "PAYMENT-SIGNATURE": payment_payload,
+        }
+
+        # Retry with payment, with one automatic retry on 502/503
+        retry_response = self._client.post(
+            url, json=body, headers=payment_headers, timeout=request_timeout
         )
+        if retry_response.status_code in (502, 503):
+            import time
+            time.sleep(1)
+            retry_response = self._client.post(
+                url, json=body, headers=payment_headers, timeout=request_timeout
+            )
 
         # Check for errors
         if retry_response.status_code == 402:
@@ -692,12 +701,15 @@ class LLMClient:
         Used for endpoints that don't return the chat completion shape.
         """
         url = f"{self.api_url}{endpoint}"
+        req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
 
-        response = self._client.post(
-            url,
-            json=body,
-            headers={"Content-Type": "application/json", "User-Agent": _get_user_agent()},
-        )
+        response = self._client.post(url, json=body, headers=req_headers)
+
+        # Auto-retry on transient server errors
+        if response.status_code in (502, 503):
+            import time
+            time.sleep(1)
+            response = self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
             return self._handle_payment_and_retry_raw(url, body, response)
@@ -764,16 +776,22 @@ class LLMClient:
             asset=details.get("asset"),
         )
 
-        retry_response = httpx.post(
-            url,
-            json=body,
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": _get_user_agent(),
-                "PAYMENT-SIGNATURE": payment_payload,
-            },
-            timeout=self.timeout,
+        payment_headers = {
+            "Content-Type": "application/json",
+            "User-Agent": _get_user_agent(),
+            "PAYMENT-SIGNATURE": payment_payload,
+        }
+
+        # Retry with payment, with one automatic retry on 502/503
+        retry_response = self._client.post(
+            url, json=body, headers=payment_headers, timeout=self.timeout
         )
+        if retry_response.status_code in (502, 503):
+            import time
+            time.sleep(1)
+            retry_response = self._client.post(
+                url, json=body, headers=payment_headers, timeout=self.timeout
+            )
 
         if retry_response.status_code == 402:
             raise PaymentError("Payment was rejected. Check your wallet balance.")
@@ -1477,12 +1495,15 @@ class AsyncLLMClient:
     async def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ChatResponse:
         """Make async request with automatic payment handling."""
         url = f"{self.api_url}{endpoint}"
+        req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
 
-        response = await self._client.post(
-            url,
-            json=body,
-            headers={"Content-Type": "application/json", "User-Agent": _get_user_agent()},
-        )
+        response = await self._client.post(url, json=body, headers=req_headers)
+
+        # Auto-retry on transient server errors
+        if response.status_code in (502, 503):
+            import asyncio
+            await asyncio.sleep(1)
+            response = await self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
             return await self._handle_payment_and_retry(url, body, response)
@@ -1552,15 +1573,21 @@ class AsyncLLMClient:
         is_search_request = "search_parameters" in body or body.get("search") is True
         request_timeout = self.search_timeout if is_search_request else self.timeout
 
-        async with httpx.AsyncClient(timeout=request_timeout) as client:
-            retry_response = await client.post(
-                url,
-                json=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": _get_user_agent(),
-                    "PAYMENT-SIGNATURE": payment_payload,
-                },
+        payment_headers = {
+            "Content-Type": "application/json",
+            "User-Agent": _get_user_agent(),
+            "PAYMENT-SIGNATURE": payment_payload,
+        }
+
+        # Retry with payment, with one automatic retry on 502/503
+        retry_response = await self._client.post(
+            url, json=body, headers=payment_headers, timeout=request_timeout
+        )
+        if retry_response.status_code in (502, 503):
+            import asyncio
+            await asyncio.sleep(1)
+            retry_response = await self._client.post(
+                url, json=body, headers=payment_headers, timeout=request_timeout
             )
 
         if retry_response.status_code == 402:
@@ -1584,12 +1611,15 @@ class AsyncLLMClient:
     ) -> Dict[str, Any]:
         """Make async request with automatic payment handling, returning raw JSON."""
         url = f"{self.api_url}{endpoint}"
+        req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
 
-        response = await self._client.post(
-            url,
-            json=body,
-            headers={"Content-Type": "application/json", "User-Agent": _get_user_agent()},
-        )
+        response = await self._client.post(url, json=body, headers=req_headers)
+
+        # Auto-retry on transient server errors
+        if response.status_code in (502, 503):
+            import asyncio
+            await asyncio.sleep(1)
+            response = await self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
             return await self._handle_payment_and_retry_raw(url, body, response)
@@ -1648,15 +1678,21 @@ class AsyncLLMClient:
             asset=details.get("asset"),
         )
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            retry_response = await client.post(
-                url,
-                json=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": _get_user_agent(),
-                    "PAYMENT-SIGNATURE": payment_payload,
-                },
+        payment_headers = {
+            "Content-Type": "application/json",
+            "User-Agent": _get_user_agent(),
+            "PAYMENT-SIGNATURE": payment_payload,
+        }
+
+        # Retry with payment, with one automatic retry on 502/503
+        retry_response = await self._client.post(
+            url, json=body, headers=payment_headers, timeout=self.timeout
+        )
+        if retry_response.status_code in (502, 503):
+            import asyncio
+            await asyncio.sleep(1)
+            retry_response = await self._client.post(
+                url, json=body, headers=payment_headers, timeout=self.timeout
             )
 
         if retry_response.status_code == 402:

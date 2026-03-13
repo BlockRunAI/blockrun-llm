@@ -89,6 +89,7 @@ class SolanaLLMClient:
         self._api_url = api_url.rstrip("/")
         self._rpc_url = rpc_url
         self._timeout = timeout
+        self._client = httpx.Client(timeout=timeout)
         self._session_total_usd = 0.0
         self._session_calls = 0
         self._address: Optional[str] = None
@@ -149,9 +150,12 @@ class SolanaLLMClient:
             body["search_parameters"] = {"mode": "on"}
         return self._request_with_payment("/v1/chat/completions", body)
 
+    def close(self) -> None:
+        """Close the HTTP client."""
+        self._client.close()
+
     def list_models(self) -> List[Dict[str, Any]]:
-        with httpx.Client(timeout=self._timeout) as http:
-            resp = http.get(f"{self._api_url}/v1/models")
+        resp = self._client.get(f"{self._api_url}/v1/models")
         resp.raise_for_status()
         return resp.json().get("data", [])
 
@@ -159,8 +163,13 @@ class SolanaLLMClient:
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
 
-        with httpx.Client(timeout=self._timeout) as http:
-            response = http.post(url, json=body, headers=headers)
+        response = self._client.post(url, json=body, headers=headers)
+
+        # Auto-retry on transient server errors
+        if response.status_code in (502, 503):
+            import time
+            time.sleep(1)
+            response = self._client.post(url, json=body, headers=headers)
 
         if response.status_code == 402:
             return self._handle_payment_and_retry(url, body, response)
@@ -227,14 +236,18 @@ class SolanaLLMClient:
             rpc_url=self._rpc_url,
         )
 
-        headers = {
+        payment_headers = {
             "Content-Type": "application/json",
             "User-Agent": _get_user_agent(),
             "PAYMENT-SIGNATURE": payment_payload,
         }
 
-        with httpx.Client(timeout=self._timeout) as http:
-            retry_response = http.post(url, json=body, headers=headers)
+        # Retry with payment, with one automatic retry on 502/503
+        retry_response = self._client.post(url, json=body, headers=payment_headers)
+        if retry_response.status_code in (502, 503):
+            import time
+            time.sleep(1)
+            retry_response = self._client.post(url, json=body, headers=payment_headers)
 
         if retry_response.status_code == 402:
             raise PaymentError("Payment rejected. Check your Solana USDC balance.")
@@ -261,8 +274,13 @@ class SolanaLLMClient:
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
 
-        with httpx.Client(timeout=self._timeout) as http:
-            response = http.post(url, json=body, headers=headers)
+        response = self._client.post(url, json=body, headers=headers)
+
+        # Auto-retry on transient server errors
+        if response.status_code in (502, 503):
+            import time
+            time.sleep(1)
+            response = self._client.post(url, json=body, headers=headers)
 
         if response.status_code == 402:
             return self._handle_payment_and_retry_raw(url, body, response)
@@ -330,14 +348,18 @@ class SolanaLLMClient:
             rpc_url=self._rpc_url,
         )
 
-        headers = {
+        payment_headers = {
             "Content-Type": "application/json",
             "User-Agent": _get_user_agent(),
             "PAYMENT-SIGNATURE": payment_payload,
         }
 
-        with httpx.Client(timeout=self._timeout) as http:
-            retry_response = http.post(url, json=body, headers=headers)
+        # Retry with payment, with one automatic retry on 502/503
+        retry_response = self._client.post(url, json=body, headers=payment_headers)
+        if retry_response.status_code in (502, 503):
+            import time
+            time.sleep(1)
+            retry_response = self._client.post(url, json=body, headers=payment_headers)
 
         if retry_response.status_code == 402:
             raise PaymentError("Payment rejected. Check your Solana USDC balance.")
