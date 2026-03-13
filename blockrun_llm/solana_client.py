@@ -52,11 +52,10 @@ try:
     from x402.mechanisms.svm import KeypairSigner
     from x402.mechanisms.svm.exact.register import register_exact_svm_client
     from x402.http.utils import decode_payment_required_header, encode_payment_signature_header
+
+    _HAS_X402 = True
 except ImportError:
-    raise ImportError(
-        "Solana payment requires the x402 SDK. "
-        "Install with: pip install blockrun-llm[solana]"
-    )
+    _HAS_X402 = False
 
 SOLANA_API_URL = "https://sol.blockrun.ai/api"
 
@@ -101,6 +100,11 @@ class SolanaLLMClient:
         rpc_url: str = "https://api.mainnet-beta.solana.com",
         timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
+        if not _HAS_X402:
+            raise ImportError(
+                "Solana payment requires the x402 SDK. "
+                "Install with: pip install blockrun-llm[solana]"
+            )
         key = private_key or os.environ.get("SOLANA_WALLET_KEY")
         if not key:
             raise ValueError(
@@ -133,6 +137,7 @@ class SolanaLLMClient:
     def get_balance(self) -> float:
         """Get USDC balance on Solana (matches LLMClient.get_balance() API)."""
         from .solana_wallet import get_solana_usdc_balance
+
         return get_solana_usdc_balance(self.get_wallet_address(), rpc_url=self._rpc_url)
 
     def get_spending(self) -> Dict[str, Any]:
@@ -217,6 +222,7 @@ class SolanaLLMClient:
         # Auto-retry on transient server errors
         if response.status_code in (502, 503):
             import time
+
             time.sleep(1)
             response = self._client.post(url, json=body, headers=headers)
 
@@ -258,6 +264,7 @@ class SolanaLLMClient:
         retry_response = self._client.post(url, json=body, headers=payment_headers)
         if retry_response.status_code in (502, 503):
             import time
+
             time.sleep(1)
             retry_response = self._client.post(url, json=body, headers=payment_headers)
 
@@ -283,6 +290,7 @@ class SolanaLLMClient:
         # Save full response locally
         response_data = retry_response.json()
         from .cache import save_to_cache
+
         save_to_cache("/v1/chat/completions", body, response_data, cost_usd=cost_usd)
 
         return ChatResponse(**response_data)
@@ -304,6 +312,7 @@ class SolanaLLMClient:
         # Auto-retry on transient server errors
         if response.status_code in (502, 503):
             import time
+
             time.sleep(1)
             response = self._client.post(url, json=body, headers=headers)
 
@@ -348,6 +357,7 @@ class SolanaLLMClient:
         retry_response = self._client.post(url, json=body, headers=payment_headers)
         if retry_response.status_code in (502, 503):
             import time
+
             time.sleep(1)
             retry_response = self._client.post(url, json=body, headers=payment_headers)
 
