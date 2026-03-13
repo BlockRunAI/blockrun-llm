@@ -37,13 +37,11 @@ def create_solana_wallet() -> Dict[str, str]:
     """
     _require_solders()
     from solders.keypair import Keypair  # type: ignore
-    import base58  # type: ignore
 
     kp = Keypair()
-    secret = bytes(kp)  # 64 bytes
     return {
         "address": str(kp.pubkey()),
-        "private_key": base58.b58encode(secret).decode(),
+        "private_key": str(kp),  # bs58-encoded 64-byte keypair
     }
 
 
@@ -61,9 +59,10 @@ def solana_key_to_bytes(private_key: str) -> bytes:
         ValueError: If key is invalid
     """
     try:
-        import base58  # type: ignore
+        from solders.keypair import Keypair  # type: ignore
 
-        decoded = base58.b58decode(private_key)
+        kp = Keypair.from_base58_string(private_key)
+        decoded = bytes(kp)
         if len(decoded) != 64:
             raise ValueError(f"Expected 64 bytes, got {len(decoded)}")
         return decoded
