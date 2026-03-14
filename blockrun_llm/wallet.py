@@ -9,9 +9,10 @@ Provides frictionless wallet setup for new users:
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 from eth_account import Account
 
@@ -57,15 +58,61 @@ def save_wallet(private_key: str) -> Path:
     return WALLET_FILE
 
 
+def scan_wallets() -> List[Dict[str, str]]:
+    """
+    Scan ~/.<dir>/wallet.json files from any provider (agentcash, etc.).
+
+    Each file should contain JSON with "privateKey" and "address" fields.
+    Results are sorted by modification time (most recent first).
+
+    Returns:
+        List of dicts with 'private_key' and 'address', most recent first
+    """
+    home = Path.home()
+    results: List[tuple] = []  # (mtime, private_key, address)
+
+    try:
+        for entry in home.iterdir():
+            if not entry.name.startswith(".") or not entry.is_dir():
+                continue
+            wallet_file = entry / "wallet.json"
+            if not wallet_file.is_file():
+                continue
+            try:
+                data = json.loads(wallet_file.read_text())
+                pk = data.get("privateKey", "")
+                addr = data.get("address", "")
+                if pk and addr:
+                    mtime = wallet_file.stat().st_mtime
+                    results.append((mtime, pk, addr))
+            except (json.JSONDecodeError, OSError):
+                continue
+    except OSError:
+        pass
+
+    # Sort by modification time, most recent first
+    results.sort(key=lambda x: x[0], reverse=True)
+    return [{"private_key": pk, "address": addr} for _, pk, addr in results]
+
+
 def load_wallet() -> Optional[str]:
     """
     Load wallet private key from file.
-    Checks both .session (preferred) and wallet.key (legacy).
+
+    Priority:
+    1. Scan ~/.*/wallet.json (any provider)
+    2. Legacy ~/.blockrun/.session
+    3. Legacy ~/.blockrun/wallet.key
 
     Returns:
         Private key string or None if not found
     """
-    # Check .session first (preferred)
+    # Scan provider wallet files
+    wallets = scan_wallets()
+    if wallets:
+        return wallets[0]["private_key"]
+
+    # Check .session (legacy)
     if WALLET_FILE.exists():
         key = WALLET_FILE.read_text().strip()
         if key:
@@ -86,28 +133,35 @@ def get_or_create_wallet() -> Tuple[str, str, bool]:
     Get existing wallet or create new one.
 
     Priority:
-    1. BLOCKRUN_WALLET_KEY environment variable
-    2. ~/.blockrun/.session file
-    3. ~/.blockrun/wallet.key file (legacy)
+    1. BLOCKRUN_WALLET_KEY / BASE_CHAIN_WALLET_KEY environment variable
+    2. Scan ~/.*/wallet.json (any provider)
+    3. ~/.blockrun/.session file
     4. Create new wallet
 
     Returns:
         Tuple of (address, private_key, is_new)
         is_new is True if wallet was just created
     """
-    # Check environment variable first
+    # 1. Check environment variable first
     key = os.environ.get("BLOCKRUN_WALLET_KEY") or os.environ.get("BASE_CHAIN_WALLET_KEY")
     if key:
         account = Account.from_key(key)
         return account.address, key, False
 
-    # Check file
-    key = load_wallet()
-    if key:
-        account = Account.from_key(key)
-        return account.address, key, False
+    # 2. Scan provider wallets
+    wallets = scan_wallets()
+    if wallets:
+        account = Account.from_key(wallets[0]["private_key"])
+        return account.address, wallets[0]["private_key"], False
 
-    # Create new wallet
+    # 3. Legacy session file
+    if WALLET_FILE.exists():
+        file_key = WALLET_FILE.read_text().strip()
+        if file_key:
+            account = Account.from_key(file_key)
+            return account.address, file_key, False
+
+    # 4. Create new wallet
     address, key = create_wallet()
     save_wallet(key)
     return address, key, True
