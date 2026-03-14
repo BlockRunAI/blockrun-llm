@@ -65,12 +65,16 @@ def _create_signer(private_key: str) -> KeypairSigner:
     try:
         return KeypairSigner.from_base58(private_key)
     except (ValueError, Exception):
-        # Fallback: key may be a raw seed (32 bytes) rather than a full keypair (64 bytes)
+        # Fallback: might be a 32-byte seed (agentcash, etc.)
+        import base58 as b58
         from solders.keypair import Keypair
 
-        raw = bytes(Keypair.from_base58_string(private_key))
-        keypair = Keypair.from_seed(raw[:32])
-        return KeypairSigner(keypair)
+        decoded = b58.b58decode(private_key)
+        if len(decoded) == 32:
+            kp = Keypair.from_seed(decoded)
+            full_key = b58.b58encode(bytes(kp)).decode()
+            return KeypairSigner.from_base58(full_key)
+        raise
 
 
 DEFAULT_MAX_TOKENS = 1024

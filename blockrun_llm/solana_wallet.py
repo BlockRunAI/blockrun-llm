@@ -7,9 +7,10 @@ Requires: solders>=0.21.0, base58>=2.1.0
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 if TYPE_CHECKING:
     from .solana_client import SolanaLLMClient
@@ -49,8 +50,11 @@ def solana_key_to_bytes(private_key: str) -> bytes:
     """
     Convert a bs58 private key string to bytes (64 bytes).
 
+    Accepts both 64-byte full keypairs and 32-byte seeds (from agentcash
+    and other providers). 32-byte seeds are automatically expanded.
+
     Args:
-        private_key: bs58-encoded 64-byte Solana secret key
+        private_key: bs58-encoded Solana secret key (32 or 64 bytes)
 
     Returns:
         64-byte secret key as bytes
@@ -61,11 +65,28 @@ def solana_key_to_bytes(private_key: str) -> bytes:
     try:
         from solders.keypair import Keypair  # type: ignore
 
-        kp = Keypair.from_base58_string(private_key)
-        decoded = bytes(kp)
-        if len(decoded) != 64:
-            raise ValueError(f"Expected 64 bytes, got {len(decoded)}")
-        return decoded
+        try:
+            kp = Keypair.from_base58_string(private_key)
+            decoded = bytes(kp)
+            if len(decoded) == 64:
+                return decoded
+        except Exception:
+            pass
+
+        # Fallback: try as 32-byte seed
+        import base58 as b58
+
+        decoded = b58.b58decode(private_key)
+        if len(decoded) == 32:
+            kp = Keypair.from_seed(decoded)
+            return bytes(kp)
+        elif len(decoded) == 64:
+            kp = Keypair.from_seed(decoded[:32])
+            return bytes(kp)
+
+        raise ValueError(f"Expected 32 or 64 bytes, got {len(decoded)}")
+    except ValueError:
+        raise
     except Exception as e:
         raise ValueError(f"Invalid Solana private key: {e}") from e
 
@@ -74,8 +95,10 @@ def get_solana_public_key(private_key: str) -> str:
     """
     Get the Solana public key (address) from a bs58 private key.
 
+    Accepts both 64-byte full keypairs and 32-byte seeds.
+
     Args:
-        private_key: bs58-encoded 64-byte Solana secret key
+        private_key: bs58-encoded Solana secret key (32 or 64 bytes)
 
     Returns:
         Base58 public key string
@@ -83,9 +106,19 @@ def get_solana_public_key(private_key: str) -> str:
     _require_solders()
     from solders.keypair import Keypair  # type: ignore
 
-    secret = solana_key_to_bytes(private_key)
-    kp = Keypair.from_seed(secret[:32])
-    return str(kp.pubkey())
+    try:
+        secret = solana_key_to_bytes(private_key)
+        kp = Keypair.from_seed(secret[:32])
+        return str(kp.pubkey())
+    except ValueError:
+        # 32-byte seed
+        import base58 as b58
+
+        decoded = b58.b58decode(private_key)
+        if len(decoded) == 32:
+            kp = Keypair.from_seed(decoded)
+            return str(kp.pubkey())
+        raise
 
 
 def save_solana_wallet(private_key: str) -> Path:
@@ -95,7 +128,75 @@ def save_solana_wallet(private_key: str) -> Path:
     return SOLANA_WALLET_FILE
 
 
+def _expand_solana_seed(private_key: str) -> str:
+    """If private_key is a 32-byte seed, expand to 64-byte keypair bs58 string."""
+    import base58 as b58
+    from solders.keypair import Keypair  # type: ignore
+
+    decoded = b58.b58decode(private_key)
+    if len(decoded) == 32:
+        kp = Keypair.from_seed(decoded)
+        return b58.b58encode(bytes(kp)).decode()
+    return private_key
+
+
+def scan_solana_wallets() -> List[Dict[str, str]]:
+    """
+    Scan ~/.<dir>/solana-wallet.json files from any provider (agentcash, etc.).
+
+    Each file should contain JSON with "privateKey" and "address" fields.
+    Results are sorted by modification time (most recent first).
+    32-byte seeds are automatically converted to 64-byte keypairs.
+
+    Returns:
+        List of dicts with 'private_key' and 'address', most recent first
+    """
+    home = Path.home()
+    results: List[tuple] = []  # (mtime, private_key, address)
+
+    try:
+        for entry in home.iterdir():
+            if not entry.name.startswith(".") or not entry.is_dir():
+                continue
+            wallet_file = entry / "solana-wallet.json"
+            if not wallet_file.is_file():
+                continue
+            try:
+                data = json.loads(wallet_file.read_text())
+                pk = data.get("privateKey", "")
+                addr = data.get("address", "")
+                if pk and addr:
+                    # Expand 32-byte seeds to full keypairs
+                    try:
+                        pk = _expand_solana_seed(pk)
+                    except Exception:
+                        pass
+                    mtime = wallet_file.stat().st_mtime
+                    results.append((mtime, pk, addr))
+            except (json.JSONDecodeError, OSError):
+                continue
+    except OSError:
+        pass
+
+    # Sort by modification time, most recent first
+    results.sort(key=lambda x: x[0], reverse=True)
+    return [{"private_key": pk, "address": addr} for _, pk, addr in results]
+
+
 def load_solana_wallet() -> Optional[str]:
+    """
+    Load Solana wallet private key.
+
+    Priority:
+    1. Scan ~/.*/solana-wallet.json (any provider)
+    2. Legacy ~/.blockrun/.solana-session
+    """
+    # Scan provider wallet files
+    wallets = scan_solana_wallets()
+    if wallets:
+        return wallets[0]["private_key"]
+
+    # Legacy session file
     if SOLANA_WALLET_FILE.exists():
         key = SOLANA_WALLET_FILE.read_text().strip()
         if key:
@@ -107,23 +208,40 @@ def get_or_create_solana_wallet() -> Dict[str, object]:
     """
     Get existing Solana wallet or create new one.
 
-    Priority: SOLANA_WALLET_KEY env var → ~/.blockrun/.solana-session → create new
+    Priority:
+    1. SOLANA_WALLET_KEY env var
+    2. Scan ~/.*/solana-wallet.json (any provider)
+    3. ~/.blockrun/.solana-session
+    4. Create new
 
     Returns:
         Dict with 'address', 'private_key', 'is_new'
     """
+    # 1. Environment variable
     env_key = os.environ.get("SOLANA_WALLET_KEY")
     if env_key:
         return {"private_key": env_key, "address": get_solana_public_key(env_key), "is_new": False}
 
-    file_key = load_solana_wallet()
-    if file_key:
+    # 2. Scan provider wallets
+    wallets = scan_solana_wallets()
+    if wallets:
         return {
-            "private_key": file_key,
-            "address": get_solana_public_key(file_key),
+            "private_key": wallets[0]["private_key"],
+            "address": wallets[0]["address"],
             "is_new": False,
         }
 
+    # 3. Legacy session file
+    if SOLANA_WALLET_FILE.exists():
+        file_key = SOLANA_WALLET_FILE.read_text().strip()
+        if file_key:
+            return {
+                "private_key": file_key,
+                "address": get_solana_public_key(file_key),
+                "is_new": False,
+            }
+
+    # 4. Create new
     wallet = create_solana_wallet()
     save_solana_wallet(wallet["private_key"])
     return {**wallet, "is_new": True}
