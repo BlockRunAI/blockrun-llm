@@ -836,6 +836,136 @@ class LLMClient:
 
         return retry_response.json()
 
+    def _get_with_payment_raw(
+        self, endpoint: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        GET with automatic x402 payment handling, returning raw JSON.
+
+        Same flow as _request_with_payment_raw() but uses GET with query params
+        instead of POST with JSON body. Used for Predexon prediction market endpoints.
+        """
+        from .cache import get_cached, save_to_cache
+
+        cache_key_body = params or {}
+        cached = get_cached(endpoint, cache_key_body)
+        if cached is not None:
+            return cached
+
+        url = f"{self.api_url}{endpoint}"
+        req_headers = {"User-Agent": _get_user_agent()}
+
+        response = self._client.get(url, params=params, headers=req_headers)
+
+        if response.status_code in (502, 503):
+            import time
+
+            time.sleep(1)
+            response = self._client.get(url, params=params, headers=req_headers)
+
+        if response.status_code == 402:
+            result = self._handle_get_payment_and_retry(url, params, response)
+            save_to_cache(endpoint, cache_key_body, result, cost_usd=self._last_call_cost)
+            return result
+
+        if response.status_code != 200:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error: {response.status_code}",
+                response.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        return response.json()
+
+    def _handle_get_payment_and_retry(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]],
+        response: httpx.Response,
+    ) -> Dict[str, Any]:
+        """Handle 402 response for GET endpoints: parse requirements, sign payment, retry with GET."""
+        payment_header = response.headers.get("payment-required")
+        price_info = {}
+        if not payment_header:
+            try:
+                resp_body = response.json()
+                if "x402" in resp_body:
+                    payment_header = resp_body
+                price_info = resp_body.get("price", {})
+            except Exception:
+                pass
+
+        if not payment_header:
+            raise PaymentError("402 response but no payment requirements found")
+
+        if isinstance(payment_header, str):
+            payment_required = parse_payment_required(payment_header)
+        else:
+            payment_required = payment_header
+
+        details = extract_payment_details(payment_required)
+
+        cost_usd = (
+            float(price_info.get("amount", 0))
+            if price_info
+            else float(details.get("amount", 0)) / 1e6
+        )
+
+        resource = details.get("resource") or {}
+        extensions = payment_required.get("extensions", {})
+        payment_payload = create_payment_payload(
+            account=self.account,
+            recipient=details["recipient"],
+            amount=details["amount"],
+            network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
+            resource_url=validate_resource_url(resource.get("url", url), self.api_url),
+            resource_description=resource.get("description", "BlockRun AI API call"),
+            max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
+            extra=details.get("extra"),
+            extensions=extensions,
+            asset=details.get("asset"),
+        )
+
+        payment_headers = {
+            "User-Agent": _get_user_agent(),
+            "PAYMENT-SIGNATURE": payment_payload,
+        }
+
+        retry_response = self._client.get(
+            url, params=params, headers=payment_headers, timeout=self.timeout
+        )
+        if retry_response.status_code in (502, 503):
+            import time
+
+            time.sleep(1)
+            retry_response = self._client.get(
+                url, params=params, headers=payment_headers, timeout=self.timeout
+            )
+
+        if retry_response.status_code == 402:
+            raise PaymentError("Payment was rejected. Check your wallet balance.")
+
+        if retry_response.status_code != 200:
+            try:
+                error_body = retry_response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error after payment: {retry_response.status_code}",
+                retry_response.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        self._session_calls += 1
+        self._session_total_usd += cost_usd
+        self._last_call_cost = cost_usd
+
+        return retry_response.json()
+
     def image_edit(
         self,
         prompt: str,
@@ -1217,6 +1347,47 @@ class LLMClient:
         body: Dict[str, Any] = {"handle1": handle1, "handle2": handle2}
         data = self._request_with_payment_raw("/v1/x/compare", body)
         return XCompareAuthorsResponse(**data)
+
+    # ── Prediction Markets (Powered by Predexon) ────────────────────────────
+
+    def pm(self, path: str, **params: Any) -> Dict[str, Any]:
+        """
+        Query Predexon prediction market data (GET endpoints).
+
+        Access real-time data from Polymarket, Kalshi, dFlow, and Binance Futures.
+        Powered by Predexon. $0.001 per request.
+
+        Args:
+            path: Endpoint path, e.g. "polymarket/events", "kalshi/markets/12345"
+            **params: Query parameters passed to the endpoint
+
+        Returns:
+            Raw response dict from Predexon API
+
+        Example:
+            events = client.pm("polymarket/events")
+            market = client.pm("kalshi/markets/KXBTC-25MAR14")
+            results = client.pm("polymarket/search", q="bitcoin")
+        """
+        return self._get_with_payment_raw(f"/v1/pm/{path}", params or None)
+
+    def pm_query(self, path: str, query: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Structured query for Predexon prediction market data (POST endpoints).
+
+        For complex queries that require a JSON body. $0.005 per request.
+
+        Args:
+            path: Endpoint path, e.g. "polymarket/query", "kalshi/query"
+            query: JSON body for the structured query
+
+        Returns:
+            Raw response dict from Predexon API
+
+        Example:
+            data = client.pm_query("polymarket/query", {"filter": "active", "limit": 10})
+        """
+        return self._request_with_payment_raw(f"/v1/pm/{path}", query)
 
     def list_models(self) -> List[Dict[str, Any]]:
         """
@@ -1771,6 +1942,122 @@ class AsyncLLMClient:
 
         return retry_response.json()
 
+    async def _get_with_payment_raw(
+        self, endpoint: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """Async GET with x402 payment handling, returning raw JSON."""
+        from .cache import get_cached, save_to_cache
+
+        cache_key_body = params or {}
+        cached = get_cached(endpoint, cache_key_body)
+        if cached is not None:
+            return cached
+
+        url = f"{self.api_url}{endpoint}"
+        req_headers = {"User-Agent": _get_user_agent()}
+
+        response = await self._client.get(url, params=params, headers=req_headers)
+
+        if response.status_code in (502, 503):
+            import asyncio
+
+            await asyncio.sleep(1)
+            response = await self._client.get(url, params=params, headers=req_headers)
+
+        if response.status_code == 402:
+            result = await self._handle_get_payment_and_retry(url, params, response)
+            save_to_cache(endpoint, cache_key_body, result, cost_usd=self._last_call_cost)
+            return result
+
+        if response.status_code != 200:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error: {response.status_code}",
+                response.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        return response.json()
+
+    async def _handle_get_payment_and_retry(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]],
+        response: httpx.Response,
+    ) -> Dict[str, Any]:
+        """Handle 402 response asynchronously for GET endpoints."""
+        payment_header = response.headers.get("payment-required")
+        if not payment_header:
+            try:
+                resp_body = response.json()
+                if "x402" in resp_body:
+                    payment_header = resp_body
+            except Exception:
+                pass
+
+        if not payment_header:
+            raise PaymentError("402 response but no payment requirements found")
+
+        if isinstance(payment_header, str):
+            payment_required = parse_payment_required(payment_header)
+        else:
+            payment_required = payment_header
+
+        details = extract_payment_details(payment_required)
+
+        resource = details.get("resource") or {}
+        extensions = payment_required.get("extensions", {})
+        payment_payload = create_payment_payload(
+            account=self.account,
+            recipient=details["recipient"],
+            amount=details["amount"],
+            network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
+            resource_url=validate_resource_url(resource.get("url", url), self.api_url),
+            resource_description=resource.get("description", "BlockRun AI API call"),
+            max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
+            extra=details.get("extra"),
+            extensions=extensions,
+            asset=details.get("asset"),
+        )
+
+        payment_headers = {
+            "User-Agent": _get_user_agent(),
+            "PAYMENT-SIGNATURE": payment_payload,
+        }
+
+        retry_response = await self._client.get(
+            url, params=params, headers=payment_headers, timeout=self.timeout
+        )
+        if retry_response.status_code in (502, 503):
+            import asyncio
+
+            await asyncio.sleep(1)
+            retry_response = await self._client.get(
+                url, params=params, headers=payment_headers, timeout=self.timeout
+            )
+
+        if retry_response.status_code == 402:
+            raise PaymentError("Payment was rejected. Check your wallet balance.")
+
+        if retry_response.status_code != 200:
+            try:
+                error_body = retry_response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error after payment: {retry_response.status_code}",
+                retry_response.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        cost_usd = float(details.get("amount", 0)) / 1e6
+        self._last_call_cost = cost_usd
+
+        return retry_response.json()
+
     async def image_edit(
         self,
         prompt: str,
@@ -1954,6 +2241,16 @@ class AsyncLLMClient:
         body: Dict[str, Any] = {"handle1": handle1, "handle2": handle2}
         data = await self._request_with_payment_raw("/v1/x/compare", body)
         return XCompareAuthorsResponse(**data)
+
+    # ── Prediction Markets (Powered by Predexon) ────────────────────────────
+
+    async def pm(self, path: str, **params: Any) -> Dict[str, Any]:
+        """Async query Predexon prediction market data (GET). Powered by Predexon."""
+        return await self._get_with_payment_raw(f"/v1/pm/{path}", params or None)
+
+    async def pm_query(self, path: str, query: Dict[str, Any]) -> Dict[str, Any]:
+        """Async structured query for Predexon data (POST). Powered by Predexon."""
+        return await self._request_with_payment_raw(f"/v1/pm/{path}", query)
 
     async def list_models(self) -> List[Dict[str, Any]]:
         """List available LLM models asynchronously."""

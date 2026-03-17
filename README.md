@@ -277,6 +277,67 @@ followings = client.x_followings("blockaborr")
 
 Works on all clients: `LLMClient` (Base), `AsyncLLMClient`, and `SolanaLLMClient`.
 
+## Prediction Markets (Powered by Predexon)
+
+Access real-time prediction market data from Polymarket, Kalshi, and Binance Futures via [Predexon](https://predexon.com). No API keys needed — pay-per-request via x402.
+
+### Polymarket
+
+```python
+from blockrun_llm import LLMClient
+
+client = LLMClient()
+
+# List markets with optional filters ($0.001/request)
+markets = client.pm("polymarket/markets")
+markets = client.pm("polymarket/markets", status="active", limit=10)
+markets = client.pm("polymarket/markets", search="bitcoin")
+
+# List events ($0.001/request)
+events = client.pm("polymarket/events")
+
+# Historical trades ($0.001/request)
+trades = client.pm("polymarket/trades")
+
+# OHLCV candlestick data for a specific condition ($0.001/request)
+candles = client.pm("polymarket/candlesticks/0x1234abcd...")
+
+# Wallet profile ($0.005/request — tier 2)
+profile = client.pm("polymarket/wallet/0xABC123...")
+
+# Wallet P&L ($0.005/request — tier 2)
+pnl = client.pm("polymarket/wallet/pnl/0xABC123...")
+
+# Global leaderboard ($0.001/request)
+leaderboard = client.pm("polymarket/leaderboard")
+```
+
+### Kalshi & Binance
+
+```python
+# Kalshi markets ($0.001/request)
+kalshi_markets = client.pm("kalshi/markets")
+
+# Kalshi trades ($0.001/request)
+kalshi_trades = client.pm("kalshi/trades")
+
+# Binance candles for supported pairs ($0.001/request)
+btc_candles = client.pm("binance/candles/BTCUSDT")
+eth_candles = client.pm("binance/candles/ETHUSDT")
+# Also: SOLUSDT, XRPUSDT
+```
+
+### Cross-Platform
+
+```python
+# Cross-platform matching pairs ($0.001/request)
+pairs = client.pm("matching-markets/pairs")
+```
+
+All current endpoints are GET. The `pm_query()` method is available for future POST endpoints.
+
+Works on all clients: `LLMClient` (Base), `AsyncLLMClient`, and `SolanaLLMClient`.
+
 ## Standalone Search
 
 Search web, X/Twitter, and news without using a chat model:

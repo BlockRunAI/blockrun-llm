@@ -385,6 +385,91 @@ class SolanaLLMClient:
 
         return retry_response.json()
 
+    def _get_with_payment_raw(
+        self, endpoint: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """GET with Solana x402 payment, returning raw JSON."""
+        from .cache import get_cached, save_to_cache
+
+        cache_key_body = params or {}
+        cached = get_cached(endpoint, cache_key_body)
+        if cached is not None:
+            return cached
+
+        url = f"{self._api_url}{endpoint}"
+        headers = {"User-Agent": _get_user_agent()}
+
+        response = self._client.get(url, params=params, headers=headers)
+
+        if response.status_code in (502, 503):
+            import time
+
+            time.sleep(1)
+            response = self._client.get(url, params=params, headers=headers)
+
+        if response.status_code == 402:
+            result = self._handle_get_payment_and_retry(url, params, response)
+            save_to_cache(endpoint, cache_key_body, result, cost_usd=self._last_call_cost)
+            return result
+
+        if not response.is_success:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error: {response.status_code}",
+                response.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        return response.json()
+
+    def _handle_get_payment_and_retry(
+        self, url: str, params: Optional[Dict[str, Any]], response: httpx.Response
+    ) -> Dict[str, Any]:
+        """Handle 402 for GET endpoints with Solana payment."""
+        payment_header = self._extract_payment_header(response)
+        if not payment_header:
+            raise PaymentError("402 response but no payment requirements found")
+
+        payment_required = decode_payment_required_header(payment_header)
+        payment_payload = self._x402_client.create_payment_payload(payment_required)
+        encoded_payment = encode_payment_signature_header(payment_payload)
+
+        payment_headers = {
+            "User-Agent": _get_user_agent(),
+            "PAYMENT-SIGNATURE": encoded_payment,
+        }
+
+        retry_response = self._client.get(url, params=params, headers=payment_headers)
+        if retry_response.status_code in (502, 503):
+            import time
+
+            time.sleep(1)
+            retry_response = self._client.get(url, params=params, headers=payment_headers)
+
+        if retry_response.status_code == 402:
+            raise PaymentError("Payment rejected. Check your Solana USDC balance.")
+
+        if not retry_response.is_success:
+            try:
+                error_body = retry_response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error after payment: {retry_response.status_code}",
+                retry_response.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        cost_usd = float(payment_payload.accepted.amount) / 1e6
+        self._session_calls += 1
+        self._session_total_usd += cost_usd
+        self._last_call_cost = cost_usd
+
+        return retry_response.json()
+
     def image_edit(
         self,
         prompt: str,
@@ -564,3 +649,13 @@ class SolanaLLMClient:
         body: Dict[str, Any] = {"handle1": handle1, "handle2": handle2}
         data = self._request_with_payment_raw("/v1/x/compare", body)
         return XCompareAuthorsResponse(**data)
+
+    # ── Prediction Markets (Powered by Predexon) ────────────────────────────
+
+    def pm(self, path: str, **params: Any) -> Dict[str, Any]:
+        """Query Predexon prediction market data (GET, Solana payment). Powered by Predexon."""
+        return self._get_with_payment_raw(f"/v1/pm/{path}", params or None)
+
+    def pm_query(self, path: str, query: Dict[str, Any]) -> Dict[str, Any]:
+        """Structured query for Predexon data (POST, Solana payment). Powered by Predexon."""
+        return self._request_with_payment_raw(f"/v1/pm/{path}", query)

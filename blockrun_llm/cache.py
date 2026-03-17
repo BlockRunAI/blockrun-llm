@@ -25,6 +25,8 @@ DEFAULT_TTL: Dict[str, int] = {
     # X/Twitter data — cache 1 hour (followers/tweets don't change every minute)
     "/v1/x/": 3600,
     "/v1/partner/": 3600,
+    # Prediction markets — cache 30 minutes
+    "/v1/pm/": 1800,
     # Chat completions — no cache (each call is unique)
     "/v1/chat/": 0,
     # Search — cache 15 minutes
