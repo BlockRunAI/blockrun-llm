@@ -192,6 +192,7 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 ### MiniMax
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
+| `minimax/minimax-m2.7` | $0.30/M | $1.20/M |
 | `minimax/minimax-m2.5` | $0.30/M | $1.20/M |
 
 ### DeepSeek
