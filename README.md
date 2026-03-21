@@ -1,6 +1,9 @@
-# BlockRun LLM SDK
+# BlockRun LLM SDK (Python)
 
-Pay-per-request access to GPT-5.2, Claude 4, Gemini 3.1, Grok, and more via x402 micropayments.
+> **blockrun-llm** is a Python SDK for accessing 40+ large language models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
+
+[![PyPI](https://img.shields.io/pypi/v/blockrun-llm.svg)](https://pypi.org/project/blockrun-llm/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 **BlockRun assumes Claude Code as the agent runtime.**
 
@@ -644,6 +647,23 @@ pip install --upgrade blockrun-llm  # Get security patches
 - [Documentation](https://github.com/BlockRunAI/awesome-blockrun/tree/main/docs)
 - [GitHub](https://github.com/blockrunai/blockrun-llm)
 - [Telegram](https://t.me/+mroQv4-4hGgzOGUx)
+
+## Frequently Asked Questions
+
+### What is blockrun-llm?
+blockrun-llm is a Python SDK that provides pay-per-request access to 40+ large language models from OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more. It uses the x402 protocol for automatic USDC micropayments — no API keys, no subscriptions, no vendor lock-in.
+
+### How does payment work?
+When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
+
+### What is smart routing / ClawRouter?
+ClawRouter is a built-in smart routing engine that analyzes your request across 14 dimensions and automatically picks the cheapest model capable of handling it. Routing happens locally in under 1ms. It can save up to 92% on LLM costs compared to using premium models for every request.
+
+### How much does it cost?
+Pay only for what you use. Prices start at $0.0002 per request (GPT-5 Nano). There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
+
+### Can I use it with Solana?
+Yes. Install with `pip install blockrun-llm[solana]` and use `SolanaLLMClient` instead of `LLMClient`. Same API, different payment chain.
 
 ## License
 
