@@ -139,12 +139,19 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 
 ## Available Models
 
+### OpenAI GPT-5.4 Family
+| Model | Input Price | Output Price |
+|-------|-------------|--------------|
+| `openai/gpt-5.4` | $2.50/M | $15.00/M |
+| `openai/gpt-5.4-pro` | $30.00/M | $180.00/M |
+| `openai/gpt-5.4-nano` | $0.20/M | $1.25/M |
+
 ### OpenAI GPT-5 Family
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
+| `openai/gpt-5.3` | $1.75/M | $14.00/M |
 | `openai/gpt-5.2` | $1.75/M | $14.00/M |
 | `openai/gpt-5-mini` | $0.25/M | $2.00/M |
-| `openai/gpt-5-nano` | $0.05/M | $0.40/M |
 | `openai/gpt-5.2-pro` | $21.00/M | $168.00/M |
 | `openai/gpt-5.2-codex` | $1.75/M | $14.00/M |
 
@@ -188,9 +195,11 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 | Model | Input Price | Output Price |
 |-------|-------------|--------------|
 | `google/gemini-3.1-pro` | $2.00/M | $12.00/M |
+| `google/gemini-3.1-flash-lite` | $0.25/M | $1.50/M |
 | `google/gemini-2.5-pro` | $1.25/M | $10.00/M |
 | `google/gemini-3-flash-preview` | $0.50/M | $3.00/M |
 | `google/gemini-2.5-flash` | $0.30/M | $2.50/M |
+| `google/gemini-2.5-flash-lite` | $0.10/M | $0.40/M |
 
 ### MiniMax
 | Model | Input Price | Output Price |
