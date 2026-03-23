@@ -732,6 +732,36 @@ spending = client.get_spending()
 print(f"Session: ${spending['total_usd']:.4f} across {spending['calls']} calls")
 ```
 
+## Anthropic SDK Compatibility
+
+Use the official Anthropic Python SDK with BlockRun's API gateway and automatic x402 payments:
+
+```bash
+pip install blockrun-llm[anthropic]
+```
+
+```python
+from blockrun_llm import AnthropicClient
+
+client = AnthropicClient()  # Auto-detects wallet, auto-pays
+
+response = client.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+print(response.content[0].text)
+
+# Works with any BlockRun model in Anthropic format
+response = client.messages.create(
+    model="openai/gpt-5.4",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "Hello from GPT!"}]
+)
+```
+
+The `AnthropicClient` wraps `anthropic.Anthropic` with a custom httpx transport that handles x402 payment signing transparently. Your private key never leaves your machine.
+
 ## Links
 
 - [Website](https://blockrun.ai)
