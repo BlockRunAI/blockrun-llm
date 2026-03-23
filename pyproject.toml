@@ -40,6 +40,9 @@ dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",
 ]
+anthropic = [
+    "anthropic>=0.40.0",
+]
 solana = [
     "x402[svm]>=2.0.0",
 ]

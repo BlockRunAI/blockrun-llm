@@ -42,6 +42,7 @@ from .client import (
     testnet_client,
     async_testnet_client,
 )
+from .anthropic_client import AnthropicClient
 from .solana_client import SolanaLLMClient
 from .image import ImageClient
 from .types import (
@@ -119,6 +120,7 @@ __version__ = "0.8.1"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
+    "AnthropicClient",
     "SolanaLLMClient",
     # Testnet convenience functions
     "testnet_client",
