@@ -641,6 +641,97 @@ print(f"View transactions: https://basescan.org/address/{address}")
 pip install --upgrade blockrun-llm  # Get security patches
 ```
 
+## Agent Wallet Setup
+
+One-line setup for agent runtimes (Claude Code skills, MCP servers, etc.):
+
+```python
+from blockrun_llm import setup_agent_wallet
+
+# Auto-creates wallet if none exists, returns ready client
+client = setup_agent_wallet()
+response = client.chat("openai/gpt-5.4", "Hello!")
+```
+
+For Solana:
+
+```python
+from blockrun_llm import setup_agent_solana_wallet
+
+client = setup_agent_solana_wallet()
+response = client.chat("anthropic/claude-sonnet-4.6", "Hello!")
+```
+
+Check wallet status:
+
+```python
+from blockrun_llm import status
+
+status()
+# Wallet: 0xCC8c...5EF8
+# Balance: $5.30 USDC
+```
+
+## Wallet Scanning
+
+The SDK auto-detects wallets from any provider on your system:
+
+```python
+from blockrun_llm.wallet import scan_wallets
+from blockrun_llm.solana_wallet import scan_solana_wallets
+
+# Scans ~/.<dir>/wallet.json for Base wallets
+base_wallets = scan_wallets()
+
+# Scans ~/.<dir>/solana-wallet.json
+sol_wallets = scan_solana_wallets()
+```
+
+`get_or_create_wallet()` checks scanned wallets first, so if you already have a wallet from another BlockRun tool, it will be reused automatically.
+
+## Response Caching
+
+The SDK caches responses to avoid duplicate payments:
+
+```python
+from blockrun_llm import clear_cache
+
+# Automatic TTLs by endpoint:
+# - X/Twitter: 1 hour
+# - Search: 15 minutes
+# - Models: 24 hours
+# - Chat/Image: no cache (every call is unique)
+
+# Manual cache management
+removed = clear_cache()  # Remove all cached responses
+```
+
+## Cost Logging
+
+Track spending across sessions:
+
+```python
+from blockrun_llm import get_cost_log_summary
+
+# Costs are logged to ~/.blockrun/cost_log.jsonl
+summary = get_cost_log_summary()
+print(f"Total: ${summary['total_usd']:.2f}")
+print(f"Calls: {summary['calls']}")
+print(f"By endpoint: {summary['by_endpoint']}")
+```
+
+Per-session spending is also available on any client:
+
+```python
+from blockrun_llm import LLMClient
+
+client = LLMClient()
+response = client.chat("openai/gpt-5.2", "Hello!")
+
+spending = client.get_spending()
+print(f"Session: ${spending['total_usd']:.4f} across {spending['calls']} calls")
+```
+
 ## Links
 
 - [Website](https://blockrun.ai)
