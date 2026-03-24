@@ -25,7 +25,7 @@ Usage:
     client = LLMClient(private_key="0x...")
 
     # Simple 1-line chat
-    response = client.chat("gpt-4o", "What is 2+2?")
+    response = client.chat("gpt-5.2", "What is 2+2?")
     print(response)
 
     # Full chat with messages
@@ -33,7 +33,7 @@ Usage:
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Hello!"}
     ]
-    result = client.chat_completion("gpt-4o", messages)
+    result = client.chat_completion("gpt-5.2", messages)
     print(result.choices[0].message.content)
 """
 
@@ -397,20 +397,20 @@ class LLMClient:
         Simple 1-line chat interface.
 
         Args:
-            model: Model ID (e.g., "openai/gpt-4o", "anthropic/claude-sonnet-4", "xai/grok-3")
+            model: Model ID (e.g., "openai/gpt-5.2", "anthropic/claude-sonnet-4.6", "openai/gpt-5.2")
             prompt: User message
             system: Optional system prompt
             max_tokens: Max tokens to generate (default: 1024)
             temperature: Sampling temperature
             search: Enable xAI Live Search (shortcut for search_parameters={"mode": "on"})
-            search_parameters: Full xAI Live Search configuration (for Grok models)
+            search_parameters: Full xAI Live Search configuration (for search-enabled models)
                 See: https://docs.x.ai/docs/guides/live-search
 
         Returns:
             Assistant's response text
 
         Example:
-            response = client.chat("openai/gpt-4o", "What is the capital of France?")
+            response = client.chat("openai/gpt-5.2", "What is the capital of France?")
 
             # Check spending after calls
             spending = client.get_spending()
@@ -418,7 +418,7 @@ class LLMClient:
 
             # With xAI Live Search (for real-time X/Twitter data)
             response = client.chat(
-                "xai/grok-3",
+                "openai/gpt-5.2",
                 "What are the latest posts from @blockrunai?",
                 search=True  # Enable live search
             )
@@ -464,7 +464,7 @@ class LLMClient:
             temperature: Sampling temperature
             top_p: Nucleus sampling parameter
             search: Enable xAI Live Search (shortcut for search_parameters={"mode": "on"})
-            search_parameters: Full xAI Live Search configuration (for Grok models)
+            search_parameters: Full xAI Live Search configuration (for search-enabled models)
             tools: List of tool definitions for function calling
             tool_choice: Tool selection strategy ("none", "auto", "required", or specific tool)
 
@@ -479,11 +479,11 @@ class LLMClient:
                 {"role": "system", "content": "You are helpful."},
                 {"role": "user", "content": "Hello!"}
             ]
-            result = client.chat_completion("gpt-4o", messages)
+            result = client.chat_completion("gpt-5.2", messages)
 
             # With xAI Live Search
             result = client.chat_completion(
-                "xai/grok-3",
+                "openai/gpt-5.2",
                 [{"role": "user", "content": "Latest news about AI?"}],
                 search=True
             )
@@ -504,7 +504,7 @@ class LLMClient:
                     }
                 }
             }]
-            result = client.chat_completion("gpt-4o", messages, tools=tools)
+            result = client.chat_completion("gpt-5.2", messages, tools=tools)
             if result.choices[0].message.tool_calls:
                 for tc in result.choices[0].message.tool_calls:
                     print(f"Call: {tc.function.name}({tc.function.arguments})")
@@ -1546,7 +1546,7 @@ class AsyncLLMClient:
 
     Usage:
         async with AsyncLLMClient() as client:
-            response = await client.chat("gpt-4o", "Hello!")
+            response = await client.chat("gpt-5.2", "Hello!")
 
         # For testnet:
         async with AsyncLLMClient(api_url="https://testnet.blockrun.ai/api") as client:

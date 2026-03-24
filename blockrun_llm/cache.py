@@ -97,7 +97,7 @@ def _readable_filename(endpoint: str, body: Dict[str, Any]) -> str:
 
     Examples:
         x_search_2026-03-13_x402_payment.json
-        chat_2026-03-13_gpt-4o.json
+        chat_2026-03-13_gpt-5.2.json
         x_followers_2026-03-13_elonmusk.json
     """
     ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")

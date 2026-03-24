@@ -39,9 +39,9 @@ class ArbitrageAnalyzer:
 
     # Model recommendations by use case
     MODELS = {
-        "fast": "openai/gpt-4o-mini",  # $0.15/M input - quick analysis
+        "fast": "openai/gpt-5.4-nano",  # $0.20/M input - quick analysis
         "balanced": "anthropic/claude-haiku-4.5",  # $1.00/M input - good reasoning
-        "deep": "anthropic/claude-sonnet-4",  # $3.00/M input - thorough analysis
+        "deep": "anthropic/claude-sonnet-4.6",  # $3.00/M input - thorough analysis
         "frontier": "openai/gpt-5.2",  # $1.75/M input - latest capabilities
     }
 

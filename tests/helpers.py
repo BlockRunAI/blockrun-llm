@@ -51,7 +51,7 @@ def build_payment_required_response(
 
 def build_chat_response(
     content: str = "This is a test response.",
-    model: str = "gpt-4o",
+    model: str = "gpt-5.2",
     prompt_tokens: int = 10,
     completion_tokens: int = 20,
 ) -> Dict[str, Any]:
@@ -102,16 +102,16 @@ def build_models_response() -> Dict[str, Any]:
     return {
         "data": [
             {
-                "id": "openai/gpt-4o",
+                "id": "openai/gpt-5.2",
                 "provider": "openai",
-                "name": "GPT-4o",
+                "name": "GPT-5.2",
                 "inputPrice": 2.5,
                 "outputPrice": 10.0,
             },
             {
-                "id": "anthropic/claude-sonnet-4.5",
+                "id": "anthropic/claude-sonnet-4.6",
                 "provider": "anthropic",
-                "name": "Claude Sonnet 4.5",
+                "name": "Claude Sonnet 4.6",
                 "inputPrice": 3.0,
                 "outputPrice": 15.0,
             },

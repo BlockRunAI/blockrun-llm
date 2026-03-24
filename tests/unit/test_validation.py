@@ -90,7 +90,7 @@ class TestValidateApiUrl:
 class TestValidateModel:
     def test_accept_valid_model(self):
         """Should accept valid model IDs."""
-        validate_model("openai/gpt-4o")
+        validate_model("openai/gpt-5.2")
         validate_model("anthropic/claude-sonnet-4.5")
         validate_model("google/gemini-2.5-flash")
 

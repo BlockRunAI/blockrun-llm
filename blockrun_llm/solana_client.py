@@ -11,7 +11,7 @@ Usage:
     client = SolanaLLMClient(private_key="your-bs58-key")
 
     # Same API as LLMClient
-    response = client.chat("openai/gpt-4o", "gm Solana")
+    response = client.chat("openai/gpt-5.2", "gm Solana")
     print(response)
 """
 

@@ -1,6 +1,6 @@
 # BlockRun LLM SDK (Python)
 
-> **blockrun-llm** is a Python SDK for accessing 40+ large language models (GPT-5, Claude, Gemini, Grok, DeepSeek, Kimi, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
+> **blockrun-llm** is a Python SDK for accessing 43+ large language models (GPT-5, Claude, Gemini, DeepSeek, NVIDIA, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
 
 [![PyPI](https://img.shields.io/pypi/v/blockrun-llm.svg)](https://pypi.org/project/blockrun-llm/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -53,11 +53,11 @@ client = SolanaLLMClient()
 client = SolanaLLMClient(private_key="your-bs58-solana-key")
 
 # Same API as LLMClient
-response = client.chat("openai/gpt-4o", "gm Solana")
+response = client.chat("openai/gpt-5.2", "gm Solana")
 print(response)
 
-# Live Search with Grok (Solana payment)
-tweet = client.chat("xai/grok-3-mini", "What is trending on X?", search=True)
+# DeepSeek on Solana
+answer = client.chat("deepseek/deepseek-chat", "Explain Solana consensus", temperature=0.5)
 ```
 
 **Setup:**
@@ -86,7 +86,7 @@ print(f"Saved {result.routing.savings * 100:.0f}%")  # 'Saved 94%'
 
 # Complex reasoning task -> routes to reasoning model
 result = client.smart_chat("Prove the Riemann hypothesis step by step")
-print(result.model)  # 'xai/grok-4-1-fast-reasoning'
+print(result.model)  # 'deepseek/deepseek-reasoner'
 ```
 
 ### Routing Profiles
@@ -94,7 +94,7 @@ print(result.model)  # 'xai/grok-4-1-fast-reasoning'
 | Profile | Description | Best For |
 |---------|-------------|----------|
 | `free` | nvidia/gpt-oss-120b only (FREE) | Testing, development |
-| `eco` | Cheapest models per tier (DeepSeek, xAI) | Cost-sensitive production |
+| `eco` | Cheapest models per tier (DeepSeek, NVIDIA) | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
 | `premium` | Top-tier models (OpenAI, Anthropic) | Quality-critical tasks |
 
@@ -104,7 +104,7 @@ result = client.smart_chat(
     "Write production-grade async Python code",
     routing_profile="premium"
 )
-print(result.model)  # 'anthropic/claude-opus-4.5'
+print(result.model)  # 'openai/gpt-5.4'
 ```
 
 ### How It Works
@@ -123,9 +123,9 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 | Tier | Example Tasks | Auto Profile Model |
 |------|---------------|-------------------|
 | SIMPLE | "What is 2+2?", definitions | nvidia/kimi-k2.5 |
-| MEDIUM | Code snippets, explanations | xai/grok-code-fast-1 |
+| MEDIUM | Code snippets, explanations | google/gemini-2.5-flash |
 | COMPLEX | Architecture, long documents | google/gemini-3.1-pro |
-| REASONING | Proofs, multi-step reasoning | xai/grok-4-1-fast-reasoning |
+| REASONING | Proofs, multi-step reasoning | deepseek/deepseek-reasoner |
 
 ## How It Works
 
@@ -140,38 +140,81 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 ## Available Models
 
 ### OpenAI GPT-5.4 Family
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `openai/gpt-5.4` | $2.50/M | $15.00/M |
-| `openai/gpt-5.4-pro` | $30.00/M | $180.00/M |
-| `openai/gpt-5.4-nano` | $0.20/M | $1.25/M |
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `openai/gpt-5.4` | $2.50/M | $15.00/M | 1M |
+| `openai/gpt-5.4-pro` | $30.00/M | $180.00/M | 1M |
+| `openai/gpt-5.4-mini` | $0.75/M | $4.50/M | 400K |
+| `openai/gpt-5.4-nano` | $0.20/M | $1.25/M | 1M |
 
 ### OpenAI GPT-5 Family
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `openai/gpt-5.3` | $1.75/M | $14.00/M |
-| `openai/gpt-5.2` | $1.75/M | $14.00/M |
-| `openai/gpt-5-mini` | $0.25/M | $2.00/M |
-| `openai/gpt-5.2-pro` | $21.00/M | $168.00/M |
-| `openai/gpt-5.2-codex` | $1.75/M | $14.00/M |
-
-### OpenAI GPT-4 Family
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `openai/gpt-4.1` | $2.00/M | $8.00/M |
-| `openai/gpt-4.1-mini` | $0.40/M | $1.60/M |
-| `openai/gpt-4.1-nano` | $0.10/M | $0.40/M |
-| `openai/gpt-4o` | $2.50/M | $10.00/M |
-| `openai/gpt-4o-mini` | $0.15/M | $0.60/M |
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `openai/gpt-5.3` | $1.75/M | $14.00/M | 128K |
+| `openai/gpt-5.2` | $1.75/M | $14.00/M | 400K |
+| `openai/gpt-5-mini` | $0.25/M | $2.00/M | 200K |
+| `openai/gpt-5.2-pro` | $21.00/M | $168.00/M | 400K |
+| `openai/gpt-5.3-codex` | $1.75/M | $14.00/M | 400K |
 
 ### OpenAI O-Series (Reasoning)
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `openai/o1` | $15.00/M | $60.00/M |
-| `openai/o1-mini` | $1.10/M | $4.40/M |
-| `openai/o3` | $2.00/M | $8.00/M |
-| `openai/o3-mini` | $1.10/M | $4.40/M |
-| `openai/o4-mini` | $1.10/M | $4.40/M |
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `openai/o1` | $15.00/M | $60.00/M | 200K |
+| `openai/o1-mini` | $1.10/M | $4.40/M | 128K |
+| `openai/o3` | $2.00/M | $8.00/M | 200K |
+| `openai/o3-mini` | $1.10/M | $4.40/M | 128K |
+
+### Anthropic Claude
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `anthropic/claude-opus-4.6` | $5.00/M | $25.00/M | 200K |
+| `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M | 200K |
+| `anthropic/claude-sonnet-4.6` | $3.00/M | $15.00/M | 200K |
+| `anthropic/claude-haiku-4.5` | $1.00/M | $5.00/M | 200K |
+
+### Google Gemini
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `google/gemini-3.1-pro` | $2.00/M | $12.00/M | 1M |
+| `google/gemini-3-pro-preview` | $2.00/M | $12.00/M | 1M |
+| `google/gemini-3-flash-preview` | $0.50/M | $3.00/M | 1M |
+| `google/gemini-2.5-pro` | $1.25/M | $10.00/M | 1M |
+| `google/gemini-2.5-flash` | $0.30/M | $2.50/M | 1M |
+| `google/gemini-3.1-flash-lite` | $0.25/M | $1.50/M | 1M |
+| `google/gemini-2.5-flash-lite` | $0.10/M | $0.40/M | 1M |
+
+### DeepSeek
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `deepseek/deepseek-chat` | $0.28/M | $0.42/M | 128K |
+| `deepseek/deepseek-reasoner` | $0.28/M | $0.42/M | 128K |
+
+### MiniMax
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `minimax/minimax-m2.7` | $0.30/M | $1.20/M | 200K |
+
+### ZAI
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `zai/glm-5` | $1.00/M | $3.20/M | 200K |
+| `zai/glm-5-turbo` | $1.20/M | $4.00/M | 200K |
+
+### NVIDIA (Free & Hosted)
+| Model | Input Price | Output Price | Context | Notes |
+|-------|-------------|--------------|---------|-------|
+| `nvidia/nemotron-ultra-253b` | **FREE** | **FREE** | 131K | NVIDIA's largest reasoning model |
+| `nvidia/nemotron-3-super-120b` | **FREE** | **FREE** | 131K | General-purpose 120B |
+| `nvidia/nemotron-super-49b` | **FREE** | **FREE** | 131K | Efficient 49B |
+| `nvidia/mistral-large-3-675b` | **FREE** | **FREE** | 131K | Mistral Large 675B |
+| `nvidia/qwen3-coder-480b` | **FREE** | **FREE** | 131K | Code generation 480B |
+| `nvidia/devstral-2-123b` | **FREE** | **FREE** | 131K | Dev-focused 123B |
+| `nvidia/deepseek-v3.2` | **FREE** | **FREE** | 131K | DeepSeek V3.2 hosted |
+| `nvidia/glm-4.7` | **FREE** | **FREE** | 131K | GLM-4.7 hosted |
+| `nvidia/llama-4-maverick` | **FREE** | **FREE** | 131K | Meta Llama 4 Maverick |
+| `nvidia/gpt-oss-120b` | **FREE** | **FREE** | 128K | OpenAI open-weight 120B |
+| `nvidia/gpt-oss-20b` | **FREE** | **FREE** | 128K | OpenAI open-weight 20B |
+| `nvidia/kimi-k2.5` | $0.60/M | $3.00/M | 262K | Moonshot 1T MoE with vision |
 
 ### Testnet Models (Base Sepolia)
 | Model | Price |
@@ -181,76 +224,18 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 
 *Testnet models use flat pricing (no token counting) for simplicity.*
 
-### Anthropic Claude
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `anthropic/claude-opus-4.6` | $5.00/M | $25.00/M |
-| `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M |
-| `anthropic/claude-opus-4` | $15.00/M | $75.00/M |
-| `anthropic/claude-sonnet-4.6` | $3.00/M | $15.00/M |
-| `anthropic/claude-sonnet-4` | $3.00/M | $15.00/M |
-| `anthropic/claude-haiku-4.5` | $1.00/M | $5.00/M |
-
-### Google Gemini
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `google/gemini-3.1-pro` | $2.00/M | $12.00/M |
-| `google/gemini-3.1-flash-lite` | $0.25/M | $1.50/M |
-| `google/gemini-2.5-pro` | $1.25/M | $10.00/M |
-| `google/gemini-3-flash-preview` | $0.50/M | $3.00/M |
-| `google/gemini-2.5-flash` | $0.30/M | $2.50/M |
-| `google/gemini-2.5-flash-lite` | $0.10/M | $0.40/M |
-
-### MiniMax
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `minimax/minimax-m2.7` | $0.30/M | $1.20/M |
-| `minimax/minimax-m2.5` | $0.30/M | $1.20/M |
-
-### DeepSeek
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `deepseek/deepseek-chat` | $0.28/M | $0.42/M |
-| `deepseek/deepseek-reasoner` | $0.28/M | $0.42/M |
-
-### xAI Grok
-| Model | Input Price | Output Price | Context | Notes |
-|-------|-------------|--------------|---------|-------|
-| `xai/grok-3` | $3.00/M | $15.00/M | 131K | Flagship |
-| `xai/grok-3-mini` | $0.30/M | $0.50/M | 131K | Fast & affordable |
-| `xai/grok-4-1-fast-reasoning` | $0.20/M | $0.50/M | **2M** | Latest, chain-of-thought |
-| `xai/grok-4-1-fast-non-reasoning` | $0.20/M | $0.50/M | **2M** | Latest, direct response |
-| `xai/grok-4-fast-reasoning` | $0.20/M | $0.50/M | **2M** | Step-by-step reasoning |
-| `xai/grok-4-fast-non-reasoning` | $0.20/M | $0.50/M | **2M** | Quick responses |
-| `xai/grok-code-fast-1` | $0.20/M | $1.50/M | 256K | Code generation |
-| `xai/grok-4-0709` | $0.20/M | $1.50/M | 256K | Premium quality |
-| `xai/grok-2-vision` | $2.00/M | $10.00/M | 32K | Vision capabilities |
-
-### Moonshot Kimi
-| Model | Input Price | Output Price |
-|-------|-------------|--------------|
-| `moonshot/kimi-k2.5` | $0.60/M | $3.00/M |
-
-### NVIDIA (Free & Hosted)
-| Model | Input Price | Output Price | Notes |
-|-------|-------------|--------------|-------|
-| `nvidia/gpt-oss-120b` | **FREE** | **FREE** | OpenAI open-weight 120B (Apache 2.0) |
-| `nvidia/kimi-k2.5` | $0.60/M | $3.00/M | Moonshot 1T MoE with vision |
-
 ### E2E Verified Models
 
-All models below have been tested end-to-end via the Python SDK (Feb 2026):
+All models below have been tested end-to-end via the Python SDK (Mar 2026):
 
 | Provider | Model | Status |
 |----------|-------|--------|
-| OpenAI | `openai/gpt-4o-mini` | Passed |
-| OpenAI | `openai/gpt-5.2-codex` | Passed |
+| OpenAI | `openai/gpt-5.2` | Passed |
 | Anthropic | `anthropic/claude-opus-4.6` | Passed |
-| Anthropic | `anthropic/claude-sonnet-4` | Passed |
+| Anthropic | `anthropic/claude-sonnet-4.6` | Passed |
 | Google | `google/gemini-2.5-flash` | Passed |
 | DeepSeek | `deepseek/deepseek-chat` | Passed |
-| xAI | `xai/grok-3` | Passed |
-| Moonshot | `moonshot/kimi-k2.5` | Passed |
+| NVIDIA | `nvidia/gpt-oss-120b` | Passed |
 
 ### Image Generation
 | Model | Price |
@@ -409,13 +394,13 @@ print(response)
 
 # With system prompt
 response = client.chat(
-    "anthropic/claude-sonnet-4",
+    "anthropic/claude-sonnet-4.6",
     "Write a haiku",
     system="You are a creative poet."
 )
 ```
 
-### Real-time X/Twitter Search (xAI Live Search)
+### Real-time Search (Live Search)
 
 **Note:** Live Search can take 30-120+ seconds as it searches multiple sources. The SDK automatically uses a 5-minute timeout for search requests.
 
@@ -426,7 +411,7 @@ client = LLMClient()
 
 # Simple: Enable live search with search=True (default 10 sources, ~$0.26)
 response = client.chat(
-    "xai/grok-3",
+    "openai/gpt-5.2",
     "What are the latest posts from @blockrunai?",
     search=True
 )
@@ -434,7 +419,7 @@ print(response)
 
 # Custom: Limit sources to reduce cost (5 sources, ~$0.13)
 response = client.chat(
-    "xai/grok-3",
+    "openai/gpt-5.2",
     "What's trending on X?",
     search_parameters={"mode": "on", "max_search_results": 5}
 )
@@ -489,7 +474,7 @@ async def main():
         # Multiple requests concurrently
         tasks = [
             client.chat("openai/gpt-5.2", "What is 2+2?"),
-            client.chat("anthropic/claude-sonnet-4", "What is 3+3?"),
+            client.chat("anthropic/claude-sonnet-4.6", "What is 3+3?"),
             client.chat("google/gemini-2.5-flash", "What is 4+4?"),
         ]
         responses = await asyncio.gather(*tasks)
@@ -781,7 +766,7 @@ The `AnthropicClient` wraps `anthropic.Anthropic` with a custom httpx transport 
 ## Frequently Asked Questions
 
 ### What is blockrun-llm?
-blockrun-llm is a Python SDK that provides pay-per-request access to 40+ large language models from OpenAI, Anthropic, Google, xAI, DeepSeek, Moonshot, and more. It uses the x402 protocol for automatic USDC micropayments — no API keys, no subscriptions, no vendor lock-in.
+blockrun-llm is a Python SDK that provides pay-per-request access to 43+ large language models from OpenAI, Anthropic, Google, DeepSeek, NVIDIA, ZAI, and more. It uses the x402 protocol for automatic USDC micropayments — no API keys, no subscriptions, no vendor lock-in.
 
 ### How does payment work?
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
@@ -790,7 +775,7 @@ When you make an API call, the SDK automatically handles x402 payment. It signs 
 ClawRouter is a built-in smart routing engine that analyzes your request across 14 dimensions and automatically picks the cheapest model capable of handling it. Routing happens locally in under 1ms. It can save up to 92% on LLM costs compared to using premium models for every request.
 
 ### How much does it cost?
-Pay only for what you use. Prices start at $0.0002 per request (GPT-5 Nano). There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
+Pay only for what you use. Prices start at **FREE** (11 NVIDIA-hosted models). Paid models start at $0.10/M tokens. There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
 
 ### Can I use it with Solana?
 Yes. Install with `pip install blockrun-llm[solana]` and use `SolanaLLMClient` instead of `LLMClient`. Same API, different payment chain.

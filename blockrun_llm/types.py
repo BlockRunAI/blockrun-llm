@@ -159,7 +159,7 @@ class ImageModel(BaseModel):
     available: bool = True
 
 
-# xAI Live Search types (for Grok models)
+# Live Search types
 class WebSearchSource(BaseModel):
     """Web search source configuration."""
 
@@ -206,7 +206,7 @@ SearchSource = Union[
 
 class SearchParameters(BaseModel):
     """
-    xAI Live Search parameters for Grok models.
+    Live Search parameters for search-enabled models.
 
     Enables real-time web and X/Twitter search in chat completions.
     Cost: $0.025 per source used.
