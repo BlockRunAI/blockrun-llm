@@ -33,7 +33,9 @@ load_dotenv()
 class _BlockRunX402Transport(httpx.BaseTransport):
     """Custom httpx transport that intercepts 402 responses and signs x402 payments."""
 
-    def __init__(self, account: Account, api_url: str, base_transport: Optional[httpx.BaseTransport] = None):
+    def __init__(
+        self, account: Account, api_url: str, base_transport: Optional[httpx.BaseTransport] = None
+    ):
         self._account = account
         self._api_url = api_url
         self._base = base_transport or httpx.HTTPTransport()

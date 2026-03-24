@@ -29,6 +29,8 @@ KNOWN_PROVIDERS = {
     "xai",
     "moonshot",
     "nvidia",
+    "minimax",
+    "zai",
 }
 
 
@@ -66,13 +68,13 @@ def validate_model(model: str) -> None:
     Validate model ID format.
 
     Args:
-        model: The model ID (e.g., "openai/gpt-4o", "anthropic/claude-sonnet-4.5")
+        model: The model ID (e.g., "openai/gpt-5.2", "anthropic/claude-sonnet-4.5")
 
     Raises:
         ValueError: If model is invalid
 
     Example:
-        >>> validate_model("openai/gpt-4o")
+        >>> validate_model("openai/gpt-5.2")
     """
     if not model or not isinstance(model, str):
         raise ValueError("Model must be a non-empty string")

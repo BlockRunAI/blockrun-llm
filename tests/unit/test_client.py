@@ -90,7 +90,7 @@ class TestLLMClientMethods:
         models = client.list_models()
 
         assert len(models) == 3
-        assert models[0]["id"] == "openai/gpt-4o"
+        assert models[0]["id"] == "openai/gpt-5.2"
         assert models[0]["provider"] == "openai"
 
     @patch("blockrun_llm.client.httpx.Client")
@@ -149,11 +149,11 @@ class TestInputValidation:
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
 
         with pytest.raises(ValueError, match="positive"):
-            client.chat_completion("gpt-4o", [{"role": "user", "content": "test"}], max_tokens=-1)
+            client.chat_completion("gpt-5.2", [{"role": "user", "content": "test"}], max_tokens=-1)
 
         with pytest.raises(ValueError, match="too large"):
             client.chat_completion(
-                "gpt-4o", [{"role": "user", "content": "test"}], max_tokens=200000
+                "gpt-5.2", [{"role": "user", "content": "test"}], max_tokens=200000
             )
 
     @patch("blockrun_llm.client.httpx.Client")
@@ -162,7 +162,9 @@ class TestInputValidation:
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
 
         with pytest.raises(ValueError, match="between 0 and 2"):
-            client.chat_completion("gpt-4o", [{"role": "user", "content": "test"}], temperature=3.0)
+            client.chat_completion(
+                "gpt-5.2", [{"role": "user", "content": "test"}], temperature=3.0
+            )
 
     @patch("blockrun_llm.client.httpx.Client")
     def test_validate_top_p(self, mock_client_class):
@@ -170,4 +172,4 @@ class TestInputValidation:
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
 
         with pytest.raises(ValueError, match="between 0 and 1"):
-            client.chat_completion("gpt-4o", [{"role": "user", "content": "test"}], top_p=1.5)
+            client.chat_completion("gpt-5.2", [{"role": "user", "content": "test"}], top_p=1.5)

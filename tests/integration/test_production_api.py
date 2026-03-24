@@ -67,7 +67,7 @@ class TestProductionAPISync:
         """Should complete a simple chat request."""
         # Use cheapest model for testing
         response = client.chat(
-            "gemini-2.0-flash-exp",
+            "google/gemini-2.5-flash-lite",
             [{"role": "user", "content": "Say 'test passed' and nothing else"}],
         )
 
@@ -82,7 +82,7 @@ class TestProductionAPISync:
     def test_chat_completion_with_usage_stats(self, client):
         """Should return chat completion with usage stats."""
         completion = client.chat_completion(
-            "gemini-2.0-flash-exp",
+            "google/gemini-2.5-flash-lite",
             [{"role": "user", "content": "Count to 5"}],
             max_tokens=50,
         )
@@ -115,7 +115,7 @@ class TestProductionAPISync:
         5. Receive successful response
         """
         response = client.chat(
-            "gemini-2.0-flash-exp", [{"role": "user", "content": "What is 2+2?"}]
+            "google/gemini-2.5-flash-lite", [{"role": "user", "content": "What is 2+2?"}]
         )
 
         # If we got a response, the payment flow succeeded
@@ -163,7 +163,7 @@ class TestProductionAPIAsync:
     async def test_async_simple_chat(self, async_client):
         """Should complete a simple chat request asynchronously."""
         response = await async_client.chat(
-            "gemini-2.0-flash-exp",
+            "google/gemini-2.5-flash-lite",
             [{"role": "user", "content": "Say 'async test passed' and nothing else"}],
         )
 
@@ -179,7 +179,7 @@ class TestProductionAPIAsync:
     async def test_async_chat_completion(self, async_client):
         """Should return chat completion with usage stats asynchronously."""
         completion = await async_client.chat_completion(
-            "gemini-2.0-flash-exp",
+            "google/gemini-2.5-flash-lite",
             [{"role": "user", "content": "Count to 5"}],
             max_tokens=50,
         )

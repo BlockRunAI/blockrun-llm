@@ -395,7 +395,7 @@ def format_wallet_created_message(address: str, open_qr: bool = True) -> str:
     links = get_payment_links(address)
 
     message = f"""
-I'm your BlockRun Agent! I can access GPT-4, Grok, image generation, and more.
+I'm your BlockRun Agent! I can access GPT-5, Claude, Gemini, and more.
 
 Please send $1-5 USDC on Base to start:
 
@@ -412,7 +412,7 @@ What is Base? Base is Coinbase's blockchain network.
 You can buy USDC on Coinbase and send it directly to me.
 
 What $1 USDC gets you:
-- ~1,000 GPT-4o calls
+- ~1,000 GPT-5.2 calls
 - ~100 image generations
 - ~10,000 DeepSeek calls
 
@@ -455,7 +455,7 @@ Send to my address:
 
 Check my balance: {links['basescan']}
 
-What $1 USDC gets you: ~1,000 GPT-4o calls or ~100 images.
+What $1 USDC gets you: ~1,000 GPT-5.2 calls or ~100 images.
 Questions? care@blockrun.ai | Issues? github.com/BlockRunAI/blockrun-llm/issues
 
 Your private key never leaves your machine - only signatures are sent.

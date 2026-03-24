@@ -10,7 +10,7 @@ Usage:
     client = LLMClient()
     result = client.smart_chat("What is 2+2?")
     print(result["response"])  # '4'
-    print(result["model"])     # 'google/gemini-2.5-flash'
+    print(result["model"])     # 'nvidia/kimi-k2.5'
     print(f"Saved {result['routing']['savings'] * 100:.0f}%")
 """
 
@@ -233,11 +233,10 @@ AUTO_TIERS: Dict[Tier, TierConfig] = {
         ],
     },
     "MEDIUM": {
-        "primary": "xai/grok-code-fast-1",
+        "primary": "google/gemini-2.5-flash",
         "fallback": [
-            "google/gemini-2.5-flash",
             "deepseek/deepseek-chat",
-            "xai/grok-4-1-fast-non-reasoning",
+            "nvidia/gpt-oss-120b",
         ],
     },
     "COMPLEX": {
@@ -249,8 +248,8 @@ AUTO_TIERS: Dict[Tier, TierConfig] = {
         ],
     },
     "REASONING": {
-        "primary": "xai/grok-4-1-fast-reasoning",
-        "fallback": ["deepseek/deepseek-reasoner", "xai/grok-4-fast-reasoning", "openai/o3"],
+        "primary": "deepseek/deepseek-reasoner",
+        "fallback": ["openai/o3", "openai/o3-mini"],
     },
 }
 
@@ -261,26 +260,26 @@ ECO_TIERS: Dict[Tier, TierConfig] = {
     },
     "MEDIUM": {
         "primary": "deepseek/deepseek-chat",
-        "fallback": ["xai/grok-code-fast-1", "google/gemini-2.5-flash"],
+        "fallback": ["google/gemini-2.5-flash-lite", "google/gemini-2.5-flash"],
     },
     "COMPLEX": {
-        "primary": "xai/grok-4-0709",
+        "primary": "google/gemini-2.5-pro",
         "fallback": ["deepseek/deepseek-chat", "google/gemini-2.5-flash"],
     },
     "REASONING": {
         "primary": "deepseek/deepseek-reasoner",
-        "fallback": ["xai/grok-4-fast-reasoning", "moonshot/kimi-k2.5"],
+        "fallback": ["openai/o3-mini"],
     },
 }
 
 PREMIUM_TIERS: Dict[Tier, TierConfig] = {
     "SIMPLE": {
         "primary": "google/gemini-2.5-flash",
-        "fallback": ["openai/gpt-4o-mini", "anthropic/claude-haiku-4.5"],
+        "fallback": ["openai/gpt-5.4-nano", "anthropic/claude-haiku-4.5"],
     },
     "MEDIUM": {
-        "primary": "openai/gpt-4o",
-        "fallback": ["google/gemini-2.5-pro", "anthropic/claude-sonnet-4"],
+        "primary": "openai/gpt-5.4",
+        "fallback": ["google/gemini-2.5-pro", "anthropic/claude-sonnet-4.6"],
     },
     "COMPLEX": {
         "primary": "anthropic/claude-opus-4.5",
@@ -288,26 +287,26 @@ PREMIUM_TIERS: Dict[Tier, TierConfig] = {
     },
     "REASONING": {
         "primary": "openai/o3",
-        "fallback": ["openai/o4-mini", "anthropic/claude-opus-4.5"],
+        "fallback": ["openai/o1", "anthropic/claude-opus-4.5"],
     },
 }
 
 FREE_TIERS: Dict[Tier, TierConfig] = {
     "SIMPLE": {
         "primary": "nvidia/gpt-oss-120b",
-        "fallback": [],
+        "fallback": ["nvidia/nemotron-super-49b", "nvidia/deepseek-v3.2"],
     },
     "MEDIUM": {
-        "primary": "nvidia/gpt-oss-120b",
-        "fallback": [],
+        "primary": "nvidia/deepseek-v3.2",
+        "fallback": ["nvidia/qwen3-coder-480b", "nvidia/gpt-oss-120b"],
     },
     "COMPLEX": {
-        "primary": "nvidia/gpt-oss-120b",
-        "fallback": [],
+        "primary": "nvidia/nemotron-ultra-253b",
+        "fallback": ["nvidia/mistral-large-3-675b", "nvidia/gpt-oss-120b"],
     },
     "REASONING": {
-        "primary": "nvidia/gpt-oss-120b",
-        "fallback": [],
+        "primary": "nvidia/nemotron-ultra-253b",
+        "fallback": ["nvidia/gpt-oss-120b"],
     },
 }
 
@@ -550,9 +549,9 @@ def route(
     output_cost = (max_output_tokens / 1_000_000) * pricing.get("output_price", 0)
     cost_estimate = input_cost + output_cost
 
-    # Baseline cost (GPT-4o pricing: $2.50/$10)
+    # Baseline cost (GPT-5.4 pricing: $2.50/$15)
     baseline_input = (estimated_tokens / 1_000_000) * 2.50
-    baseline_output = (max_output_tokens / 1_000_000) * 10.0
+    baseline_output = (max_output_tokens / 1_000_000) * 15.0
     baseline_cost = baseline_input + baseline_output
 
     # Savings calculation

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "blockrun-llm"
-version = "0.9.0"
+version = "0.10.0"
 description = "BlockRun SDK - Pay-per-request AI (LLM & Image) via x402 on Base and Solana"
 readme = "README.md"
 license = "MIT"
@@ -12,7 +12,7 @@ requires-python = ">=3.9"
 authors = [
     { name = "BlockRun", email = "hello@blockrun.ai" }
 ]
-keywords = ["llm", "ai", "x402", "base", "usdc", "micropayments", "openai", "claude", "gemini", "image-generation", "dall-e", "nano-banana"]
+keywords = ["llm", "ai", "x402", "base", "usdc", "micropayments", "openai", "claude", "gemini", "nvidia", "zai", "free-models", "image-generation", "dall-e"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",

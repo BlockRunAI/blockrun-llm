@@ -4,7 +4,7 @@ Guidance for AI coding agents working with the BlockRun Python SDK.
 
 ## Project Overview
 
-**blockrun-llm** is a Python SDK for pay-per-request access to AI models (GPT, Claude, Gemini, Grok) via x402 micropayments on Base.
+**blockrun-llm** is a Python SDK for pay-per-request access to AI models (GPT, Claude, Gemini, DeepSeek, NVIDIA) via x402 micropayments on Base.
 
 **Package:** `blockrun-llm` (PyPI)
 **Python:** >=3.9
@@ -16,13 +16,18 @@ Guidance for AI coding agents working with the BlockRun Python SDK.
 ```
 blockrun-llm/
 ├── blockrun_llm/
-│   ├── __init__.py    # Package exports
-│   ├── client.py      # LLMClient, AsyncLLMClient
-│   ├── image.py       # Image generation client
-│   ├── types.py       # Pydantic models and type definitions
-│   ├── validation.py  # Input validation utilities
-│   ├── wallet.py      # Wallet operations (signing, address)
-│   └── x402.py        # x402 payment protocol implementation
+│   ├── __init__.py          # Package exports
+│   ├── client.py            # LLMClient, AsyncLLMClient
+│   ├── anthropic_client.py  # AnthropicClient (official SDK wrapper)
+│   ├── solana_client.py     # SolanaLLMClient (Solana payments)
+│   ├── router.py            # ClawRouter smart routing
+│   ├── image.py             # Image generation client
+│   ├── types.py             # Pydantic models and type definitions
+│   ├── validation.py        # Input validation utilities
+│   ├── wallet.py            # Wallet operations (signing, address)
+│   ├── solana_wallet.py     # Solana wallet utilities
+│   ├── cache.py             # Response caching & cost logging
+│   └── x402.py              # x402 payment protocol implementation
 ├── tests/
 │   ├── unit/          # Unit tests (no API calls)
 │   └── integration/   # Integration tests (requires funded wallet)
