@@ -239,3 +239,76 @@ class TestProductionAPIErrorHandling:
             print("   ✓ Error response properly sanitized")
 
         time.sleep(2)
+
+
+# =============================================================================
+# Solana + Exa Integration Tests
+# =============================================================================
+
+SOLANA_WALLET_KEY = os.environ.get("SOLANA_WALLET_KEY")
+SOLANA_API = "https://sol.blockrun.ai/api"
+
+
+class TestSolanaExa:
+    """Integration tests for Exa web search via SolanaLLMClient."""
+
+    @pytest.fixture(scope="class")
+    def client(self):
+        if not SOLANA_WALLET_KEY:
+            pytest.skip("SOLANA_WALLET_KEY not set")
+        from blockrun_llm import SolanaLLMClient
+        c = SolanaLLMClient(private_key=SOLANA_WALLET_KEY, api_url=SOLANA_API)
+        print("\n🧪 Running Solana/Exa integration tests against sol.blockrun.ai")
+        print(f"   Wallet: {c.get_wallet_address()}")
+        print("   Estimated cost: ~$0.04\n")
+        return c
+
+    def test_exa_search(self, client):
+        """exa_search returns results with title/url fields."""
+        result = client.exa_search("latest AI safety research", numResults=3)
+        assert "results" in result, f"Expected 'results' key, got: {list(result.keys())}"
+        assert len(result["results"]) > 0
+        first = result["results"][0]
+        assert "url" in first or "title" in first
+        cost = client.get_spending()["total_usd"]
+        assert 0.009 <= cost <= 0.011, f"Expected ~$0.01 cost, got {cost}"
+        print(f"   ✓ exa_search: {len(result['results'])} results, cost=${cost:.4f}")
+        time.sleep(1)
+
+    def test_exa_find_similar(self, client):
+        """exa_find_similar returns semantically similar pages."""
+        result = client.exa_find_similar("https://openai.com/research/gpt-4", numResults=3)
+        assert "results" in result
+        assert len(result["results"]) > 0
+        print(f"   ✓ exa_find_similar: {len(result['results'])} results")
+        time.sleep(1)
+
+    def test_exa_contents(self, client):
+        """exa_contents extracts text from a URL, priced per URL."""
+        result = client.exa_contents(["https://www.anthropic.com/research"])
+        assert result is not None
+        assert isinstance(result, dict)
+        print(f"   ✓ exa_contents: response received")
+        time.sleep(1)
+
+    def test_exa_answer(self, client):
+        """exa_answer returns an AI-generated answer from live web."""
+        result = client.exa_answer("What is Anthropic Claude?")
+        assert result is not None
+        assert isinstance(result, dict)
+        print(f"   ✓ exa_answer: response received")
+        time.sleep(1)
+
+    def test_exa_generic_proxy(self, client):
+        """exa() generic proxy works for any endpoint."""
+        result = client.exa("search", {"query": "blockrun.ai", "numResults": 2})
+        assert "results" in result
+        print(f"   ✓ exa() generic: {len(result['results'])} results")
+        time.sleep(1)
+
+    def test_exa_spending_tracked(self, client):
+        """Session spending is tracked across Exa calls."""
+        spending = client.get_spending()
+        assert spending["total_usd"] > 0
+        assert spending["calls"] >= 3
+        print(f"   ✓ Spending tracked: ${spending['total_usd']:.4f} over {spending['calls']} calls")
