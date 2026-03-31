@@ -659,3 +659,70 @@ class SolanaLLMClient:
     def pm_query(self, path: str, query: Dict[str, Any]) -> Dict[str, Any]:
         """Structured query for Predexon data (POST, Solana payment). Powered by Predexon."""
         return self._request_with_payment_raw(f"/v1/pm/{path}", query)
+
+    # ── Exa Web Search (Powered by Exa) ─────────────────────────────────────
+
+    def exa(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Generic Exa endpoint proxy (POST, Solana payment). Powered by Exa.
+
+        Args:
+            path: Exa endpoint — one of: "search", "find-similar", "contents", "answer"
+            body: Request body (see Exa API docs)
+
+        Example::
+
+            result = client.exa("search", {"query": "latest AI research", "numResults": 5})
+        """
+        return self._request_with_payment_raw(f"/v1/exa/{path}", body)
+
+    def exa_search(self, query: str, **kwargs: Any) -> Dict[str, Any]:
+        """Neural and keyword web search via Exa (Solana payment, $0.01/request).
+
+        Args:
+            query: Search query string
+            **kwargs: Additional Exa parameters (numResults, category, useAutoprompt, etc.)
+
+        Example::
+
+            results = client.exa_search("latest AI papers", numResults=5)
+        """
+        return self._request_with_payment_raw("/v1/exa/search", {"query": query, **kwargs})
+
+    def exa_find_similar(self, url: str, **kwargs: Any) -> Dict[str, Any]:
+        """Find pages semantically similar to a given URL via Exa (Solana payment, $0.01/request).
+
+        Args:
+            url: URL to find similar pages for
+            **kwargs: Additional Exa parameters (numResults, etc.)
+
+        Example::
+
+            results = client.exa_find_similar("https://openai.com/research/gpt-4", numResults=5)
+        """
+        return self._request_with_payment_raw("/v1/exa/find-similar", {"url": url, **kwargs})
+
+    def exa_contents(self, urls: List[str], **kwargs: Any) -> Dict[str, Any]:
+        """Extract full text content from URLs via Exa (Solana payment, $0.002/URL).
+
+        Args:
+            urls: List of URLs to extract content from
+            **kwargs: Additional Exa parameters (text, highlights, summary, etc.)
+
+        Example::
+
+            data = client.exa_contents(["https://arxiv.org/abs/2303.08774"])
+        """
+        return self._request_with_payment_raw("/v1/exa/contents", {"urls": urls, **kwargs})
+
+    def exa_answer(self, query: str, **kwargs: Any) -> Dict[str, Any]:
+        """AI-generated answer grounded in live web search via Exa (Solana payment, $0.01/request).
+
+        Args:
+            query: Question to answer
+            **kwargs: Additional Exa parameters
+
+        Example::
+
+            answer = client.exa_answer("What is the current state of AI safety research?")
+        """
+        return self._request_with_payment_raw("/v1/exa/answer", {"query": query, **kwargs})
