@@ -336,6 +336,46 @@ All current endpoints are GET. The `pm_query()` method is available for future P
 
 Works on all clients: `LLMClient` (Base), `AsyncLLMClient`, and `SolanaLLMClient`.
 
+## Exa Web Search (Powered by Exa)
+
+Access [Exa](https://exa.ai)'s neural web search via x402. No API keys needed — pay-per-request via Solana USDC. Available on `SolanaLLMClient` only.
+
+| Endpoint | Method | Price |
+|---|---|---|
+| `exa_search` | Neural/keyword web search | $0.01/request |
+| `exa_find_similar` | Find semantically similar pages | $0.01/request |
+| `exa_contents` | Extract full text from URLs | $0.002/URL |
+| `exa_answer` | AI answer grounded in web search | $0.01/request |
+
+```python
+from blockrun_llm import SolanaLLMClient
+
+client = SolanaLLMClient()
+
+# Neural web search ($0.01/request)
+results = client.exa_search("latest AI safety research", numResults=5)
+results = client.exa_search("bitcoin ETF news", category="news", numResults=10)
+
+# Find similar pages ($0.01/request)
+similar = client.exa_find_similar("https://openai.com/research/gpt-4", numResults=5)
+
+# Extract content from URLs ($0.002/URL)
+content = client.exa_contents(["https://arxiv.org/abs/2303.08774"])
+content = client.exa_contents(
+    ["https://example.com/page1", "https://example.com/page2"],
+    text=True,
+    highlights=True,
+)
+
+# AI-generated answer from live web ($0.01/request)
+answer = client.exa_answer("What is the current state of AI safety research?")
+
+# Generic proxy for any Exa endpoint
+result = client.exa("search", {"query": "transformer architecture", "numResults": 5})
+```
+
+`SolanaLLMClient` only — Exa endpoints are on `sol.blockrun.ai`.
+
 ## Standalone Search
 
 Search web, X/Twitter, and news without using a chat model:
