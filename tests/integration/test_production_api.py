@@ -257,6 +257,7 @@ class TestSolanaExa:
         if not SOLANA_WALLET_KEY:
             pytest.skip("SOLANA_WALLET_KEY not set")
         from blockrun_llm import SolanaLLMClient
+
         c = SolanaLLMClient(private_key=SOLANA_WALLET_KEY, api_url=SOLANA_API)
         print("\n🧪 Running Solana/Exa integration tests against sol.blockrun.ai")
         print(f"   Wallet: {c.get_wallet_address()}")
@@ -288,7 +289,7 @@ class TestSolanaExa:
         result = client.exa_contents(["https://www.anthropic.com/research"])
         assert result is not None
         assert isinstance(result, dict)
-        print(f"   ✓ exa_contents: response received")
+        print("   ✓ exa_contents: response received")
         time.sleep(1)
 
     def test_exa_answer(self, client):
@@ -296,7 +297,7 @@ class TestSolanaExa:
         result = client.exa_answer("What is Anthropic Claude?")
         assert result is not None
         assert isinstance(result, dict)
-        print(f"   ✓ exa_answer: response received")
+        print("   ✓ exa_answer: response received")
         time.sleep(1)
 
     def test_exa_generic_proxy(self, client):
