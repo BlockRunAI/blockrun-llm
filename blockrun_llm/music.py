@@ -1,5 +1,5 @@
 """
-BlockRun Image Client - Generate images via x402 micropayments.
+BlockRun Music Client - Generate music tracks via x402 micropayments.
 
 SECURITY NOTE - Private Key Handling:
 =====================================
@@ -8,22 +8,25 @@ Your private key NEVER leaves your machine. Here's what happens:
 1. Key stays local - only used to sign an EIP-712 typed data message
 2. Only the SIGNATURE is sent in the PAYMENT-SIGNATURE header
 3. BlockRun verifies the signature on-chain via Coinbase CDP facilitator
-4. Your actual private key is NEVER transmitted to any server
-
-This is the same security model as signing any blockchain transaction.
 
 Usage:
-    from blockrun_llm import ImageClient
+    from blockrun_llm import MusicClient
 
-    # Initialize with private key from env (BLOCKRUN_WALLET_KEY)
-    client = ImageClient()
+    client = MusicClient()  # Uses BLOCKRUN_WALLET_KEY from env
 
-    # Generate an image
-    result = client.generate("A cute cat wearing a space helmet")
-    print(result.data[0].url)
+    # Generate an instrumental track
+    result = client.generate("upbeat synthwave with neon pads")
+    print(result.data[0].url)  # CDN URL — download within 24h
 
-    # With specific model
-    result = client.generate("prompt", model="google/nano-banana-pro")
+    # With lyrics
+    result = client.generate(
+        "upbeat pop song",
+        instrumental=False,
+        lyrics="Hello world, this is my song...",
+    )
+
+Pricing: $0.1575/track
+Note: Generated URLs expire in ~24h — download immediately if needed.
 """
 
 import os
@@ -32,58 +35,52 @@ import httpx
 from eth_account import Account
 from dotenv import load_dotenv
 
-from .types import ImageResponse, APIError, PaymentError
+from .types import MusicResponse, APIError, PaymentError
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
 from .validation import (
     validate_private_key,
     validate_api_url,
     sanitize_error_response,
-    validate_resource_url,
 )
 
-
-# Load environment variables
 load_dotenv()
 
 
-class ImageClient:
+class MusicClient:
     """
-    BlockRun Image Generation Client.
+    BlockRun Music Generation Client.
 
-    Generate images using Nano Banana (Google Gemini), DALL-E 3,
-    GPT Image 1, or CogView-4 (Zhipu AI)
+    Generate full-length ~3 minute music tracks using MiniMax Music 2.5+
     with automatic x402 micropayments on Base chain.
+
+    Pricing: $0.1575/track
     """
 
     DEFAULT_API_URL = "https://blockrun.ai/api"
-    DEFAULT_MODEL = "google/nano-banana"
-    DEFAULT_SIZE = "1024x1024"
+    DEFAULT_MODEL = "minimax/music-2.5+"
+    DEFAULT_TIMEOUT = 210.0  # music gen takes 1-3 min
 
     def __init__(
         self,
         private_key: Optional[str] = None,
         api_url: Optional[str] = None,
-        timeout: float = 120.0,  # Images take longer to generate
+        timeout: float = 210.0,
     ):
         """
-        Initialize the BlockRun Image client.
+        Initialize the BlockRun Music client.
 
         Args:
             private_key: EVM wallet private key (or set BLOCKRUN_WALLET_KEY env var)
             api_url: API endpoint URL (default: https://blockrun.ai/api)
-            timeout: Request timeout in seconds (default: 120 for images)
-
-        Raises:
-            ValueError: If no private key is provided or found in env
+            timeout: Request timeout in seconds (default: 210 for music generation)
         """
-        # Get private key from param, environment, or ~/.blockrun/.session file
         from .wallet import load_wallet
 
         key = (
             private_key
             or os.environ.get("BLOCKRUN_WALLET_KEY")
             or os.environ.get("BASE_CHAIN_WALLET_KEY")
-            or load_wallet()  # Loads from ~/.blockrun/.session
+            or load_wallet()
         )
         if not key:
             raise ValueError(
@@ -94,20 +91,14 @@ class ImageClient:
                 "NOTE: Your key never leaves your machine - only signatures are sent."
             )
 
-        # Validate private key format
         validate_private_key(key)
-
-        # Initialize wallet account (key stays local, never transmitted)
         self.account = Account.from_key(key)
 
-        # Validate and set API URL
         api_url_raw = api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL
         validate_api_url(api_url_raw)
         self.api_url = api_url_raw.rstrip("/")
 
         self.timeout = timeout
-
-        # HTTP client
         self._client = httpx.Client(timeout=timeout)
 
     def generate(
@@ -115,105 +106,67 @@ class ImageClient:
         prompt: str,
         *,
         model: Optional[str] = None,
-        size: Optional[str] = None,
-        n: int = 1,
-    ) -> ImageResponse:
+        instrumental: bool = True,
+        lyrics: Optional[str] = None,
+    ) -> MusicResponse:
         """
-        Generate an image from a text prompt.
+        Generate a music track from a text prompt.
+
+        Takes 1-3 minutes. Returns a CDN URL valid for ~24h.
 
         Args:
-            prompt: Text description of the image to generate
-            model: Model ID (default: "google/nano-banana")
-                   Options: "google/nano-banana", "google/nano-banana-pro",
-                            "openai/dall-e-3", "openai/gpt-image-1",
-                            "zai/cogview-4"
-            size: Image size (default: "1024x1024")
-            n: Number of images to generate (default: 1)
+            prompt: Music style, mood, or description.
+                    E.g. "upbeat synthwave with neon pads", "chill lo-fi beats",
+                    "epic orchestral film score"
+            model: Model ID (default: "minimax/music-2.5+")
+                   Options: "minimax/music-2.5+", "minimax/music-2.5"
+            instrumental: Generate without vocals (default: True)
+            lyrics: Custom lyrics — cannot be used with instrumental=True
 
         Returns:
-            ImageResponse with generated image URLs
+            MusicResponse with track URL, duration, and optional lyrics
+
+        Raises:
+            ValueError: If both instrumental=True and lyrics are provided
+            PaymentError: If wallet has insufficient balance
+            APIError: If the API returns an error
 
         Example:
-            result = client.generate("A sunset over mountains")
-            print(result.data[0].url)  # Image URL or data URL
+            result = client.generate("chill lo-fi beats with piano")
+            print(result.data[0].url)  # Download this — expires in 24h
+
+        Example with lyrics:
+            result = client.generate(
+                "upbeat pop", instrumental=False,
+                lyrics="Hello world, this is my song..."
+            )
         """
-        # Build request body
+        if instrumental and lyrics and lyrics.strip():
+            raise ValueError("Cannot specify lyrics when instrumental is True")
+
         body: Dict[str, Any] = {
             "model": model or self.DEFAULT_MODEL,
             "prompt": prompt,
-            "size": size or self.DEFAULT_SIZE,
-            "n": n,
+            "instrumental": instrumental,
         }
+        if lyrics and lyrics.strip():
+            body["lyrics"] = lyrics.strip()
 
-        # Make request (with automatic payment handling)
-        return self._request_with_payment("/v1/images/generations", body)
+        return self._request_with_payment("/v1/audio/generations", body)
 
-    def edit(
-        self,
-        prompt: str,
-        image: str,
-        *,
-        model: Optional[str] = None,
-        mask: Optional[str] = None,
-        size: Optional[str] = None,
-        n: int = 1,
-    ) -> ImageResponse:
-        """
-        Edit an image using img2img.
-
-        Args:
-            prompt: Text description of the desired edit
-            image: Base64-encoded image or URL of the source image
-            model: Model ID (default: "openai/gpt-image-1")
-            mask: Optional base64-encoded mask image
-            size: Image size (default: "1024x1024")
-            n: Number of images to generate (default: 1)
-
-        Returns:
-            ImageResponse with edited image URLs
-
-        Example:
-            result = client.edit(
-                "Make the sky purple",
-                image="data:image/png;base64,..."
-            )
-            print(result.data[0].url)
-        """
-        body: Dict[str, Any] = {
-            "model": model or "openai/gpt-image-1",
-            "prompt": prompt,
-            "image": image,
-            "size": size or self.DEFAULT_SIZE,
-            "n": n,
-        }
-        if mask is not None:
-            body["mask"] = mask
-
-        return self._request_with_payment("/v1/images/image2image", body)
-
-    def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ImageResponse:
-        """
-        Make a request with automatic x402 payment handling.
-
-        1. Send initial request
-        2. If 402, parse payment requirements
-        3. Sign payment locally
-        4. Retry with X-Payment header
-        """
+    def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> MusicResponse:
+        """Make a request with automatic x402 payment handling."""
         url = f"{self.api_url}{endpoint}"
 
-        # First attempt (will likely return 402)
         response = self._client.post(
             url,
             json=body,
             headers={"Content-Type": "application/json"},
         )
 
-        # Handle 402 Payment Required
         if response.status_code == 402:
             return self._handle_payment_and_retry(url, body, response)
 
-        # Handle other errors
         if response.status_code != 200:
             try:
                 error_body = response.json()
@@ -225,20 +178,17 @@ class ImageClient:
                 sanitize_error_response(error_body),
             )
 
-        # Parse successful response
-        return ImageResponse(**response.json())
+        return MusicResponse(**response.json())
 
     def _handle_payment_and_retry(
         self,
         url: str,
         body: Dict[str, Any],
         response: httpx.Response,
-    ) -> ImageResponse:
+    ) -> MusicResponse:
         """Handle 402 response: parse requirements, sign payment, retry."""
-        # Get payment required header (x402 library uses lowercase)
         payment_header = response.headers.get("payment-required")
         if not payment_header:
-            # Try to get from response body
             try:
                 resp_body = response.json()
                 if "x402" in resp_body:
@@ -249,34 +199,27 @@ class ImageClient:
         if not payment_header:
             raise PaymentError("402 response but no payment requirements found")
 
-        # Parse payment requirements
         if isinstance(payment_header, str):
             payment_required = parse_payment_required(payment_header)
         else:
             payment_required = payment_header
 
-        # Extract payment details
         details = extract_payment_details(payment_required)
-
-        # Create signed payment payload (v2 format)
         resource = details.get("resource") or {}
-        # Pass through extensions from server (for Bazaar discovery)
         extensions = payment_required.get("extensions", {})
+
         payment_payload = create_payment_payload(
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
             network=details.get("network", "eip155:8453"),
-            resource_url=validate_resource_url(
-                resource.get("url", f"{self.api_url}/v1/images/generations"), self.api_url
-            ),
-            resource_description=resource.get("description", "BlockRun Image Generation"),
+            resource_url=resource.get("url", f"{self.api_url}/v1/audio/generations"),
+            resource_description=resource.get("description", "BlockRun Music Generation"),
             max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
             extra=details.get("extra"),
             extensions=extensions,
         )
 
-        # Retry with payment (x402 library expects PAYMENT-SIGNATURE header)
         retry_response = self._client.post(
             url,
             json=body,
@@ -286,7 +229,6 @@ class ImageClient:
             },
         )
 
-        # Check for errors
         if retry_response.status_code == 402:
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
@@ -301,7 +243,13 @@ class ImageClient:
                 sanitize_error_response(error_body),
             )
 
-        return ImageResponse(**retry_response.json())
+        data = retry_response.json()
+        # Attach tx hash from response header
+        tx_hash = retry_response.headers.get("x-payment-receipt") or retry_response.headers.get("X-Payment-Receipt")
+        if tx_hash:
+            data["txHash"] = tx_hash
+
+        return MusicResponse(**data)
 
     def get_wallet_address(self) -> str:
         """Get the wallet address being used for payments."""

@@ -45,6 +45,7 @@ from .client import (
 from .anthropic_client import AnthropicClient
 from .solana_client import SolanaLLMClient
 from .image import ImageClient
+from .music import MusicClient
 from .types import (
     ChatMessage,
     ChatResponse,
@@ -54,6 +55,10 @@ from .types import (
     ImageResponse,
     ImageData,
     ImageModel,
+    # Music / Audio types
+    MusicResponse,
+    AudioTrack,
+    AudioModel,
     # Live Search types
     SearchParameters,
     WebSearchSource,
@@ -116,7 +121,7 @@ from .solana_wallet import (
 )
 from .cache import clear_cache, get_cost_log_summary
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -132,6 +137,7 @@ __all__ = [
     "list_models",
     "list_image_models",
     "ImageClient",
+    "MusicClient",
     "ChatMessage",
     "ChatResponse",
     "Model",
@@ -140,6 +146,9 @@ __all__ = [
     "ImageResponse",
     "ImageData",
     "ImageModel",
+    "MusicResponse",
+    "AudioTrack",
+    "AudioModel",
     # Live Search types
     "SearchParameters",
     "WebSearchSource",
