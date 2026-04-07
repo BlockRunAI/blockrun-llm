@@ -159,6 +159,39 @@ class ImageModel(BaseModel):
     available: bool = True
 
 
+# Music / Audio types
+
+class AudioTrack(BaseModel):
+    """A single generated audio track."""
+
+    url: str
+    duration_seconds: Optional[float] = None
+    lyrics: Optional[str] = None
+
+
+class MusicResponse(BaseModel):
+    """Response from music generation."""
+
+    created: int
+    model: str
+    data: List[AudioTrack]
+    txHash: Optional[str] = None
+
+
+class AudioModel(BaseModel):
+    """Available audio/music model information."""
+
+    id: str
+    name: str
+    provider: str
+    description: str
+    price_per_track: float
+    max_duration_seconds: int
+    supports_lyrics: bool
+    supports_instrumental: bool
+    available: bool = True
+
+
 # Live Search types
 class WebSearchSource(BaseModel):
     """Web search source configuration."""
