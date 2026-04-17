@@ -245,6 +245,29 @@ All models below have been tested end-to-end via the Python SDK (Mar 2026):
 | `black-forest/flux-1.1-pro` | $0.04/image |
 | `google/nano-banana` | $0.05/image |
 | `google/nano-banana-pro` | $0.10-0.15/image |
+| `xai/grok-imagine-image` | $0.02/image |
+| `xai/grok-imagine-image-pro` | $0.07/image |
+| `zai/cogview-4` | $0.015/image |
+
+### Video Generation
+| Model | Price |
+|-------|-------|
+| `xai/grok-imagine-video` | $0.05/sec (8s default → $0.42/clip) |
+
+```python
+from blockrun_llm import VideoClient
+
+client = VideoClient()
+result = client.generate("a red apple slowly spinning on a wooden table")
+print(result.data[0].url)            # permanent MP4 URL
+print(result.data[0].duration_seconds)  # 8
+
+# Image-to-video
+result = client.generate(
+    "the subject turns its head and smiles",
+    image_url="https://example.com/portrait.jpg",
+)
+```
 
 ## X/Twitter Data (Powered by AttentionVC)
 
