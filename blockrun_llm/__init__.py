@@ -29,6 +29,13 @@ Image generation:
     result = client.generate("A cute cat wearing a space helmet")
     print(result.data[0].url)
 
+Video generation:
+    from blockrun_llm import VideoClient
+
+    client = VideoClient()
+    result = client.generate("a red apple slowly spinning on a wooden table")
+    print(result.data[0].url)  # permanent MP4 URL
+
 Other Chains:
     - XRPL (RLUSD): Use blockrun-llm-xrpl (pip install blockrun-llm-xrpl)
     - Solana (USDC): Use SolanaLLMClient (pip install blockrun-llm[solana])
@@ -46,6 +53,7 @@ from .anthropic_client import AnthropicClient
 from .solana_client import SolanaLLMClient
 from .image import ImageClient
 from .music import MusicClient
+from .video import VideoClient
 from .types import (
     ChatMessage,
     ChatResponse,
@@ -59,6 +67,10 @@ from .types import (
     MusicResponse,
     AudioTrack,
     AudioModel,
+    # Video types
+    VideoResponse,
+    VideoClip,
+    VideoModel,
     # Live Search types
     SearchParameters,
     WebSearchSource,
@@ -121,7 +133,7 @@ from .solana_wallet import (
 )
 from .cache import clear_cache, get_cost_log_summary
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -138,6 +150,7 @@ __all__ = [
     "list_image_models",
     "ImageClient",
     "MusicClient",
+    "VideoClient",
     "ChatMessage",
     "ChatResponse",
     "Model",
@@ -149,6 +162,9 @@ __all__ = [
     "MusicResponse",
     "AudioTrack",
     "AudioModel",
+    "VideoResponse",
+    "VideoClip",
+    "VideoModel",
     # Live Search types
     "SearchParameters",
     "WebSearchSource",

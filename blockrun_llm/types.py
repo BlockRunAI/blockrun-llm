@@ -138,6 +138,12 @@ class ImageData(BaseModel):
     """A single generated image."""
 
     url: str
+    # When the gateway mirrors the asset to its own storage, `url` is the
+    # permanent blockrun-hosted URL and `source_url` is the original upstream.
+    # `backed_up` is True iff the mirror step succeeded. For data-URI results
+    # (e.g. openai/gpt-image-1) both fields are omitted.
+    source_url: Optional[str] = None
+    backed_up: Optional[bool] = None
     revised_prompt: Optional[str] = None
 
 
@@ -187,6 +193,40 @@ class AudioModel(BaseModel):
     description: str
     price_per_track: float
     max_duration_seconds: int
+
+
+# Video generation types
+
+class VideoClip(BaseModel):
+    """A single generated video clip."""
+
+    url: str  # Permanent blockrun-hosted URL (falls back to upstream if backup fails)
+    source_url: Optional[str] = None  # Original upstream URL (e.g. vidgen.x.ai)
+    duration_seconds: Optional[int] = None
+    request_id: Optional[str] = None  # Upstream provider's request id (xAI)
+    backed_up: Optional[bool] = None
+
+
+class VideoResponse(BaseModel):
+    """Response from video generation."""
+
+    created: int
+    model: str
+    data: List[VideoClip]
+    txHash: Optional[str] = None
+
+
+class VideoModel(BaseModel):
+    """Available video model information."""
+
+    id: str
+    name: str
+    provider: str
+    description: str
+    price_per_second: float
+    default_duration_seconds: int
+    max_duration_seconds: int
+    supports_image_input: bool = False
     supports_lyrics: bool
     supports_instrumental: bool
     available: bool = True
