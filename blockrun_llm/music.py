@@ -245,7 +245,9 @@ class MusicClient:
 
         data = retry_response.json()
         # Attach tx hash from response header
-        tx_hash = retry_response.headers.get("x-payment-receipt") or retry_response.headers.get("X-Payment-Receipt")
+        tx_hash = retry_response.headers.get("x-payment-receipt") or retry_response.headers.get(
+            "X-Payment-Receipt"
+        )
         if tx_hash:
             data["txHash"] = tx_hash
 
