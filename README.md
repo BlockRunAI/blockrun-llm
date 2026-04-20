@@ -214,7 +214,8 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 | `nvidia/llama-4-maverick` | **FREE** | **FREE** | 131K | Meta Llama 4 Maverick |
 | `nvidia/gpt-oss-120b` | **FREE** | **FREE** | 128K | OpenAI open-weight 120B |
 | `nvidia/gpt-oss-20b` | **FREE** | **FREE** | 128K | OpenAI open-weight 20B |
-| `nvidia/kimi-k2.5` | $0.60/M | $3.00/M | 262K | Moonshot 1T MoE with vision |
+| `moonshot/kimi-k2.6` | $0.95/M | $4.00/M | 256K | Moonshot flagship (vision + reasoning_content) |
+| `nvidia/kimi-k2.5` | FREE | FREE | 1M | Moonshot 1T MoE hosted by NVIDIA (free tier) |
 
 ### Testnet Models (Base Sepolia)
 | Model | Price |
