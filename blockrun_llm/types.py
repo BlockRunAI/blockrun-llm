@@ -167,6 +167,7 @@ class ImageModel(BaseModel):
 
 # Music / Audio types
 
+
 class AudioTrack(BaseModel):
     """A single generated audio track."""
 
@@ -196,6 +197,7 @@ class AudioModel(BaseModel):
 
 
 # Video generation types
+
 
 class VideoClip(BaseModel):
     """A single generated video clip."""
