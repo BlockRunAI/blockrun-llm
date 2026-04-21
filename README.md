@@ -1,6 +1,6 @@
 # BlockRun LLM SDK (Python)
 
-> **blockrun-llm** is a Python SDK for accessing 43+ large language models (GPT-5, Claude, Gemini, DeepSeek, NVIDIA, and more) with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required — your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
+> **blockrun-llm** is a Python SDK for accessing 80+ large language models (GPT-5.x, Claude 4.x, Gemini 3.x, DeepSeek, Grok 4.x, NVIDIA free-tier, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, X/Twitter APIs, and Pyth-backed market data — all with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required; your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
 
 [![PyPI](https://img.shields.io/pypi/v/blockrun-llm.svg)](https://pypi.org/project/blockrun-llm/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)

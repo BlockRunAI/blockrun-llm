@@ -1,6 +1,6 @@
 # BlockRun LLM SDK (Python)
 
-Python SDK for 43+ LLMs with automatic USDC micropayments via x402. No API keys — wallet signature is authentication.
+Python SDK for 80+ LLMs plus image/video/music generation, standalone search, X/Twitter APIs, and Pyth-backed market data — all gated by USDC micropayments via x402. No API keys — wallet signature is authentication.
 
 ## Commands
 
@@ -27,7 +27,12 @@ blockrun_llm/
 ├── types.py                 # Type definitions
 ├── validation.py            # Input validation
 ├── cache.py                 # Response caching
-├── image.py                 # Image generation
+├── image.py                 # Image generation (+ image-to-image)
+├── music.py                 # Music generation
+├── video.py                 # Video generation
+├── search.py                # Standalone Grok Live Search
+├── x_client.py              # X/Twitter (AttentionVC) endpoints
+├── price.py                 # Pyth market data (crypto/fx/commodity/stocks)
 └── anthropic_client.py      # Anthropic-compatible client
 ```
 

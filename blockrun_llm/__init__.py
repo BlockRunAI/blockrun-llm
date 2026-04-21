@@ -54,6 +54,9 @@ from .solana_client import SolanaLLMClient
 from .image import ImageClient
 from .music import MusicClient
 from .video import VideoClient
+from .search import SearchClient
+from .x_client import XClient
+from .price import PriceClient
 from .types import (
     ChatMessage,
     ChatResponse,
@@ -101,6 +104,11 @@ from .types import (
     XArticlesRisingResponse,
     XAuthorAnalyticsResponse,
     XCompareAuthorsResponse,
+    # Pyth market data types
+    PricePoint,
+    PriceBar,
+    PriceHistoryResponse,
+    SymbolListResponse,
 )
 from .wallet import (
     setup_agent_wallet,  # Entry point for agents (auto-creates wallet)
@@ -133,7 +141,7 @@ from .solana_wallet import (
 )
 from .cache import clear_cache, get_cost_log_summary
 
-__version__ = "0.13.0"
+__version__ = "0.14.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -151,6 +159,9 @@ __all__ = [
     "ImageClient",
     "MusicClient",
     "VideoClient",
+    "SearchClient",
+    "XClient",
+    "PriceClient",
     "ChatMessage",
     "ChatResponse",
     "Model",
@@ -195,6 +206,11 @@ __all__ = [
     "XArticlesRisingResponse",
     "XAuthorAnalyticsResponse",
     "XCompareAuthorsResponse",
+    # Pyth market data types
+    "PricePoint",
+    "PriceBar",
+    "PriceHistoryResponse",
+    "SymbolListResponse",
     # Wallet utilities
     "get_or_create_wallet",
     "get_wallet_address",
