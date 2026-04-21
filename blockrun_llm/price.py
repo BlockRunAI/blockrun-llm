@@ -1,23 +1,25 @@
 """
 BlockRun Price Client - Pyth-backed market data via x402.
 
-Backend endpoints:
+Backend endpoints (payment gating mirrors CategoryConfig.paid in
+blockrun/src/lib/pyth-handler.ts — crypto/fx/commodity are free across
+price+history+list; only usstock and stocks/{market} charge):
 
     GET /v1/crypto/price/{symbol}              (free)
-    GET /v1/crypto/history/{symbol}?...        (paid)
-    GET /v1/crypto/list?q=&limit=              (free discovery)
+    GET /v1/crypto/history/{symbol}?...        (free)
+    GET /v1/crypto/list?q=&limit=              (free)
     GET /v1/fx/price/{symbol}                  (free)
-    GET /v1/fx/history/{symbol}?...            (paid)
-    GET /v1/fx/list
+    GET /v1/fx/history/{symbol}?...            (free)
+    GET /v1/fx/list                            (free)
     GET /v1/commodity/price/{symbol}           (free)
-    GET /v1/commodity/history/{symbol}?...     (paid)
-    GET /v1/commodity/list
+    GET /v1/commodity/history/{symbol}?...     (free)
+    GET /v1/commodity/list                     (free)
     GET /v1/usstock/price/{symbol}             (paid — legacy alias for stocks/us)
     GET /v1/usstock/history/{symbol}?...       (paid)
-    GET /v1/usstock/list
+    GET /v1/usstock/list                       (free)
     GET /v1/stocks/{market}/price/{symbol}     (paid — market ∈ {us,hk,jp,kr,gb,de,fr,nl,ie,lu,cn,ca})
     GET /v1/stocks/{market}/history/{symbol}   (paid)
-    GET /v1/stocks/{market}/list
+    GET /v1/stocks/{market}/list               (free)
 
 Usage:
     from blockrun_llm import PriceClient
