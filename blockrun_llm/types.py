@@ -49,6 +49,12 @@ class ChatMessage(BaseModel):
     name: Optional[str] = None  # For tool messages
     tool_call_id: Optional[str] = None  # For tool result messages
     tool_calls: Optional[List[ToolCall]] = None  # For assistant messages with tool calls
+    # Extended fields returned by reasoning-capable upstream providers
+    # (DeepSeek Reasoner, Grok 4 reasoning, xAI multi-agent, etc.).
+    # Backend strips these from inbound requests but may forward them on the
+    # response side, so we accept them as optional.
+    reasoning_content: Optional[str] = None
+    thinking: Optional[str] = None
 
 
 class ChatChoice(BaseModel):
@@ -66,6 +72,10 @@ class ChatUsage(BaseModel):
     completion_tokens: int
     total_tokens: int
     num_sources_used: Optional[int] = None  # xAI Live Search sources used
+    # Anthropic prompt caching — populated on anthropic/* models when cache
+    # headers are sent. Reads are cheaper; writes incur a one-time surcharge.
+    cache_read_input_tokens: Optional[int] = None
+    cache_creation_input_tokens: Optional[int] = None
 
 
 class ChatResponse(BaseModel):
@@ -87,11 +97,17 @@ class Model(BaseModel):
     name: str
     provider: str
     description: str
-    input_price: float  # Per 1M tokens
-    output_price: float  # Per 1M tokens
+    input_price: float  # Per 1M tokens (0 when billing_mode != "paid")
+    output_price: float  # Per 1M tokens (0 when billing_mode != "paid")
     context_window: int
     max_output: int
     available: bool = True
+    # Extended metadata surfaced by /v1/models. `billing_mode` is one of
+    # "paid" (per-token), "flat" (flat_price per request) or "free".
+    billing_mode: Optional[Literal["paid", "flat", "free"]] = None
+    flat_price: Optional[float] = None
+    categories: Optional[List[str]] = None  # e.g. ["chat","reasoning","coding","vision"]
+    hidden: Optional[bool] = None  # True for deprecated/superseded models still routable
 
 
 class PaymentRequirement(BaseModel):
@@ -591,3 +607,52 @@ class XCompareAuthorsResponse(BaseModel):
     """Response from X/Twitter compare authors endpoint."""
 
     data: Dict[str, Any]
+
+
+# Pyth-backed market data types (crypto, stocks, fx, commodity)
+class PricePoint(BaseModel):
+    """A single latest price quote from the Pyth network."""
+
+    symbol: str
+    price: float
+    publish_time: Optional[int] = None  # Unix seconds
+    confidence: Optional[float] = None
+    feed_id: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
+class PriceBar(BaseModel):
+    """OHLC bar in a historical price series."""
+
+    t: Optional[int] = None  # Bar open time (unix seconds)
+    o: Optional[float] = None
+    h: Optional[float] = None
+    l: Optional[float] = None  # noqa: E741 — Pyth bar field name
+    c: Optional[float] = None
+    v: Optional[float] = None
+
+    class Config:
+        extra = "allow"
+
+
+class PriceHistoryResponse(BaseModel):
+    """Response from a historical price endpoint."""
+
+    symbol: str
+    resolution: Optional[str] = None
+    bars: List[PriceBar] = []
+
+    class Config:
+        extra = "allow"
+
+
+class SymbolListResponse(BaseModel):
+    """Response from a market symbol list endpoint."""
+
+    symbols: List[Dict[str, Any]] = []
+    count: Optional[int] = None
+
+    class Config:
+        extra = "allow"
