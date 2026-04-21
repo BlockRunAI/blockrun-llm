@@ -270,6 +270,57 @@ result = client.generate(
 )
 ```
 
+## Standalone Search (`SearchClient`)
+
+`SearchClient` wraps `POST /v1/search` — standalone Grok Live Search with
+automatic x402 payment. Pricing: `$0.025/source + margin`
+(10 sources ≈ `$0.26`).
+
+```python
+from blockrun_llm import SearchClient
+
+client = SearchClient()
+result = client.search(
+    "Latest news on x402 adoption",
+    sources=["x", "web"],
+    max_results=10,
+)
+print(result.summary)
+for url in result.citations or []:
+    print(url)
+```
+
+## Market Data (`PriceClient`)
+
+Pyth-backed realtime quotes and OHLC history across crypto, FX, commodities
+and 12 global equity markets. Crypto / FX / commodity are **fully free**
+across price, history and list; stocks (`stocks/{market}` and the `usstock`
+legacy alias) charge `$0.001` per price or history call. Pass
+`require_wallet=False` when you only need free endpoints.
+
+```python
+from blockrun_llm import PriceClient
+
+# Free usage — no wallet
+p = PriceClient(require_wallet=False)
+btc = p.price("crypto", "BTC-USD")
+eur = p.price("fx", "EUR-USD")
+symbols = p.list_symbols("crypto", q="sol", limit=20)
+
+# Paid — requires a wallet
+p2 = PriceClient()
+aapl = p2.price("stocks", "AAPL", market="us")
+bars = p2.history(
+    "stocks", "AAPL",
+    market="us",
+    resolution="D",
+    from_ts=1_700_000_000,
+    to_ts=1_710_000_000,
+)
+```
+
+Supported stock markets: `us, hk, jp, kr, gb, de, fr, nl, ie, lu, cn, ca`.
+
 ## X/Twitter Data (Powered by AttentionVC)
 
 Access X/Twitter user profiles, followers, and followings via [AttentionVC](https://attentionvc.ai) partner API. No API keys needed — pay-per-request via x402.
