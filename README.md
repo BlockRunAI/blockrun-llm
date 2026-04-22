@@ -81,7 +81,7 @@ client = LLMClient()
 # Auto-routes to cheapest capable model
 result = client.smart_chat("What is 2+2?")
 print(result.response)  # '4'
-print(result.model)     # 'nvidia/kimi-k2.5' (cheap, fast)
+print(result.model)     # 'moonshot/kimi-k2.5' (cheap, fast — previously nvidia/kimi-k2.5)
 print(f"Saved {result.routing.savings * 100:.0f}%")  # 'Saved 94%'
 
 # Complex reasoning task -> routes to reasoning model
@@ -122,7 +122,7 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 
 | Tier | Example Tasks | Auto Profile Model |
 |------|---------------|-------------------|
-| SIMPLE | "What is 2+2?", definitions | nvidia/kimi-k2.5 |
+| SIMPLE | "What is 2+2?", definitions | moonshot/kimi-k2.5 |
 | MEDIUM | Code snippets, explanations | google/gemini-2.5-flash |
 | COMPLEX | Architecture, long documents | google/gemini-3.1-pro |
 | REASONING | Proofs, multi-step reasoning | deepseek/deepseek-reasoner |
@@ -201,21 +201,23 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 | `zai/glm-5-turbo` | $1.20/M | $4.00/M | 200K |
 
 ### NVIDIA (Free & Hosted)
+
+Free tier refreshed 2026-04-21: retired Nemotron family, `mistral-large-3-675b`,
+`devstral-2-123b`, `qwen3.5-397b-a17b` and paid `nvidia/kimi-k2.5` (the backend
+now auto-redirects these IDs to the replacements below).
+
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `nvidia/nemotron-ultra-253b` | **FREE** | **FREE** | 131K | NVIDIA's largest reasoning model |
-| `nvidia/nemotron-3-super-120b` | **FREE** | **FREE** | 131K | General-purpose 120B |
-| `nvidia/nemotron-super-49b` | **FREE** | **FREE** | 131K | Efficient 49B |
-| `nvidia/mistral-large-3-675b` | **FREE** | **FREE** | 131K | Mistral Large 675B |
-| `nvidia/qwen3-coder-480b` | **FREE** | **FREE** | 131K | Code generation 480B |
-| `nvidia/devstral-2-123b` | **FREE** | **FREE** | 131K | Dev-focused 123B |
+| `nvidia/qwen3-next-80b-a3b-thinking` | **FREE** | **FREE** | 131K | Reasoning flagship — 116 tok/s, thinking mode |
+| `nvidia/mistral-small-4-119b` | **FREE** | **FREE** | 131K | Fastest chat — 114 tok/s |
+| `nvidia/glm-4.7` | **FREE** | **FREE** | 131K | GLM-4.7 with thinking mode — 237 tok/s |
+| `nvidia/llama-4-maverick` | **FREE** | **FREE** | 131K | Meta Llama 4 Maverick MoE |
+| `nvidia/qwen3-coder-480b` | **FREE** | **FREE** | 131K | Coding-optimised 480B MoE |
 | `nvidia/deepseek-v3.2` | **FREE** | **FREE** | 131K | DeepSeek V3.2 hosted |
-| `nvidia/glm-4.7` | **FREE** | **FREE** | 131K | GLM-4.7 hosted |
-| `nvidia/llama-4-maverick` | **FREE** | **FREE** | 131K | Meta Llama 4 Maverick |
-| `nvidia/gpt-oss-120b` | **FREE** | **FREE** | 128K | OpenAI open-weight 120B |
-| `nvidia/gpt-oss-20b` | **FREE** | **FREE** | 128K | OpenAI open-weight 20B |
+| `nvidia/gpt-oss-120b` | **FREE** | **FREE** | 128K | OpenAI open-weight 120B — 123 tok/s |
+| `nvidia/gpt-oss-20b` | **FREE** | **FREE** | 128K | OpenAI open-weight 20B — 155 tok/s |
+| `moonshot/kimi-k2.5` | $0.60/M | $3.00/M | 262K | Kimi K2.5 direct from Moonshot (replaces `nvidia/kimi-k2.5`) |
 | `moonshot/kimi-k2.6` | $0.95/M | $4.00/M | 256K | Moonshot flagship (vision + reasoning_content) |
-| `nvidia/kimi-k2.5` | FREE | FREE | 1M | Moonshot 1T MoE hosted by NVIDIA (free tier) |
 
 ### Testnet Models (Base Sepolia)
 | Model | Price |
