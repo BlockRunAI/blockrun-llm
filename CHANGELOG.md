@@ -2,6 +2,21 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.16.0
+
+- **VideoClient switches to async submit+poll**. Upstream `/v1/videos/generations`
+  moved from sync to async on 2026-04-23 (submit returns a job id; client polls
+  until completion). Public signature of `VideoClient.generate(...)` is unchanged
+  — still blocks until the video is ready and returns `VideoResponse` with the
+  MP4 URL and tx hash. Internally the client now signs once, submits, and
+  replays the same signature on GET polls every 5s until upstream completes.
+  Settlement only fires on the first completed poll, so upstream failure or
+  budget exhaustion = zero charge.
+- Added `budget_seconds` parameter to `generate()` (default 300s) to cap the
+  polling window.
+- Bumped advertised `max_timeout_seconds` on video requests from 300s to 600s
+  so the signed auth stays valid across the full polling window.
+
 ## 0.15.0
 
 - **New image model: `openai/gpt-image-2`** (ChatGPT Images 2.0). Reasoning-driven generation with multilingual text rendering + character consistency. Pricing: $0.06 for 1024² / $0.12 for 1536×1024 or 1024×1536. Supports both `client.generate()` and `client.edit()` via the `/v1/images/image2image` endpoint.
