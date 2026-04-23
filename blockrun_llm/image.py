@@ -126,7 +126,9 @@ class ImageClient:
             model: Model ID (default: "google/nano-banana")
                    Options: "google/nano-banana", "google/nano-banana-pro",
                             "openai/dall-e-3", "openai/gpt-image-1",
-                            "zai/cogview-4"
+                            "openai/gpt-image-2", "zai/cogview-4",
+                            "xai/grok-imagine-image", "xai/grok-imagine-image-pro",
+                            "black-forest/flux-1.1-pro"
             size: Image size (default: "1024x1024")
             n: Number of images to generate (default: 1)
 
@@ -165,6 +167,7 @@ class ImageClient:
             prompt: Text description of the desired edit
             image: Base64-encoded image or URL of the source image
             model: Model ID (default: "openai/gpt-image-1")
+                   Edit-supported: "openai/gpt-image-1", "openai/gpt-image-2"
             mask: Optional base64-encoded mask image
             size: Image size (default: "1024x1024")
             n: Number of images to generate (default: 1)

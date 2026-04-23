@@ -60,6 +60,11 @@ class VideoClient:
 
     DEFAULT_API_URL = "https://blockrun.ai/api"
     DEFAULT_MODEL = "xai/grok-imagine-video"
+    # Available video models:
+    #   xai/grok-imagine-video ($0.05/sec, 8s default)
+    #   bytedance/seedance-1.5-pro ($0.03/sec, 720p, 5s default, up to 10s)
+    #   bytedance/seedance-2.0-fast ($0.15/sec, ~60-80s gen time)
+    #   bytedance/seedance-2.0 ($0.30/sec, 720p Pro quality)
     DEFAULT_TIMEOUT = 300.0  # video gen + polling can take up to 3 min
 
     def __init__(
