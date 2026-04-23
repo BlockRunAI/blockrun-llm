@@ -245,6 +245,7 @@ All models below have been tested end-to-end via the Python SDK (Mar 2026):
 |-------|-------|
 | `openai/dall-e-3` | $0.04-0.08/image |
 | `openai/gpt-image-1` | $0.02-0.04/image |
+| `openai/gpt-image-2` | $0.06-0.12/image (reasoning-driven, multilingual text rendering, character consistency) |
 | `black-forest/flux-1.1-pro` | $0.04/image |
 | `google/nano-banana` | $0.05/image |
 | `google/nano-banana-pro` | $0.10-0.15/image |
@@ -252,10 +253,15 @@ All models below have been tested end-to-end via the Python SDK (Mar 2026):
 | `xai/grok-imagine-image-pro` | $0.07/image |
 | `zai/cogview-4` | $0.015/image |
 
+Image editing (`client.edit`): `openai/gpt-image-1` and `openai/gpt-image-2` both support the `/v1/images/image2image` endpoint.
+
 ### Video Generation
 | Model | Price |
 |-------|-------|
 | `xai/grok-imagine-video` | $0.05/sec (8s default → $0.42/clip) |
+| `bytedance/seedance-1.5-pro` | $0.03/sec (5s default, up to 10s, 720p) |
+| `bytedance/seedance-2.0-fast` | $0.15/sec (~60-80s gen, sweet-spot price/quality) |
+| `bytedance/seedance-2.0` | $0.30/sec (720p Pro) |
 
 ```python
 from blockrun_llm import VideoClient

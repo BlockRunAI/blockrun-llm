@@ -2,6 +2,17 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.15.0
+
+- **New image model: `openai/gpt-image-2`** (ChatGPT Images 2.0). Reasoning-driven generation with multilingual text rendering + character consistency. Pricing: $0.06 for 1024² / $0.12 for 1536×1024 or 1024×1536. Supports both `client.generate()` and `client.edit()` via the `/v1/images/image2image` endpoint.
+- **New video models: 3 ByteDance Seedance variants** on `VideoClient`:
+  - `bytedance/seedance-1.5-pro` — $0.03/sec, 720p, 5s default (up to 10s).
+  - `bytedance/seedance-2.0-fast` — $0.15/sec, ~60-80s generation, sweet-spot price/quality.
+  - `bytedance/seedance-2.0` — $0.30/sec, 720p Pro quality.
+  All support text-to-video and image-to-video. Pass the model ID to `VideoClient.generate(..., model=...)`.
+- README Image/Video sections list new models; image editing section notes `gpt-image-1` and `gpt-image-2` as supported.
+- Also: `pyproject.toml` version was stuck at 0.13.0 despite `__version__` saying 0.14.1 (prevented PyPI publishes from shipping the NVIDIA refresh). Both now aligned at 0.15.0.
+
 ## 0.14.1
 
 - **NVIDIA free-tier refresh (backend 2026-04-21).** Router updated to point at the current survivors + the two new models: `nvidia/qwen3-next-80b-a3b-thinking` (reasoning flagship, 116 tok/s) and `nvidia/mistral-small-4-119b` (fastest free chat, 114 tok/s).
