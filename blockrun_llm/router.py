@@ -10,7 +10,7 @@ Usage:
     client = LLMClient()
     result = client.smart_chat("What is 2+2?")
     print(result["response"])  # '4'
-    print(result["model"])     # 'nvidia/kimi-k2.5'
+    print(result["model"])     # 'moonshot/kimi-k2.5' (AUTO Simple picks here)
     print(f"Saved {result['routing']['savings'] * 100:.0f}%")
 """
 
