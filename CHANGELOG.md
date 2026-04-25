@@ -2,6 +2,15 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.16.1
+
+- **`ImageClient` default timeout 120s → 200s.** The gateway's per-call OpenAI
+  timeout for `gpt-image-2` was bumped to 180s server-side (it routinely takes
+  ~120-180s at 1536x1024 and larger), so the SDK's old 120s default was cutting
+  the request before the server had a chance to return. New default leaves
+  ~20s of buffer above the server cap. Existing users passing an explicit
+  `timeout=` are unaffected.
+
 ## 0.16.0
 
 - **VideoClient switches to async submit+poll**. Upstream `/v1/videos/generations`
