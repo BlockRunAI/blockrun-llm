@@ -111,7 +111,7 @@ class AnthropicClient:
 
         # Works with any BlockRun model in Anthropic format
         response = client.messages.create(
-            model="openai/gpt-5.4",
+            model="openai/gpt-5.5",
             max_tokens=1024,
             messages=[{"role": "user", "content": "Hello from GPT!"}]
         )

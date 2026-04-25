@@ -2,6 +2,13 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.17.0
+
+- **New flagship model: `openai/gpt-5.5`** (released 2026-04-23, first fully retrained base since GPT-4.5). 1M context, 128K output, native agent + computer use. Pricing $5.00 / $30.00 per 1M tokens.
+- **Smart router: `PREMIUM_TIERS["MEDIUM"]` now points at `openai/gpt-5.5`**; `gpt-5.4` demoted to first fallback. The cost-savings baseline in `estimate_cost` was rebased from GPT-5.4 ($2.50/$15) to GPT-5.5 ($5.00/$30) so reported savings stay meaningful against the current flagship.
+- Doc-example refresh: `AnthropicClient` cross-provider example and `examples/arbitrage_analyzer.py` `frontier` tier now reference `openai/gpt-5.5`.
+- Reconciles `__version__` and `VERSION` (previously drifted at 0.16.1 vs 0.15.0); both now 0.17.0.
+
 ## 0.16.1
 
 - **`ImageClient` default timeout 120s → 200s.** The gateway's per-call OpenAI

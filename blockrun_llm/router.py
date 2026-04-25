@@ -282,8 +282,8 @@ PREMIUM_TIERS: Dict[Tier, TierConfig] = {
         "fallback": ["openai/gpt-5.4-nano", "anthropic/claude-haiku-4.5"],
     },
     "MEDIUM": {
-        "primary": "openai/gpt-5.4",
-        "fallback": ["google/gemini-2.5-pro", "anthropic/claude-sonnet-4.6"],
+        "primary": "openai/gpt-5.5",
+        "fallback": ["openai/gpt-5.4", "google/gemini-2.5-pro", "anthropic/claude-sonnet-4.6"],
     },
     "COMPLEX": {
         "primary": "anthropic/claude-opus-4.5",
@@ -556,9 +556,9 @@ def route(
     output_cost = (max_output_tokens / 1_000_000) * pricing.get("output_price", 0)
     cost_estimate = input_cost + output_cost
 
-    # Baseline cost (GPT-5.4 pricing: $2.50/$15)
-    baseline_input = (estimated_tokens / 1_000_000) * 2.50
-    baseline_output = (max_output_tokens / 1_000_000) * 15.0
+    # Baseline cost (GPT-5.5 pricing: $5.00/$30)
+    baseline_input = (estimated_tokens / 1_000_000) * 5.00
+    baseline_output = (max_output_tokens / 1_000_000) * 30.0
     baseline_cost = baseline_input + baseline_output
 
     # Savings calculation
