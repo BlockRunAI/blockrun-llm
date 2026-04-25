@@ -42,7 +42,7 @@ class ArbitrageAnalyzer:
         "fast": "openai/gpt-5.4-nano",  # $0.20/M input - quick analysis
         "balanced": "anthropic/claude-haiku-4.5",  # $1.00/M input - good reasoning
         "deep": "anthropic/claude-sonnet-4.6",  # $3.00/M input - thorough analysis
-        "frontier": "openai/gpt-5.2",  # $1.75/M input - latest capabilities
+        "frontier": "openai/gpt-5.5",  # $5.00/M input - latest capabilities (1M context)
     }
 
     def __init__(self, model_tier: str = "fast"):

@@ -139,6 +139,13 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 
 ## Available Models
 
+### OpenAI GPT-5.5 Family
+Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 128K output, native agent + computer use.
+
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `openai/gpt-5.5` | $5.00/M | $30.00/M | 1M |
+
 ### OpenAI GPT-5.4 Family
 | Model | Input Price | Output Price | Context |
 |-------|-------------|--------------|---------|
