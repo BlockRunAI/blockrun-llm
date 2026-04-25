@@ -63,7 +63,7 @@ class ImageClient:
         self,
         private_key: Optional[str] = None,
         api_url: Optional[str] = None,
-        timeout: float = 120.0,  # Images take longer to generate
+        timeout: float = 200.0,  # gpt-image-2 at >=1536px can take ~180s server-side; 200s gives buffer
     ):
         """
         Initialize the BlockRun Image client.
@@ -71,7 +71,7 @@ class ImageClient:
         Args:
             private_key: EVM wallet private key (or set BLOCKRUN_WALLET_KEY env var)
             api_url: API endpoint URL (default: https://blockrun.ai/api)
-            timeout: Request timeout in seconds (default: 120 for images)
+            timeout: Request timeout in seconds (default: 200 for images — gpt-image-2 at large sizes can run ~180s server-side)
 
         Raises:
             ValueError: If no private key is provided or found in env
