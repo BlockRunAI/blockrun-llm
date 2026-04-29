@@ -4,12 +4,12 @@ Guidance for AI coding agents working with the BlockRun Python SDK.
 
 ## Project Overview
 
-**blockrun-llm** is a Python SDK for pay-per-request access to AI models (GPT, Claude, Gemini, DeepSeek, NVIDIA) via x402 micropayments on Base.
+**blockrun-llm** is a Python SDK for pay-per-request access to AI models (GPT, Claude, Gemini, DeepSeek, NVIDIA) via x402 micropayments on Base. **Includes 8 fully-free NVIDIA-hosted models** (Qwen3, Llama 4, GLM-4.7, GPT-OSS, DeepSeek V3.2, Mistral) — accessible via `routing_profile="free"` or any `nvidia/*` model id.
 
 **Package:** `blockrun-llm` (PyPI)
 **Python:** >=3.9
 **Network:** Base (Chain ID: 8453)
-**Payment:** USDC via x402 v2
+**Payment:** USDC via x402 v2 (or $0 for `nvidia/*` free tier)
 
 ## Repository Structure
 

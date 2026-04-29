@@ -1,6 +1,8 @@
 # BlockRun LLM SDK (Python)
 
-> **blockrun-llm** is a Python SDK for accessing 80+ large language models (GPT-5.x, Claude 4.x, Gemini 3.x, DeepSeek, Grok 4.x, NVIDIA free-tier, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, X/Twitter APIs, and Pyth-backed market data — all with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required; your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
+> **blockrun-llm** is a Python SDK for accessing 80+ large language models (GPT-5.x, Claude 4.x, Gemini 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, X/Twitter APIs, and Pyth-backed market data — all with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required; your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
+>
+> 🆓 **Includes 8 fully-free NVIDIA-hosted models** (Qwen3, Llama 4, GLM-4.7, GPT-OSS, DeepSeek V3.2, Mistral) — zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any `nvidia/*` model directly.
 
 [![PyPI](https://img.shields.io/pypi/v/blockrun-llm.svg)](https://pypi.org/project/blockrun-llm/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -38,6 +40,26 @@ response = client.chat("openai/gpt-5.2", "Hello!")
 ```
 
 That's it. The SDK handles x402 payment automatically.
+
+### Try It Free (No USDC Required)
+
+Want to kick the tires before funding a wallet? Route to BlockRun's free NVIDIA tier:
+
+```python
+from blockrun_llm import LLMClient
+
+client = LLMClient()  # Wallet still required for signing, but $0 charged
+
+# Option 1: call a free model directly
+response = client.chat("nvidia/qwen3-next-80b-a3b-thinking", "Explain x402 in 1 sentence")
+
+# Option 2: let the smart router pick the best free model per request
+result = client.smart_chat("What is 2+2?", routing_profile="free")
+print(result.model)     # e.g. 'nvidia/gpt-oss-120b'
+print(result.response)  # '4'
+```
+
+Free models include `nvidia/qwen3-next-80b-a3b-thinking`, `nvidia/glm-4.7`, `nvidia/llama-4-maverick`, `nvidia/qwen3-coder-480b`, `nvidia/deepseek-v3.2`, `nvidia/gpt-oss-120b`, `nvidia/gpt-oss-20b`, `nvidia/mistral-small-4-119b`. See the [NVIDIA (Free & Hosted)](#nvidia-free--hosted) table for full specs.
 
 ## Solana Support
 
@@ -93,7 +115,7 @@ print(result.model)  # 'deepseek/deepseek-reasoner'
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | nvidia/gpt-oss-120b only (FREE) | Testing, development |
+| `free` | NVIDIA free tier — smart-routes across 8 models (Qwen3, GLM-4.7, Llama 4, GPT-OSS, DeepSeek V3.2, Mistral) | Zero-cost testing, dev, prod |
 | `eco` | Cheapest models per tier (DeepSeek, NVIDIA) | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
 | `premium` | Top-tier models (OpenAI, Anthropic) | Quality-critical tasks |
