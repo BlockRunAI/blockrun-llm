@@ -2,7 +2,7 @@
 
 > **blockrun-llm** is a Python SDK for accessing 80+ large language models (GPT-5.x, Claude 4.x, Gemini 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, X/Twitter APIs, and Pyth-backed market data — all with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required; your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
 >
-> 🆓 **Includes 8 fully-free NVIDIA-hosted models** (Qwen3, Llama 4, GLM-4.7, GPT-OSS, DeepSeek V3.2, Mistral) — zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any `nvidia/*` model directly.
+> 🆓 **Includes 9 fully-free NVIDIA-hosted models** — DeepSeek V4 Pro/Flash (1M context), Nemotron Nano Omni (vision), Qwen3, Llama 4, GLM-4.7, Mistral. Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any `nvidia/*` model directly.
 
 [![PyPI](https://img.shields.io/pypi/v/blockrun-llm.svg)](https://pypi.org/project/blockrun-llm/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -55,22 +55,25 @@ response = client.chat("nvidia/qwen3-next-80b-a3b-thinking", "Explain x402 in 1 
 
 # Option 2: let the smart router pick the best free model per request
 result = client.smart_chat("What is 2+2?", routing_profile="free")
-print(result.model)     # e.g. 'nvidia/gpt-oss-120b'
+print(result.model)     # e.g. 'nvidia/deepseek-v4-flash' (cheapest capable for SIMPLE tier)
 print(result.response)  # '4'
 ```
 
-**Available free models** (input + output both $0, all NVIDIA-hosted, last refreshed 2026-04-21):
+**Available free models** (input + output both $0, all NVIDIA-hosted, last refreshed 2026-04-28):
 
-| Model ID | Context | Speed | Best For |
-|----------|---------|-------|----------|
-| `nvidia/qwen3-next-80b-a3b-thinking` | 131K | 116 tok/s | Reasoning flagship — thinking mode |
-| `nvidia/mistral-small-4-119b` | 131K | 114 tok/s | Fastest free chat |
-| `nvidia/glm-4.7` | 131K | 237 tok/s | GLM-4.7 with thinking mode |
-| `nvidia/llama-4-maverick` | 131K | — | Meta Llama 4 Maverick MoE |
-| `nvidia/qwen3-coder-480b` | 131K | — | Coding-optimised 480B MoE |
-| `nvidia/deepseek-v3.2` | 131K | — | DeepSeek V3.2 hosted |
-| `nvidia/gpt-oss-120b` | 128K | 123 tok/s | OpenAI open-weight 120B |
-| `nvidia/gpt-oss-20b` | 128K | 155 tok/s | OpenAI open-weight 20B (smallest, fastest) |
+| Model ID | Context | Best For |
+|----------|---------|----------|
+| `nvidia/deepseek-v4-pro` | 1M | Flagship reasoning — MMLU-Pro 87.5, GPQA 90.1, SWE-bench 80.6, LiveCodeBench 93.5 |
+| `nvidia/deepseek-v4-flash` | 1M | ~5× faster than V4 Pro — chat, summarization, light reasoning (weaker factual recall) |
+| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Only vision-capable free model — text + images + video (≤2 min) + audio (≤1 hr) |
+| `nvidia/qwen3-next-80b-a3b-thinking` | 131K | 116 tok/s reasoning with thinking mode |
+| `nvidia/mistral-small-4-119b` | 131K | 114 tok/s — fastest free chat |
+| `nvidia/glm-4.7` | 131K | 237 tok/s — GLM-4.7 with thinking mode |
+| `nvidia/llama-4-maverick` | 131K | Meta Llama 4 Maverick MoE |
+| `nvidia/qwen3-coder-480b` | 131K | Coding-optimised 480B MoE |
+| `nvidia/deepseek-v3.2` | 131K | Legacy V3.2 — auto-upgrades to V4 Pro via fallback |
+
+> Note: `nvidia/gpt-oss-120b` and `nvidia/gpt-oss-20b` were retired 2026-04-28 — NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement, which conflicts with our data-privacy policy.
 
 ## Solana Support
 
@@ -126,7 +129,7 @@ print(result.model)  # 'deepseek/deepseek-reasoner'
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier — smart-routes across 8 models (Qwen3, GLM-4.7, Llama 4, GPT-OSS, DeepSeek V3.2, Mistral) | Zero-cost testing, dev, prod |
+| `free` | NVIDIA free tier — smart-routes across 9 models (DeepSeek V4 Pro/Flash, Nemotron Nano Omni, Qwen3, GLM-4.7, Llama 4, Mistral) | Zero-cost testing, dev, prod |
 | `eco` | Cheapest models per tier (DeepSeek, NVIDIA) | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
 | `premium` | Top-tier models (OpenAI, Anthropic) | Quality-critical tasks |
