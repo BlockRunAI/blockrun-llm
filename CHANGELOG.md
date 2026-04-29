@@ -2,6 +2,11 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.17.1
+
+- **Smart router: AUTO/ECO `SIMPLE` primaries promoted from `moonshot/kimi-k2.5` → `moonshot/kimi-k2.6`** (Moonshot's flagship — 256K context, vision + `reasoning_content`, $0.95 in / $4.00 out per 1M). The catalog now hides `kimi-k2.5` as superseded, so it no longer appears in `/v1/models` and the SDK could not resolve its pricing — routing was silently falling through to the next fallback. `kimi-k2.5` retained as the first fallback for clients explicitly pinned to its pricing.
+- Doc refresh: README Smart Routing example output and SIMPLE tier table now reference `moonshot/kimi-k2.6`.
+
 ## 0.17.0
 
 - **New flagship model: `openai/gpt-5.5`** (released 2026-04-23, first fully retrained base since GPT-4.5). 1M context, 128K output, native agent + computer use. Pricing $5.00 / $30.00 per 1M tokens.

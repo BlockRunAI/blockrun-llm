@@ -10,7 +10,7 @@ Usage:
     client = LLMClient()
     result = client.smart_chat("What is 2+2?")
     print(result["response"])  # '4'
-    print(result["model"])     # 'moonshot/kimi-k2.5' (AUTO Simple picks here)
+    print(result["model"])     # 'moonshot/kimi-k2.6' (AUTO Simple picks here)
     print(f"Saved {result['routing']['savings'] * 100:.0f}%")
 """
 
@@ -225,11 +225,14 @@ DIMENSION_WEIGHTS = {
 
 AUTO_TIERS: Dict[Tier, TierConfig] = {
     "SIMPLE": {
-        # nvidia/kimi-k2.5 was retired 2026-04-21 (slow hosting).
-        # Backend still redirects to moonshot/kimi-k2.5; we point at the
-        # canonical target directly so offline routing stays honest.
-        "primary": "moonshot/kimi-k2.5",
+        # moonshot/kimi-k2.6 is Moonshot's flagship (256K context, vision +
+        # reasoning_content). kimi-k2.5 is hidden in the catalog (superseded)
+        # so it no longer appears in /v1/models pricing — routing here would
+        # silently fall back. k2.5 retained as fallback for clients that
+        # explicitly pricing-pin to it.
+        "primary": "moonshot/kimi-k2.6",
         "fallback": [
+            "moonshot/kimi-k2.5",
             "google/gemini-2.5-flash-lite",
             "nvidia/gpt-oss-120b",
             "deepseek/deepseek-chat",
@@ -258,9 +261,10 @@ AUTO_TIERS: Dict[Tier, TierConfig] = {
 
 ECO_TIERS: Dict[Tier, TierConfig] = {
     "SIMPLE": {
-        # See AUTO_TIERS note: redirect to Moonshot direct.
-        "primary": "moonshot/kimi-k2.5",
-        "fallback": ["nvidia/gpt-oss-120b", "deepseek/deepseek-chat"],
+        # See AUTO_TIERS note: kimi-k2.6 is the catalog flagship. kimi-k2.5
+        # is hidden so the SDK no longer sees its pricing.
+        "primary": "moonshot/kimi-k2.6",
+        "fallback": ["moonshot/kimi-k2.5", "nvidia/gpt-oss-120b", "deepseek/deepseek-chat"],
     },
     "MEDIUM": {
         "primary": "deepseek/deepseek-chat",
