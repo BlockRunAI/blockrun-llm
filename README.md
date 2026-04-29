@@ -59,7 +59,18 @@ print(result.model)     # e.g. 'nvidia/gpt-oss-120b'
 print(result.response)  # '4'
 ```
 
-Free models include `nvidia/qwen3-next-80b-a3b-thinking`, `nvidia/glm-4.7`, `nvidia/llama-4-maverick`, `nvidia/qwen3-coder-480b`, `nvidia/deepseek-v3.2`, `nvidia/gpt-oss-120b`, `nvidia/gpt-oss-20b`, `nvidia/mistral-small-4-119b`. See the [NVIDIA (Free & Hosted)](#nvidia-free--hosted) table for full specs.
+**Available free models** (input + output both $0, all NVIDIA-hosted, last refreshed 2026-04-21):
+
+| Model ID | Context | Speed | Best For |
+|----------|---------|-------|----------|
+| `nvidia/qwen3-next-80b-a3b-thinking` | 131K | 116 tok/s | Reasoning flagship — thinking mode |
+| `nvidia/mistral-small-4-119b` | 131K | 114 tok/s | Fastest free chat |
+| `nvidia/glm-4.7` | 131K | 237 tok/s | GLM-4.7 with thinking mode |
+| `nvidia/llama-4-maverick` | 131K | — | Meta Llama 4 Maverick MoE |
+| `nvidia/qwen3-coder-480b` | 131K | — | Coding-optimised 480B MoE |
+| `nvidia/deepseek-v3.2` | 131K | — | DeepSeek V3.2 hosted |
+| `nvidia/gpt-oss-120b` | 128K | 123 tok/s | OpenAI open-weight 120B |
+| `nvidia/gpt-oss-20b` | 128K | 155 tok/s | OpenAI open-weight 20B (smallest, fastest) |
 
 ## Solana Support
 
