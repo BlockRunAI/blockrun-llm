@@ -81,7 +81,7 @@ client = LLMClient()
 # Auto-routes to cheapest capable model
 result = client.smart_chat("What is 2+2?")
 print(result.response)  # '4'
-print(result.model)     # 'moonshot/kimi-k2.5' (cheap, fast — previously nvidia/kimi-k2.5)
+print(result.model)     # 'moonshot/kimi-k2.6' (Moonshot flagship — vision + reasoning_content)
 print(f"Saved {result.routing.savings * 100:.0f}%")  # 'Saved 94%'
 
 # Complex reasoning task -> routes to reasoning model
@@ -122,7 +122,7 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 
 | Tier | Example Tasks | Auto Profile Model |
 |------|---------------|-------------------|
-| SIMPLE | "What is 2+2?", definitions | moonshot/kimi-k2.5 |
+| SIMPLE | "What is 2+2?", definitions | moonshot/kimi-k2.6 |
 | MEDIUM | Code snippets, explanations | google/gemini-2.5-flash |
 | COMPLEX | Architecture, long documents | google/gemini-3.1-pro |
 | REASONING | Proofs, multi-step reasoning | deepseek/deepseek-reasoner |
