@@ -2,6 +2,24 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.19.0
+
+- **Predexon v2 endpoints exposed via typed helpers.** All v2 endpoints went live in production on 2026-05-07 (`blockrun-web-00451-cnw`). The generic `pm()` / `pm_query()` passthrough already handled them, but agents can now discover the new shape from method names + docstrings. Ten new convenience methods on `LLMClient` — each is a thin wrapper, no breaking changes to the existing `pm()` API:
+  - **Canonical cross-venue (Tier 1):** `pm_markets(**filters)`, `pm_listings(**filters)`, `pm_outcome(predexon_id)`. Predexon's unified data layer with cross-venue IDs across Polymarket, Kalshi, Limitless, Opinion, Predict.Fun.
+  - **Polymarket keyset pagination (Tier 1):** `pm_polymarket_markets_keyset(**filters)`, `pm_polymarket_events_keyset(**filters)` — cursor-based for stable traversal of large result sets.
+  - **Sports markets (Tier 1):** `pm_sports_categories()`, `pm_sports_markets(**filters)`.
+  - **Wallet identity & clustering (Tier 2):** `pm_wallet_identity(wallet)` (GET), `pm_wallet_identities(addresses)` (POST, up to 200), `pm_wallet_cluster(address)` (GET on-chain relationship graph).
+- `pm()` / `pm_query()` docstrings updated to advertise v2 examples and surface the Tier 1 / Tier 2 split inline.
+
+## 0.18.0
+
+- **DeepSeek V4 family in paid catalog.** Backend added `deepseek/deepseek-v4-pro` (1.6T MoE / 49B active, 1M context — strongest open-weight reasoner; MMLU-Pro 87.5, GPQA 90.1, SWE-bench 80.6, LiveCodeBench 93.5; **$0.50 in / $1.00 out per 1M under the 75% promo through 2026-05-31**, list $2.00/$4.00). The legacy `deepseek/deepseek-chat` and `deepseek/deepseek-reasoner` IDs are now V4 Flash non-thinking / thinking modes — repriced to **$0.20 in / $0.40 out per 1M, 1M context** (was $0.28/$0.42, 128K). Same upstream as `nvidia/deepseek-v4-flash` but on the paid endpoint with higher reliability and 5MB request bodies.
+- **Smart router: free tier primaries repointed to visible models.** `FREE_TIERS["SIMPLE"]` was pinned to `nvidia/gpt-oss-120b` (now `hidden: true` in catalog — privacy-delisted from `/v1/models` though `available: true` for direct callers) and `FREE_TIERS["MEDIUM"]` to `nvidia/deepseek-v3.2` (hidden — NVIDIA NIM hung, backend redirects to v4-flash). Both are absent from `/v1/models`, so Python's pricing dict (built from that endpoint) could not resolve them and SmartChat silently fell through. Repointed primaries to visible IDs: `SIMPLE` → `nvidia/mistral-small-4-119b`, `MEDIUM` → `nvidia/deepseek-v4-flash`. Direct calls by full ID (`client.chat("nvidia/gpt-oss-120b", ...)`) still work — only auto-routing changed.
+- **Smart router: V4 Pro promoted into reasoning fallbacks.** `AUTO_TIERS["REASONING"]` and `ECO_TIERS["REASONING"]` now list `deepseek/deepseek-v4-pro` as the first fallback after `deepseek-reasoner` (V4 Flash thinking stays primary because it's cheaper). `ECO_TIERS["COMPLEX"]` adds V4 Pro to fallbacks for harder reasoning tasks.
+- README refresh: DeepSeek pricing table shows V4 Pro / V4 Flash chat / V4 Flash reasoner with correct prices and 1M context. NVIDIA free table notes that `gpt-oss-120b/20b` are hidden from `/v1/models` but still callable by direct ID (re-enabled 2026-04-30 after a brief privacy delisting).
+- **`XClient` deprecated.** BlockRun's `/v1/x/*` (AttentionVC-partnered) integration was removed from the backend on 2026-04-30 (commit 80dcf52). The class is kept in the SDK so existing imports do not break, but instantiation now emits a `DeprecationWarning` — all calls return HTTP 404 until a replacement upstream is wired up.
+- **DeepSeek V4 thinking + tool-call multi-turn now works.** Backend commit `f8a2d44` (2026-05-03) preserves `reasoning_content` on assistant messages with `tool_calls` for DeepSeek V4 thinking-mode (`deepseek-reasoner` / `deepseek-v4-pro`) — previously the streaming `/v1/messages` path stripped it, causing upstream 400 "reasoning_content in the thinking mode must be passed back" on tool-using multi-turn sessions, which the route then mis-classified as transient 503 → 5 retries with backoff on a deterministic failure. SDK `ChatMessage` already carried `reasoning_content` and `thinking` fields, so the fix is purely server-side; this entry exists so users seeing past failures know they're resolved.
+
 ## 0.17.1
 
 - **Smart router: AUTO/ECO `SIMPLE` primaries promoted from `moonshot/kimi-k2.5` → `moonshot/kimi-k2.6`** (Moonshot's flagship — 256K context, vision + `reasoning_content`, $0.95 in / $4.00 out per 1M). The catalog now hides `kimi-k2.5` as superseded, so it no longer appears in `/v1/models` and the SDK could not resolve its pricing — routing was silently falling through to the next fallback. `kimi-k2.5` retained as the first fallback for clients explicitly pinned to its pricing.
