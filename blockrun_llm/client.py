@@ -1354,8 +1354,9 @@ class LLMClient:
         """
         Query Predexon prediction market data (GET endpoints).
 
-        Access real-time data from Polymarket, Kalshi, dFlow, and Binance Futures.
-        Powered by Predexon. $0.001 per request.
+        Access real-time data across Polymarket, Kalshi, Limitless, Opinion,
+        Predict.Fun, dFlow, sports, and Binance Futures. Powered by Predexon v2.
+        Tier 1 = $0.001/call, Tier 2 = $0.005/call.
 
         Args:
             path: Endpoint path, e.g. "polymarket/events", "kalshi/markets/12345"
@@ -1368,6 +1369,12 @@ class LLMClient:
             events = client.pm("polymarket/events")
             market = client.pm("kalshi/markets/KXBTC-25MAR14")
             results = client.pm("polymarket/search", q="bitcoin")
+            # v2 canonical cross-venue
+            markets = client.pm("markets", venue="polymarket", status="active")
+            # v2 sports
+            games = client.pm("sports/markets", league="NBA")
+            # v2 wallet identity
+            ident = client.pm("polymarket/wallet/identity/0xabc...")
         """
         return self._get_with_payment_raw(f"/v1/pm/{path}", params or None)
 
@@ -1375,19 +1382,79 @@ class LLMClient:
         """
         Structured query for Predexon prediction market data (POST endpoints).
 
-        For complex queries that require a JSON body. $0.005 per request.
+        For endpoints that require a JSON body, e.g. bulk wallet identity lookup.
+        Tier 1 = $0.001/call, Tier 2 = $0.005/call.
 
         Args:
-            path: Endpoint path, e.g. "polymarket/query", "kalshi/query"
+            path: Endpoint path, e.g. "polymarket/wallet/identities"
             query: JSON body for the structured query
 
         Returns:
             Raw response dict from Predexon API
 
         Example:
-            data = client.pm_query("polymarket/query", {"filter": "active", "limit": 10})
+            # v2 bulk wallet identity (up to 200 addresses)
+            batch = client.pm_query("polymarket/wallet/identities", {
+                "addresses": ["0xabc...", "0xdef..."],
+            })
         """
         return self._request_with_payment_raw(f"/v1/pm/{path}", query)
+
+    # ── PM convenience helpers (Predexon v2) ────────────────────────────────
+    # Thin wrappers over pm() / pm_query() for the most common v2 endpoints.
+    # All accept arbitrary keyword filters that are forwarded as query params.
+
+    def pm_markets(self, **params: Any) -> Dict[str, Any]:
+        """List canonical cross-venue markets (Predexon v2).
+
+        Filter with venue=, status=, category=, league=, event_id=,
+        pagination_key=. Tier 1 ($0.001/call).
+        """
+        return self.pm("markets", **params)
+
+    def pm_listings(self, **params: Any) -> Dict[str, Any]:
+        """List venue-native executable listings flattened across canonical
+        markets (Predexon v2). Tier 1 ($0.001/call)."""
+        return self.pm("markets/listings", **params)
+
+    def pm_outcome(self, predexon_id: str) -> Dict[str, Any]:
+        """Resolve a canonical Predexon outcome ID to its market context and
+        venue listings (Predexon v2). Tier 1 ($0.001/call)."""
+        return self.pm(f"outcomes/{predexon_id}")
+
+    def pm_polymarket_markets_keyset(self, **params: Any) -> Dict[str, Any]:
+        """Polymarket markets with cursor-based keyset pagination
+        (use pagination_key=). Tier 1 ($0.001/call)."""
+        return self.pm("polymarket/markets/keyset", **params)
+
+    def pm_polymarket_events_keyset(self, **params: Any) -> Dict[str, Any]:
+        """Polymarket events with cursor-based keyset pagination
+        (use pagination_key=). Tier 1 ($0.001/call)."""
+        return self.pm("polymarket/events/keyset", **params)
+
+    def pm_sports_categories(self) -> Dict[str, Any]:
+        """List available sports categories. Tier 1 ($0.001/call)."""
+        return self.pm("sports/categories")
+
+    def pm_sports_markets(self, **params: Any) -> Dict[str, Any]:
+        """List sports markets grouped by game. Filter with league=,
+        sport_type=, status=, venue=. Tier 1 ($0.001/call)."""
+        return self.pm("sports/markets", **params)
+
+    def pm_wallet_identity(self, wallet: str) -> Dict[str, Any]:
+        """Fetch identity + profile metadata for one wallet (ENS, Twitter,
+        portfolio, etc.). Tier 2 ($0.005/call)."""
+        return self.pm(f"polymarket/wallet/identity/{wallet}")
+
+    def pm_wallet_identities(self, addresses: List[str]) -> Dict[str, Any]:
+        """Bulk identity lookup for up to 200 wallet addresses (POST).
+        Tier 2 ($0.005/call)."""
+        return self.pm_query("polymarket/wallet/identities", {"addresses": addresses})
+
+    def pm_wallet_cluster(self, address: str) -> Dict[str, Any]:
+        """Discover wallets connected to a seed address via on-chain transfers
+        and identity proofs. Tier 2 ($0.005/call)."""
+        return self.pm(f"polymarket/wallet/{address}/cluster")
 
     def list_models(self) -> List[Dict[str, Any]]:
         """
