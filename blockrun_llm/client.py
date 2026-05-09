@@ -38,6 +38,7 @@ Usage:
 """
 
 import os
+import sys
 from typing import List, Dict, Any, Optional, Union
 import httpx
 from eth_account import Account
@@ -162,6 +163,30 @@ def list_image_models(api_url: str = "https://blockrun.ai/api") -> List[Dict[str
                 {},
             )
         return response.json().get("data", [])
+
+
+# =============================================================================
+# Shared helpers
+# =============================================================================
+
+
+def _should_fallback(exc: Exception) -> bool:
+    """Whether ``exc`` is the kind of transient failure that warrants trying
+    the next model in a fallback chain.
+
+    True for: timeouts, network/connection errors, and APIError with 5xx
+    status codes typically associated with upstream availability problems.
+
+    False for: 4xx client errors, PaymentError (wallet/balance issues), and
+    everything else — those are not "swap upstream and retry" situations.
+    """
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    if isinstance(exc, httpx.NetworkError):
+        return True
+    if isinstance(exc, APIError) and exc.status_code in (502, 503, 504, 522, 524):
+        return True
+    return False
 
 
 # =============================================================================
@@ -362,13 +387,16 @@ class LLMClient:
             routing_profile=routing_profile,
         )
 
-        # Make the chat request with selected model
+        # Make the chat request with selected model. Pass the tier's remaining
+        # models as fallbacks so a hung upstream (e.g. NVIDIA NIM) doesn't
+        # hard-fail when smart_chat could just walk to the next visible model.
         response = self.chat(
             model=decision["model"],
             prompt=prompt,
             system=system,
             max_tokens=max_tokens,
             temperature=temperature,
+            fallback_models=decision.get("fallbacks") or None,
         )
 
         return SmartChatResponse(
@@ -403,6 +431,7 @@ class LLMClient:
         temperature: Optional[float] = None,
         search: Optional[bool] = None,
         search_parameters: Optional[Dict[str, Any]] = None,
+        fallback_models: Optional[List[str]] = None,
     ) -> str:
         """
         Simple 1-line chat interface.
@@ -448,6 +477,7 @@ class LLMClient:
             temperature=temperature,
             search=search,
             search_parameters=search_parameters,
+            fallback_models=fallback_models,
         )
 
         return result.choices[0].message.content
@@ -464,6 +494,7 @@ class LLMClient:
         search_parameters: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
+        fallback_models: Optional[List[str]] = None,
     ) -> ChatResponse:
         """
         Full chat completion interface (OpenAI-compatible).
@@ -551,8 +582,28 @@ class LLMClient:
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
 
-        # Make request (with automatic payment handling)
-        return self._request_with_payment("/v1/chat/completions", body)
+        # Walk [model, *fallback_models] on retriable errors (timeouts, 5xx,
+        # network errors). Default behavior — single attempt — is preserved
+        # when fallback_models is None or empty.
+        attempts = [model, *(fallback_models or [])]
+        last_exc: Optional[Exception] = None
+        for i, attempt_model in enumerate(attempts):
+            body["model"] = attempt_model
+            try:
+                return self._request_with_payment("/v1/chat/completions", body)
+            except Exception as exc:
+                if not _should_fallback(exc):
+                    raise
+                last_exc = exc
+                if i + 1 < len(attempts):
+                    next_model = attempts[i + 1]
+                    sys.stderr.write(
+                        f"[blockrun_llm] {attempt_model} -> {next_model} "
+                        f"({type(exc).__name__}: {str(exc)[:80]})\n"
+                    )
+        # Exhausted all attempts — re-raise the last retriable error.
+        assert last_exc is not None  # at least one attempt always runs
+        raise last_exc
 
     def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ChatResponse:
         """
@@ -1769,6 +1820,7 @@ class AsyncLLMClient:
         temperature: Optional[float] = None,
         search: Optional[bool] = None,
         search_parameters: Optional[Dict[str, Any]] = None,
+        fallback_models: Optional[List[str]] = None,
     ) -> str:
         """Async 1-line chat interface with optional xAI Live Search."""
         messages: List[Dict[str, str]] = []
@@ -1785,6 +1837,7 @@ class AsyncLLMClient:
             temperature=temperature,
             search=search,
             search_parameters=search_parameters,
+            fallback_models=fallback_models,
         )
 
         return result.choices[0].message.content
@@ -1801,6 +1854,7 @@ class AsyncLLMClient:
         search_parameters: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
+        fallback_models: Optional[List[str]] = None,
     ) -> ChatResponse:
         """Async full chat completion interface with optional xAI Live Search and tool calling."""
         # Validate inputs
@@ -1833,7 +1887,26 @@ class AsyncLLMClient:
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
 
-        return await self._request_with_payment("/v1/chat/completions", body)
+        # Walk [model, *fallback_models] on retriable errors. See sync
+        # chat_completion() above for the rationale.
+        attempts = [model, *(fallback_models or [])]
+        last_exc: Optional[Exception] = None
+        for i, attempt_model in enumerate(attempts):
+            body["model"] = attempt_model
+            try:
+                return await self._request_with_payment("/v1/chat/completions", body)
+            except Exception as exc:
+                if not _should_fallback(exc):
+                    raise
+                last_exc = exc
+                if i + 1 < len(attempts):
+                    next_model = attempts[i + 1]
+                    sys.stderr.write(
+                        f"[blockrun_llm] {attempt_model} -> {next_model} "
+                        f"({type(exc).__name__}: {str(exc)[:80]})\n"
+                    )
+        assert last_exc is not None
+        raise last_exc
 
     async def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ChatResponse:
         """Make async request with automatic payment handling."""

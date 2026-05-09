@@ -2,6 +2,26 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## Unreleased — chat() timeout fallback (2026-05-09)
+
+- **`chat()` and `chat_completion()` now accept `fallback_models=[...]`.** On
+  timeout, network error, or 5xx upstream failure, the SDK transparently
+  walks the fallback list before raising. 4xx errors and `PaymentError`
+  still propagate immediately (different upstream won't fix them).
+- **`smart_chat()` automatically uses the tier's fallback chain.** The
+  `RoutingDecision` returned by `route()` now exposes the remaining
+  in-tier models as a `fallbacks` field, and `smart_chat()` passes them
+  through to `chat()`. So `client.smart_chat(..., routing_profile="free")`
+  no longer hard-fails when the picked NVIDIA primary's NIM upstream is
+  hung — it walks to the next visible free model. `RoutingDecision` Pydantic
+  schema gained `fallbacks: List[str]` (defaults to `[]` for backwards
+  compat).
+- Async equivalents (`AsyncLLMClient.chat`, `AsyncLLMClient.chat_completion`)
+  mirror the new parameter and behavior.
+- Each fallback hop logs one line to stderr — `[blockrun_llm] {primary} ->
+  {next} ({error_kind}: {message[:80]})` — so the user can see which model
+  served the response when smart routing kicks in.
+
 ## Unreleased — Exa on Base + router fixes (2026-05-09)
 
 - **`exa_*` methods exposed on `LLMClient` (Base USDC).** Exa was previously

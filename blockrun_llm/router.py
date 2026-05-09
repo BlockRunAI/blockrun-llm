@@ -33,6 +33,7 @@ class RoutingDecision(TypedDict):
     cost_estimate: float
     baseline_cost: float
     savings: float  # 0-1 percentage
+    fallbacks: List[str]  # remaining models in tier order, for runtime fallback
 
 
 class TierConfig(TypedDict):
@@ -590,6 +591,13 @@ def route(
                 model = fallback
                 break
 
+    # Build runtime fallback chain — every model in the tier other than the
+    # chosen one, in tier-defined order, filtered to those with known pricing.
+    # chat_completion() walks this list on timeout / 5xx so a hung upstream
+    # does not break smart_chat.
+    ordered = [config["primary"], *config["fallback"]]
+    fallbacks = [m for m in ordered if m != model and m in model_pricing]
+
     # Calculate costs. Flat-billed models (ZAI GLM-5 family) charge a fixed
     # USD/call regardless of token count; honor that instead of computing
     # per-token cost as zero.
@@ -612,6 +620,7 @@ def route(
 
     return {
         "model": model,
+        "fallbacks": fallbacks,
         "tier": tier,
         "confidence": confidence,
         "method": "rules",
