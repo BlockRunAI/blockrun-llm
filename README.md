@@ -495,7 +495,7 @@ Works on all clients: `LLMClient` (Base), `AsyncLLMClient`, and `SolanaLLMClient
 
 ## Exa Web Search (Powered by Exa)
 
-Access [Exa](https://exa.ai)'s neural web search via x402. No API keys needed — pay-per-request via Solana USDC. Available on `SolanaLLMClient` only.
+Access [Exa](https://exa.ai)'s neural web search via x402. No API keys needed — pay-per-request in USDC. Available on both `LLMClient` (Base, recommended) and `SolanaLLMClient` (Solana).
 
 | Endpoint | Method | Price |
 |---|---|---|
@@ -505,9 +505,9 @@ Access [Exa](https://exa.ai)'s neural web search via x402. No API keys needed �
 | `exa_answer` | AI answer grounded in web search | $0.01/request |
 
 ```python
-from blockrun_llm import SolanaLLMClient
+from blockrun_llm import LLMClient
 
-client = SolanaLLMClient()
+client = LLMClient()  # uses BLOCKRUN_WALLET_KEY (Base USDC)
 
 # Neural web search ($0.01/request)
 results = client.exa_search("latest AI safety research", numResults=5)
@@ -531,7 +531,9 @@ answer = client.exa_answer("What is the current state of AI safety research?")
 result = client.exa("search", {"query": "transformer architecture", "numResults": 5})
 ```
 
-`SolanaLLMClient` only — Exa endpoints are on `sol.blockrun.ai`.
+For Solana payments use `from blockrun_llm import SolanaLLMClient` — same method
+names, same call shape; the Solana gateway requires the backend to be configured
+with `EXA_API_KEY`, so prefer Base unless you need SOL/SPL settlement.
 
 ## Standalone Search
 
