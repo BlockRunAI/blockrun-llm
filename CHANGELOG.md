@@ -2,135 +2,61 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
-## Unreleased — backend-fix sync (2026-05-09 late)
+## Unreleased
 
-After the morning sweeps surfaced 4 backend-side issues, the operations team
-shipped fixes (or chose explicit deprecations). Re-verified each end-to-end
-and brought the SDK in line:
+### New
 
-- **`sol.blockrun.ai` Exa endpoints — fixed.** `EXA_API_KEY` is now configured;
-  `/v1/exa/*` returns HTTP 402 (x402 payment requirement) instead of the
-  previous 503. Both `LLMClient.exa_*` (Base) and `SolanaLLMClient.exa_*`
-  (Solana) now work end-to-end.
-- **`/v1/images/models` endpoint — formally deprecated.** Returns 404 by
-  design; image models live in the unified `/v1/models` catalog with
-  `categories: ["image"]`. SDK rewritten:
-  - Module-level `blockrun_llm.list_image_models()` now hits `/v1/models`
-    and filters by category. Same return shape; existing callers keep
-    working.
-  - `LLMClient.list_image_models()` and `AsyncLLMClient.list_image_models()`
-    do the same — they used to call the dead endpoint and raise APIError.
-  - `LLMClient.list_all_models()` now reads one catalog and tags each
-    entry's `type` from its category (`llm` for chat, `image` / `music`
-    for media, etc.) instead of issuing two requests. Drops a network hop.
-  - `examples/sweep_all_media_models.py` already used the new path.
-- **`black-forest/flux-1.1-pro` — removed from the public surface.** The
-  ops team chose to drop it rather than wire it up. Removed from
-  `examples/sweep_all_media_models.py` `IMAGE_TARGETS` and from the README
-  image-generation table. The catalog confirms it's gone (`flux` substring
-  match in `/v1/models` returns nothing).
-- **`minimax/music-2.5` — still broken.** A second probe (post-fix) returns
-  the same `500 API error after payment` in 933 ms. SDK retains the model
-  ID for forward-compat; `examples/sweep_all_media_models.py` continues to
-  flag it. Deferred for a follow-up backend pass.
+- **`exa_*` methods on `LLMClient` (Base USDC).** `exa()`, `exa_search()`,
+  `exa_find_similar()`, `exa_contents()`, `exa_answer()` — same surface and
+  pricing as the existing `SolanaLLMClient` versions ($0.01/request for
+  search / find-similar / answer, $0.002/URL for contents).
+- **`fallback_models=[...]` on `chat()` and `chat_completion()`** (sync +
+  async). On timeout, network error, or 5xx, the SDK transparently walks
+  the list before raising. 4xx and `PaymentError` propagate immediately.
+  Each fallback hop logs one line to stderr so the caller can see which
+  model actually served the response.
+- **`smart_chat()` uses the tier's fallback chain automatically.**
+  `RoutingDecision` gained a `fallbacks: List[str]` field populated from
+  the chosen tier; `smart_chat()` plumbs it through to `chat()`.
+- **`examples/sweep_all_chat_models.py`** — runnable end-to-end sweep over
+  every chat model the SDK exposes, with a forward-compat diff against
+  `/v1/models`, async smoke, budget guard, and optional JSON output.
+- **`examples/sweep_all_media_models.py`** — sister script for image and
+  music models. Video is excluded by design (long polling, expensive).
+- **New chat models in router / pricing tables:**
+  - `anthropic/claude-opus-4.7` ($5/$25 per M, 1M context, 128K output,
+    agentic coding + adaptive thinking) — promoted to
+    `PREMIUM_TIERS["COMPLEX"]` primary; opus-4.5 retained as fallback.
+  - `zai/glm-5.1` (flat $0.001/call, 200K context) — added to
+    `ECO_TIERS["COMPLEX"]` fallback chain for long-context work.
 
-## Unreleased — media sweep + fallback param (2026-05-09)
+### Changed
 
-- **Added `examples/sweep_all_media_models.py`** — runnable end-to-end sweep
-  for the 9 image generation models and 2 music models the SDK exposes.
-  Mirrors the chat sweep shape: pre-flight balance + pricing-catalog read,
-  per-model status / latency / cost capture, ASCII report grouped by
-  modality, optional JSON output, $1.00 default budget cap. Video is
-  intentionally separate (long polling, expensive per clip).
-- README + AGENTS pick up a how-to-run pointer; the chat-sweep section now
-  cross-references the media sweep so contributors find both.
-- **Sweep findings (2026-05-09 run, 9/11 ok, $0.55 charged, 4m 3s):**
-  - `black-forest/flux-1.1-pro` returns HTTP 400 (135ms — fast fail) and is
-    absent from `/v1/models`, so the backend isn't actually routing it.
-    README image table now flags it as broken pending backend wire-up; the
-    other 8 image models all return valid generations.
-  - `minimax/music-2.5` returns HTTP 500 "API error after payment" — the
-    "after payment" wording means the gateway accepted x402 settlement but
-    the upstream music gen failed, so the user is charged ~$0.05 with no
-    artifact. Backend issue worth flagging to the music pipeline owner.
-    `minimax/music-2.5+` works fine (~112s for a 30s track).
-  - `/v1/images/models` endpoint returns 404 server-side — `LLMClient.list_image_models()`
-    can't be relied on. `examples/sweep_all_media_models.py` switched to
-    filtering `list_models()` by `category=="image"` for pricing lookup;
-    `pricing.per_image` (not `pricing.flat`) is the actual key for image
-    models in the catalog response.
+- **`/v1/images/models` is deprecated; image models live in `/v1/models`
+  with `categories: ["image"]`.** `list_image_models()` (module-level,
+  sync, async) and `list_all_models()` now read the unified catalog with
+  the same return shape, so existing callers keep working without an
+  extra request.
+- **Pricing reads aligned with the current `/v1/models` schema.**
+  `_get_model_pricing()` now reads nested `pricing.input` / `pricing.output`
+  for paid models and `pricing.flat` for flat-billed models, falling back
+  to the legacy top-level keys. Router cost estimates and savings %
+  reflect the right numbers again, and flat-billed models compete in
+  routing decisions on the right basis.
+- **`FREE_TIERS["MEDIUM"]` primary** moved from `nvidia/deepseek-v4-flash`
+  to `nvidia/llama-4-maverick`; v4-flash references in `AUTO_TIERS` /
+  `ECO_TIERS` / `FREE_TIERS` fallback chains likewise redirected so the
+  safety net hits a working model when the primary is unavailable.
+- **ZAI GLM-5 family pricing** corrected from per-token to flat
+  $0.001/call across the README pricing tables to match the catalog.
+- **OpenAI dated-version responses** (e.g. `gpt-5.5-2026-04-20` for a
+  request to `openai/gpt-5.5`) are no longer flagged as redirects — only
+  base-id mismatches count.
 
-## Unreleased — chat() timeout fallback (2026-05-09)
+### Removed
 
-- **`chat()` and `chat_completion()` now accept `fallback_models=[...]`.** On
-  timeout, network error, or 5xx upstream failure, the SDK transparently
-  walks the fallback list before raising. 4xx errors and `PaymentError`
-  still propagate immediately (different upstream won't fix them).
-- **`smart_chat()` automatically uses the tier's fallback chain.** The
-  `RoutingDecision` returned by `route()` now exposes the remaining
-  in-tier models as a `fallbacks` field, and `smart_chat()` passes them
-  through to `chat()`. So `client.smart_chat(..., routing_profile="free")`
-  no longer hard-fails when the picked NVIDIA primary's NIM upstream is
-  hung — it walks to the next visible free model. `RoutingDecision` Pydantic
-  schema gained `fallbacks: List[str]` (defaults to `[]` for backwards
-  compat).
-- Async equivalents (`AsyncLLMClient.chat`, `AsyncLLMClient.chat_completion`)
-  mirror the new parameter and behavior.
-- Each fallback hop logs one line to stderr — `[blockrun_llm] {primary} ->
-  {next} ({error_kind}: {message[:80]})` — so the user can see which model
-  served the response when smart routing kicks in.
-
-## Unreleased — Exa on Base + router fixes (2026-05-09)
-
-- **`exa_*` methods exposed on `LLMClient` (Base USDC).** Exa was previously
-  reachable only via `SolanaLLMClient`, but the Solana gateway is missing
-  `EXA_API_KEY` server-side and returns 503 on every Exa endpoint. The Base
-  gateway already supports Exa via x402 — the SDK just wasn't surfacing it.
-  Added `exa()`, `exa_search()`, `exa_find_similar()`, `exa_contents()`,
-  `exa_answer()` on `LLMClient`, mirroring the Solana surface, with the same
-  pricing ($0.01/request for search/find-similar/answer, $0.002/URL for
-  contents). Smoke-tested all 4 endpoints end-to-end on Base ($0.032 total).
-  README's Exa section reworked to document Base as the primary path.
-- **Router `_get_model_pricing()` updated for the current `/v1/models` schema.**
-  The function read `model.inputPrice` / `model.outputPrice` (top-level
-  camelCase, an older schema). The current backend response uses nested
-  `pricing.input` / `pricing.output` for paid models and `pricing.flat` for
-  flat-billed models (ZAI GLM-5 family). All paid models were silently
-  resolving to `$0/$0` in router cost estimates, biasing routing decisions
-  and reporting wrong savings %. Now reads nested `pricing.*` first, falls
-  back to legacy keys, and surfaces a `flat_price` field. `route()`'s cost
-  calc honors `flat_price` when present so flat-billed models compete on
-  the right basis (cost == flat fee, regardless of token count).
-- **`FREE_TIERS["MEDIUM"]` primary swapped: `nvidia/deepseek-v4-flash` →
-  `nvidia/llama-4-maverick`.** The 2026-05-09 sweep showed the v4-flash NIM
-  upstream timing out at 120s. llama-4-maverick was the fastest visible free
-  model in the sweep (413 ms). All v4-flash fallback references in
-  `AUTO_TIERS`, `ECO_TIERS`, and `FREE_TIERS` were also redirected to
-  llama-4-maverick (or removed where redundant) so the safety net actually
-  catches.
-- **`PREMIUM_TIERS["COMPLEX"]` primary upgraded:
-  `anthropic/claude-opus-4.5` → `anthropic/claude-opus-4.7`** (1M context,
-  agentic coding + adaptive thinking; same $5/$25 per M pricing). opus-4.5
-  retained as the first fallback. `PREMIUM_TIERS["REASONING"]` fallback chain
-  also bumped from opus-4.5 to opus-4.7.
-- **`ECO_TIERS["COMPLEX"]` gains `zai/glm-5.1` as last fallback.** Flat
-  $0.001/call wins for very-long-context complex work where per-token paid
-  options blow past that threshold.
-
-## Unreleased — chat-LLM sweep validation (2026-05-09)
-
-- **Added `examples/sweep_all_chat_models.py`** — runnable end-to-end sweep that calls every chat model the SDK exposes (46 IDs across 8 providers) on Base mainnet via real x402 payments, then prints a grouped pass/fail report with per-model latency, token counts and cost. Includes a forward-compat diff against `/v1/models` to flag new IDs missing from the sweep list, an async smoke (`AsyncLLMClient.chat_completion` + `asyncio.gather`), a $2.50 budget abort, and optional JSON output. Run before releases or after router/catalog changes:
-  ```bash
-  python examples/sweep_all_chat_models.py --output-json sweep-results.json
-  ```
-- **Sweep findings (2026-05-09 run, 44/46 ok, $0.082 total, 8m14s):**
-  - Discovered two new chat models in `/v1/models` not yet in the sweep / docs: `anthropic/claude-opus-4.7` ($5/M in, $25/M out, 1M ctx, 128K output, agentic coding + adaptive thinking) and `zai/glm-5.1` (flat $0.001/call, 200K ctx — Z.AI's #1 open-source SWE-Bench Pro). Both added to `SWEEP_TARGETS`, README pricing tables, and verified passing.
-  - **NVIDIA NIM upstream regression**: `nvidia/deepseek-v4-flash` and `nvidia/deepseek-v4-pro` (which redirects to v4-flash) both timed out at 120s. README's "Available free models" table and the `🆓` header banner have been updated to flag the degraded state and recommend `nvidia/mistral-small-4-119b` or `nvidia/qwen3-next-80b-a3b-thinking` until resolved.
-  - **README contradiction fixed**: a stale Quick Start note claimed `nvidia/gpt-oss-120b/20b` were "retired 2026-04-28" while the table two rows above said direct calls still work. The 2026-04-30 re-enable made the retired note obsolete; replaced with a focused privacy advisory.
-  - **ZAI pricing was misdocumented**: `/v1/models` reports the GLM-5 family as `billing_mode: "flat"` with `pricing.flat = 0.001`, not the per-token rates ($1.00/M, $1.20/M) shown in the README. Sweep cost data ($0.001 per call regardless of token count) confirms flat billing is correct. Pricing table converted to `$0.001/call`.
-  - **Hidden-but-callable models documented**: `anthropic/claude-opus-4.6` and `moonshot/kimi-k2.5` are absent from `/v1/models` but direct calls return 200 OK. Tagged as such in the Anthropic pricing table; moonshot table already had the `kimi-k2.5` entry.
-  - **OpenAI dated-version normalization**: probe classifier now treats `response.model` differing only in date suffix (e.g. `gpt-5.5` → `gpt-5.5-2026-04-20`) as the same model, not an `ok_redirected` event.
-- README "E2E Verified Models" table replaced with the full 46-model sweep summary and a how-to-rerun pointer.
+- `black-forest/flux-1.1-pro` — dropped from the README image table and
+  from the media-sweep target list. Not in the live catalog.
 
 ## 0.19.0
 
