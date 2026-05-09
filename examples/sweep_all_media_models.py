@@ -41,7 +41,6 @@ IMAGE_TARGETS: List[Dict[str, Any]] = [
     {"model": "zai/cogview-4", "size": "1024x1024"},
     {"model": "xai/grok-imagine-image", "size": "1024x1024"},
     {"model": "xai/grok-imagine-image-pro", "size": "1024x1024"},
-    {"model": "black-forest/flux-1.1-pro", "size": "1024x1024"},
 ]
 
 MUSIC_TARGETS: List[str] = [

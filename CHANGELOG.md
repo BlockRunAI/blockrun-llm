@@ -2,6 +2,38 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## Unreleased — backend-fix sync (2026-05-09 late)
+
+After the morning sweeps surfaced 4 backend-side issues, the operations team
+shipped fixes (or chose explicit deprecations). Re-verified each end-to-end
+and brought the SDK in line:
+
+- **`sol.blockrun.ai` Exa endpoints — fixed.** `EXA_API_KEY` is now configured;
+  `/v1/exa/*` returns HTTP 402 (x402 payment requirement) instead of the
+  previous 503. Both `LLMClient.exa_*` (Base) and `SolanaLLMClient.exa_*`
+  (Solana) now work end-to-end.
+- **`/v1/images/models` endpoint — formally deprecated.** Returns 404 by
+  design; image models live in the unified `/v1/models` catalog with
+  `categories: ["image"]`. SDK rewritten:
+  - Module-level `blockrun_llm.list_image_models()` now hits `/v1/models`
+    and filters by category. Same return shape; existing callers keep
+    working.
+  - `LLMClient.list_image_models()` and `AsyncLLMClient.list_image_models()`
+    do the same — they used to call the dead endpoint and raise APIError.
+  - `LLMClient.list_all_models()` now reads one catalog and tags each
+    entry's `type` from its category (`llm` for chat, `image` / `music`
+    for media, etc.) instead of issuing two requests. Drops a network hop.
+  - `examples/sweep_all_media_models.py` already used the new path.
+- **`black-forest/flux-1.1-pro` — removed from the public surface.** The
+  ops team chose to drop it rather than wire it up. Removed from
+  `examples/sweep_all_media_models.py` `IMAGE_TARGETS` and from the README
+  image-generation table. The catalog confirms it's gone (`flux` substring
+  match in `/v1/models` returns nothing).
+- **`minimax/music-2.5` — still broken.** A second probe (post-fix) returns
+  the same `500 API error after payment` in 933 ms. SDK retains the model
+  ID for forward-compat; `examples/sweep_all_media_models.py` continues to
+  flag it. Deferred for a follow-up backend pass.
+
 ## Unreleased — media sweep + fallback param (2026-05-09)
 
 - **Added `examples/sweep_all_media_models.py`** — runnable end-to-end sweep
