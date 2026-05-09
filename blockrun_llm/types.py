@@ -399,6 +399,7 @@ class RoutingDecision(BaseModel):
     cost_estimate: float
     baseline_cost: float
     savings: float  # 0-1 percentage
+    fallbacks: List[str] = []  # remaining models in tier order, for runtime fallback
 
 
 class SmartChatResponse(BaseModel):
