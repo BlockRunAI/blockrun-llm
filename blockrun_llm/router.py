@@ -234,15 +234,15 @@ AUTO_TIERS: Dict[Tier, TierConfig] = {
         "fallback": [
             "moonshot/kimi-k2.5",
             "google/gemini-2.5-flash-lite",
-            "nvidia/gpt-oss-120b",
             "deepseek/deepseek-chat",
+            "nvidia/llama-4-maverick",
         ],
     },
     "MEDIUM": {
         "primary": "google/gemini-2.5-flash",
         "fallback": [
             "deepseek/deepseek-chat",
-            "nvidia/gpt-oss-120b",
+            "nvidia/llama-4-maverick",
         ],
     },
     "COMPLEX": {
@@ -254,8 +254,13 @@ AUTO_TIERS: Dict[Tier, TierConfig] = {
         ],
     },
     "REASONING": {
+        # deepseek/deepseek-reasoner is V4 Flash thinking ($0.20/$0.40, 1M ctx)
+        # — the cheapest production-grade reasoner. deepseek/deepseek-v4-pro
+        # ($0.50/$1.00 with 75% promo through 2026-05-31, MMLU-Pro 87.5,
+        # GPQA 90.1, SWE-bench 80.6) is the strongest open-weight reasoner
+        # we serve; first fallback when V4 Flash thinking is unavailable.
         "primary": "deepseek/deepseek-reasoner",
-        "fallback": ["openai/o3", "openai/o3-mini"],
+        "fallback": ["deepseek/deepseek-v4-pro", "openai/o3", "openai/o3-mini"],
     },
 }
 
@@ -264,19 +269,31 @@ ECO_TIERS: Dict[Tier, TierConfig] = {
         # See AUTO_TIERS note: kimi-k2.6 is the catalog flagship. kimi-k2.5
         # is hidden so the SDK no longer sees its pricing.
         "primary": "moonshot/kimi-k2.6",
-        "fallback": ["moonshot/kimi-k2.5", "nvidia/gpt-oss-120b", "deepseek/deepseek-chat"],
+        "fallback": ["moonshot/kimi-k2.5", "deepseek/deepseek-chat", "nvidia/llama-4-maverick"],
     },
     "MEDIUM": {
+        # deepseek/deepseek-chat is V4 Flash non-thinking ($0.20/$0.40, 1M ctx
+        # — DeepSeek upstream now serves the legacy alias as V4 Flash chat).
         "primary": "deepseek/deepseek-chat",
         "fallback": ["google/gemini-2.5-flash-lite", "google/gemini-2.5-flash"],
     },
     "COMPLEX": {
+        # zai/glm-5.1 (flat $0.001/call regardless of token count, 200K
+        # context) is the cheapest viable option for long-context complex
+        # work — added as last fallback after the per-token paid options.
         "primary": "google/gemini-2.5-pro",
-        "fallback": ["deepseek/deepseek-chat", "google/gemini-2.5-flash"],
+        "fallback": [
+            "deepseek/deepseek-v4-pro",
+            "deepseek/deepseek-chat",
+            "google/gemini-2.5-flash",
+            "zai/glm-5.1",
+        ],
     },
     "REASONING": {
+        # V4 Flash thinking ($0.20/$0.40) preferred over V4 Pro ($0.50/$1.00)
+        # in eco mode — V4 Pro retained as fallback for harder reasoning.
         "primary": "deepseek/deepseek-reasoner",
-        "fallback": ["openai/o3-mini"],
+        "fallback": ["deepseek/deepseek-v4-pro", "openai/o3-mini"],
     },
 }
 
@@ -290,34 +307,53 @@ PREMIUM_TIERS: Dict[Tier, TierConfig] = {
         "fallback": ["openai/gpt-5.4", "google/gemini-2.5-pro", "anthropic/claude-sonnet-4.6"],
     },
     "COMPLEX": {
-        "primary": "anthropic/claude-opus-4.5",
-        "fallback": ["openai/gpt-5.2-pro", "google/gemini-3.1-pro", "openai/gpt-5.2"],
+        # claude-opus-4.7 (1M context, agentic coding + adaptive thinking) is
+        # Anthropic's strongest current Claude. opus-4.5 retained as fallback
+        # for clients pricing-pinned to it.
+        "primary": "anthropic/claude-opus-4.7",
+        "fallback": [
+            "anthropic/claude-opus-4.5",
+            "openai/gpt-5.2-pro",
+            "google/gemini-3.1-pro",
+            "openai/gpt-5.2",
+        ],
     },
     "REASONING": {
         "primary": "openai/o3",
-        "fallback": ["openai/o1", "anthropic/claude-opus-4.5"],
+        "fallback": ["openai/o1", "anthropic/claude-opus-4.7"],
     },
 }
 
 FREE_TIERS: Dict[Tier, TierConfig] = {
-    # NVIDIA free tier refresh 2026-04-21: retired nemotron-*, qwen3.5-397b,
-    # mistral-large-3-675b, devstral-2-123b. New survivors + qwen3-next-80b
-    # (reasoning flagship) and mistral-small-4-119b (fastest chat).
+    # NVIDIA free tier refresh 2026-04-28: retired nvidia/gpt-oss-120b and
+    # nvidia/gpt-oss-20b (NVIDIA's free build.nvidia.com tier reserves the
+    # right to use prompts/outputs for service improvement, conflicting with
+    # our data-privacy policy). Added nvidia/deepseek-v4-pro and
+    # nvidia/deepseek-v4-flash (1M context); v4-pro currently hidden because
+    # NVIDIA's NIM deployment for it is hung — backend MODEL_REDIRECTS sends
+    # callers to v4-flash transparently. nvidia/deepseek-v3.2 is also hidden
+    # for the same hang. Primaries here are pinned to visible models so the
+    # Python pricing dict (built from /v1/models) can resolve them.
+    #
+    # 2026-05-09 sweep: nvidia/deepseek-v4-flash itself is now timing out at
+    # 120s (NIM upstream regression). Demoted from MEDIUM primary and from
+    # all fallback chains; nvidia/llama-4-maverick (fastest visible free tier
+    # in the sweep, 413ms) takes its place as the safety net.
     "SIMPLE": {
-        "primary": "nvidia/gpt-oss-120b",
-        "fallback": ["nvidia/mistral-small-4-119b", "nvidia/deepseek-v3.2"],
+        "primary": "nvidia/mistral-small-4-119b",
+        "fallback": ["nvidia/llama-4-maverick"],
     },
     "MEDIUM": {
-        "primary": "nvidia/deepseek-v3.2",
-        "fallback": ["nvidia/qwen3-coder-480b", "nvidia/gpt-oss-120b"],
+        "primary": "nvidia/llama-4-maverick",
+        "fallback": ["nvidia/qwen3-coder-480b", "nvidia/mistral-small-4-119b"],
     },
     "COMPLEX": {
         "primary": "nvidia/qwen3-next-80b-a3b-thinking",
-        "fallback": ["nvidia/llama-4-maverick", "nvidia/gpt-oss-120b"],
+        "fallback": ["nvidia/llama-4-maverick", "nvidia/qwen3-coder-480b"],
     },
     "REASONING": {
         "primary": "nvidia/qwen3-next-80b-a3b-thinking",
-        "fallback": ["nvidia/glm-4.7", "nvidia/gpt-oss-120b"],
+        "fallback": ["nvidia/llama-4-maverick", "nvidia/qwen3-coder-480b"],
     },
 }
 
@@ -554,11 +590,17 @@ def route(
                 model = fallback
                 break
 
-    # Calculate costs
-    pricing = model_pricing.get(model, {"input_price": 0, "output_price": 0})
-    input_cost = (estimated_tokens / 1_000_000) * pricing.get("input_price", 0)
-    output_cost = (max_output_tokens / 1_000_000) * pricing.get("output_price", 0)
-    cost_estimate = input_cost + output_cost
+    # Calculate costs. Flat-billed models (ZAI GLM-5 family) charge a fixed
+    # USD/call regardless of token count; honor that instead of computing
+    # per-token cost as zero.
+    pricing = model_pricing.get(model, {"input_price": 0, "output_price": 0, "flat_price": 0})
+    flat_price = pricing.get("flat_price", 0)
+    if flat_price:
+        cost_estimate = float(flat_price)
+    else:
+        input_cost = (estimated_tokens / 1_000_000) * pricing.get("input_price", 0)
+        output_cost = (max_output_tokens / 1_000_000) * pricing.get("output_price", 0)
+        cost_estimate = input_cost + output_cost
 
     # Baseline cost (GPT-5.5 pricing: $5.00/$30)
     baseline_input = (estimated_tokens / 1_000_000) * 5.00

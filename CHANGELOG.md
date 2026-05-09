@@ -2,6 +2,43 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## Unreleased — Exa on Base + router fixes (2026-05-09)
+
+- **`exa_*` methods exposed on `LLMClient` (Base USDC).** Exa was previously
+  reachable only via `SolanaLLMClient`, but the Solana gateway is missing
+  `EXA_API_KEY` server-side and returns 503 on every Exa endpoint. The Base
+  gateway already supports Exa via x402 — the SDK just wasn't surfacing it.
+  Added `exa()`, `exa_search()`, `exa_find_similar()`, `exa_contents()`,
+  `exa_answer()` on `LLMClient`, mirroring the Solana surface, with the same
+  pricing ($0.01/request for search/find-similar/answer, $0.002/URL for
+  contents). Smoke-tested all 4 endpoints end-to-end on Base ($0.032 total).
+  README's Exa section reworked to document Base as the primary path.
+- **Router `_get_model_pricing()` updated for the current `/v1/models` schema.**
+  The function read `model.inputPrice` / `model.outputPrice` (top-level
+  camelCase, an older schema). The current backend response uses nested
+  `pricing.input` / `pricing.output` for paid models and `pricing.flat` for
+  flat-billed models (ZAI GLM-5 family). All paid models were silently
+  resolving to `$0/$0` in router cost estimates, biasing routing decisions
+  and reporting wrong savings %. Now reads nested `pricing.*` first, falls
+  back to legacy keys, and surfaces a `flat_price` field. `route()`'s cost
+  calc honors `flat_price` when present so flat-billed models compete on
+  the right basis (cost == flat fee, regardless of token count).
+- **`FREE_TIERS["MEDIUM"]` primary swapped: `nvidia/deepseek-v4-flash` →
+  `nvidia/llama-4-maverick`.** The 2026-05-09 sweep showed the v4-flash NIM
+  upstream timing out at 120s. llama-4-maverick was the fastest visible free
+  model in the sweep (413 ms). All v4-flash fallback references in
+  `AUTO_TIERS`, `ECO_TIERS`, and `FREE_TIERS` were also redirected to
+  llama-4-maverick (or removed where redundant) so the safety net actually
+  catches.
+- **`PREMIUM_TIERS["COMPLEX"]` primary upgraded:
+  `anthropic/claude-opus-4.5` → `anthropic/claude-opus-4.7`** (1M context,
+  agentic coding + adaptive thinking; same $5/$25 per M pricing). opus-4.5
+  retained as the first fallback. `PREMIUM_TIERS["REASONING"]` fallback chain
+  also bumped from opus-4.5 to opus-4.7.
+- **`ECO_TIERS["COMPLEX"]` gains `zai/glm-5.1` as last fallback.** Flat
+  $0.001/call wins for very-long-context complex work where per-token paid
+  options blow past that threshold.
+
 ## Unreleased — chat-LLM sweep validation (2026-05-09)
 
 - **Added `examples/sweep_all_chat_models.py`** — runnable end-to-end sweep that calls every chat model the SDK exposes (46 IDs across 8 providers) on Base mainnet via real x402 payments, then prints a grouped pass/fail report with per-model latency, token counts and cost. Includes a forward-compat diff against `/v1/models` to flag new IDs missing from the sweep list, an async smoke (`AsyncLLMClient.chat_completion` + `asyncio.gather`), a $2.50 budget abort, and optional JSON output. Run before releases or after router/catalog changes:

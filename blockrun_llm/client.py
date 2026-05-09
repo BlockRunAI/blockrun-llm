@@ -279,7 +279,13 @@ class LLMClient:
         Get model pricing for smart routing.
 
         Returns:
-            Dict mapping model_id -> {"input_price": x, "output_price": y}
+            Dict mapping model_id -> {"input_price": x, "output_price": y,
+            "flat_price": z}. ``flat_price`` is 0 for per-token billing and
+            non-zero (USD per call) for flat-billed models.
+
+        The /v1/models response uses the nested ``pricing.input``/``pricing.output``
+        shape today; older snapshots used top-level ``inputPrice``/``outputPrice``.
+        Both are accepted so the SDK keeps working through backend transitions.
         """
         if self._model_pricing_cache is not None:
             return self._model_pricing_cache
@@ -288,11 +294,16 @@ class LLMClient:
         pricing: Dict[str, Dict[str, float]] = {}
         for model in models:
             model_id = model.get("id", "")
-            input_price = model.get("inputPrice", model.get("input_price", 0))
-            output_price = model.get("outputPrice", model.get("output_price", 0))
+            block = model.get("pricing") or {}
+            input_price = block.get("input", model.get("inputPrice", model.get("input_price", 0)))
+            output_price = block.get(
+                "output", model.get("outputPrice", model.get("output_price", 0))
+            )
+            flat_price = block.get("flat", model.get("flatPrice", 0))
             pricing[model_id] = {
-                "input_price": float(input_price),
-                "output_price": float(output_price),
+                "input_price": float(input_price or 0),
+                "output_price": float(output_price or 0),
+                "flat_price": float(flat_price or 0),
             }
         self._model_pricing_cache = pricing
         return pricing
@@ -1038,6 +1049,75 @@ class LLMClient:
 
         data = self._request_with_payment_raw("/v1/search", body)
         return SearchResult(**data)
+
+    # ── Exa Web Search (Powered by Exa) ─────────────────────────────────────
+
+    def exa(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Generic Exa endpoint proxy via x402 USDC on Base.
+
+        Args:
+            path: Exa endpoint — one of: "search", "find-similar", "contents", "answer"
+            body: Request body (see https://docs.exa.ai)
+
+        Example::
+
+            result = client.exa("search", {"query": "latest AI research", "numResults": 5})
+        """
+        return self._request_with_payment_raw(f"/v1/exa/{path}", body)
+
+    def exa_search(self, query: str, **kwargs: Any) -> Dict[str, Any]:
+        """Neural and keyword web search via Exa ($0.01/request, Base USDC).
+
+        Args:
+            query: Search query string
+            **kwargs: Additional Exa parameters (numResults, category, useAutoprompt, etc.)
+
+        Example::
+
+            results = client.exa_search("latest AI papers", numResults=5)
+        """
+        return self._request_with_payment_raw("/v1/exa/search", {"query": query, **kwargs})
+
+    def exa_find_similar(self, url: str, **kwargs: Any) -> Dict[str, Any]:
+        """Find pages semantically similar to a given URL via Exa
+        ($0.01/request, Base USDC).
+
+        Args:
+            url: URL to find similar pages for
+            **kwargs: Additional Exa parameters (numResults, etc.)
+
+        Example::
+
+            similar = client.exa_find_similar("https://openai.com/research/gpt-4", numResults=5)
+        """
+        return self._request_with_payment_raw("/v1/exa/find-similar", {"url": url, **kwargs})
+
+    def exa_contents(self, urls: List[str], **kwargs: Any) -> Dict[str, Any]:
+        """Extract full text content from URLs via Exa ($0.002/URL, Base USDC).
+
+        Args:
+            urls: List of URLs to extract content from
+            **kwargs: Additional Exa parameters (text, highlights, summary, etc.)
+
+        Example::
+
+            data = client.exa_contents(["https://arxiv.org/abs/2303.08774"])
+        """
+        return self._request_with_payment_raw("/v1/exa/contents", {"urls": urls, **kwargs})
+
+    def exa_answer(self, query: str, **kwargs: Any) -> Dict[str, Any]:
+        """AI-generated answer grounded in live web search via Exa
+        ($0.01/request, Base USDC).
+
+        Args:
+            query: Question to answer
+            **kwargs: Additional Exa parameters
+
+        Example::
+
+            answer = client.exa_answer("What is the current state of AI safety research?")
+        """
+        return self._request_with_payment_raw("/v1/exa/answer", {"query": query, **kwargs})
 
     def x_user_lookup(self, usernames: Union[List[str], str]) -> XUserLookupResponse:
         """
