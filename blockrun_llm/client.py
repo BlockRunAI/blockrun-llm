@@ -133,36 +133,22 @@ def list_models(api_url: str = "https://blockrun.ai/api") -> List[Dict[str, Any]
 
 def list_image_models(api_url: str = "https://blockrun.ai/api") -> List[Dict[str, Any]]:
     """
-    List available image generation models without requiring wallet.
+    List available image generation models without requiring a wallet.
 
-    This is a standalone function that queries the public API endpoint.
-    No wallet or authentication needed.
-
-    Args:
-        api_url: API endpoint (default: https://blockrun.ai/api)
-
-    Returns:
-        List of image model dicts with id, pricing, etc.
-        Returns empty list if endpoint not available.
-
-    Example:
-        from blockrun_llm import list_image_models
-        models = list_image_models()
-        for m in models:
-            print(f"{m['id']}: ${m.get('pricePerImage', 'N/A')}/image")
+    Filters the unified ``/v1/models`` catalog by ``categories: ["image"]``.
+    The dedicated ``/v1/images/models`` endpoint was deprecated server-side;
+    image models now live alongside chat models under one catalog.
     """
     with httpx.Client(timeout=30) as client:
-        response = client.get(f"{api_url.rstrip('/')}/v1/images/models")
-        if response.status_code == 404:
-            # Endpoint not available yet - return empty list
-            return []
+        response = client.get(f"{api_url.rstrip('/')}/v1/models")
         if response.status_code != 200:
             raise APIError(
-                f"Failed to list image models: {response.status_code}",
+                f"Failed to list models: {response.status_code}",
                 response.status_code,
                 {},
             )
-        return response.json().get("data", [])
+        models = response.json().get("data", [])
+    return [m for m in models if "image" in (m.get("categories") or [])]
 
 
 # =============================================================================
@@ -1614,49 +1600,38 @@ class LLMClient:
         List available image generation models with pricing.
 
         Returns:
-            List of image model information dicts
+            List of image model information dicts (id, name, pricing, etc.)
+
+        Notes:
+            The dedicated ``/v1/images/models`` endpoint was deprecated
+            server-side; the catalog now lives in ``/v1/models`` with
+            ``categories: ["image", ...]``. This method filters the unified
+            catalog so existing callers keep working.
         """
-        response = self._client.get(f"{self.api_url}/v1/images/models")
-
-        if response.status_code != 200:
-            try:
-                error_body = response.json()
-            except Exception:
-                error_body = {"error": "Request failed"}
-            raise APIError(
-                f"Failed to list image models: {response.status_code}",
-                response.status_code,
-                sanitize_error_response(error_body),
-            )
-
-        return response.json().get("data", [])
+        return [m for m in self.list_models() if "image" in (m.get("categories") or [])]
 
     def list_all_models(self) -> List[Dict[str, Any]]:
         """
-        List all available models (both LLM and image) with pricing.
+        List all available models (chat, image, music, etc.) with pricing.
 
         Returns:
-            List of all model information dicts with 'type' field ('llm' or 'image')
-
-        Example:
-            models = client.list_all_models()
-            for model in models:
-                if model['type'] == 'llm':
-                    print(f"LLM: {model['id']} - ${model['inputPrice']}/M input")
-                else:
-                    print(f"Image: {model['id']} - ${model['pricePerImage']}/image")
+            List of all model information dicts with a ``type`` field set to
+            the first category (``llm`` for chat, ``image`` / ``music`` /
+            ``audio`` etc. for media). Backwards-compat: chat models always
+            report ``type: "llm"``.
         """
-        # Get LLM models
-        llm_models = self.list_models()
-        for model in llm_models:
-            model["type"] = "llm"
-
-        # Get image models
-        image_models = self.list_image_models()
-        for model in image_models:
-            model["type"] = "image"
-
-        return llm_models + image_models
+        all_models = self.list_models()
+        for m in all_models:
+            cats = m.get("categories") or []
+            if "chat" in cats:
+                m["type"] = "llm"
+            elif "image" in cats:
+                m["type"] = "image"
+            elif "music" in cats or "audio" in cats:
+                m["type"] = "music"
+            else:
+                m["type"] = cats[0] if cats else "llm"
+        return all_models
 
     def get_wallet_address(self) -> str:
         """Get the wallet address being used for payments."""
@@ -2490,40 +2465,34 @@ class AsyncLLMClient:
         return response.json().get("data", [])
 
     async def list_image_models(self) -> List[Dict[str, Any]]:
-        """List available image generation models asynchronously."""
-        response = await self._client.get(f"{self.api_url}/v1/images/models")
+        """List available image generation models asynchronously.
 
-        if response.status_code != 200:
-            try:
-                error_body = response.json()
-            except Exception:
-                error_body = {"error": "Request failed"}
-            raise APIError(
-                f"Failed to list image models: {response.status_code}",
-                response.status_code,
-                sanitize_error_response(error_body),
-            )
-
-        return response.json().get("data", [])
+        ``/v1/images/models`` was deprecated server-side; this filters the
+        unified ``/v1/models`` catalog by ``categories: ["image"]`` so existing
+        callers keep working.
+        """
+        models = await self.list_models()
+        return [m for m in models if "image" in (m.get("categories") or [])]
 
     async def list_all_models(self) -> List[Dict[str, Any]]:
         """
-        List all available models (both LLM and image) asynchronously.
+        List all available models (chat, image, music, etc.) asynchronously.
 
         Returns:
-            List of all model information dicts with 'type' field ('llm' or 'image')
+            List of all model information dicts with ``type`` set per category.
         """
-        # Get LLM models
-        llm_models = await self.list_models()
-        for model in llm_models:
-            model["type"] = "llm"
-
-        # Get image models
-        image_models = await self.list_image_models()
-        for model in image_models:
-            model["type"] = "image"
-
-        return llm_models + image_models
+        all_models = await self.list_models()
+        for m in all_models:
+            cats = m.get("categories") or []
+            if "chat" in cats:
+                m["type"] = "llm"
+            elif "image" in cats:
+                m["type"] = "image"
+            elif "music" in cats or "audio" in cats:
+                m["type"] = "music"
+            else:
+                m["type"] = cats[0] if cats else "llm"
+        return all_models
 
     def get_wallet_address(self) -> str:
         """Get the wallet address."""
