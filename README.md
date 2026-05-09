@@ -2,7 +2,7 @@
 
 > **blockrun-llm** is a Python SDK for accessing 80+ large language models (GPT-5.x, Claude 4.x, Gemini 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, X/Twitter APIs, and Pyth-backed market data — all with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required; your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
 >
-> 🆓 **Includes 8 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M context, currently degraded — see notes below), Nemotron Nano Omni (vision), Qwen3 Next + Coder, Llama 4 Maverick, Mistral Small 4, plus `gpt-oss-120b/20b` (hidden from `/v1/models` but direct calls still work). Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any `nvidia/*` model directly.
+> 🆓 **Includes 8 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M context), Nemotron Nano Omni (vision), Qwen3 Next + Coder, Llama 4 Maverick, Mistral Small 4, plus `gpt-oss-120b/20b` (hidden from `/v1/models` but direct calls still work). Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any `nvidia/*` model directly.
 
 [![PyPI](https://img.shields.io/pypi/v/blockrun-llm.svg)](https://pypi.org/project/blockrun-llm/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -59,11 +59,11 @@ print(result.model)     # e.g. 'nvidia/deepseek-v4-flash' (cheapest capable for 
 print(result.response)  # '4'
 ```
 
-**Available free models** (input + output both $0, all NVIDIA-hosted, last verified 2026-05-09 via `examples/sweep_all_chat_models.py`):
+**Available free models** (input + output both $0, all NVIDIA-hosted):
 
 | Model ID | Context | Best For |
 |----------|---------|----------|
-| `nvidia/deepseek-v4-flash` | 1M | DeepSeek V4 Flash — 284B / 13B active MoE, ~5× faster than V4 Pro. Best free chat / summarization / light reasoning. **Note (2026-05-09): NIM upstream is currently slow / timing out at 120s; consider `mistral-small-4-119b` or `qwen3-next-80b-a3b-thinking` until resolved** |
+| `nvidia/deepseek-v4-flash` | 1M | DeepSeek V4 Flash — 284B / 13B active MoE, ~5× faster than V4 Pro. Best free chat / summarization / light reasoning |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Only vision-capable free model — text + images + video (≤2 min) + audio (≤1 hr) |
 | `nvidia/qwen3-next-80b-a3b-thinking` | 131K | 116 tok/s reasoning with thinking mode |
 | `nvidia/mistral-small-4-119b` | 131K | 114 tok/s — fastest free chat |
@@ -72,7 +72,7 @@ print(result.response)  # '4'
 | `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models` (so SmartChat won't auto-pick it) but direct calls still work |
 | `nvidia/gpt-oss-20b` | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models` but direct calls still work |
 
-> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.50/$1.00 with the 75% promo through 2026-05-31) — `nvidia/deepseek-v4-pro` is currently hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash, which is itself slow as of 2026-05-09.
+> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.50/$1.00 with the 75% promo through 2026-05-31) — `nvidia/deepseek-v4-pro` is hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash.
 
 > **Privacy note for `gpt-oss-120b/20b`**: NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement. The models are hidden from `/v1/models` so SmartChat won't auto-route to them, but direct calls still work — use them only when prompts contain no sensitive data.
 
@@ -290,45 +290,28 @@ auto-forwards calls to V4 Flash / qwen3-coder.
 
 *Testnet models use flat pricing (no token counting) for simplicity.*
 
-### E2E Verified Models
+### Verifying Models End-to-End
 
-All chat LLMs in the SDK (46 model IDs across 8 providers) are exercised end-to-end on Base mainnet by `examples/sweep_all_chat_models.py`. Last full sweep: **2026-05-09** — 44/46 ok, total cost $0.08, runtime ~8 min.
-
-| Provider | Models tested | Status |
-|----------|---------------|--------|
-| OpenAI | 14 (gpt-5.x family + o1/o1-mini + o3/o3-mini) | 14/14 ok |
-| Anthropic | 5 (opus-4.7, opus-4.6, opus-4.5, sonnet-4.6, haiku-4.5) | 5/5 ok |
-| Google | 7 (gemini-3.x + gemini-2.5.x) | 7/7 ok |
-| DeepSeek | 3 (v4-pro, chat, reasoner) | 3/3 ok |
-| MiniMax | 1 (minimax-m2.7) | 1/1 ok |
-| ZAI | 3 (glm-5.1, glm-5, glm-5-turbo) | 3/3 ok |
-| Moonshot | 2 (kimi-k2.6, kimi-k2.5) | 2/2 ok |
-| NVIDIA | 11 (6 visible free + 2 hidden-callable + 3 hidden-redirected) | 9/11 ok — `nvidia/deepseek-v4-flash` and `nvidia/deepseek-v4-pro` timed out at 120s (NIM upstream degraded; backend redirects expose the same outage) |
-
-To re-verify before a release:
+The SDK ships two runnable sweep scripts under `examples/`:
 
 ```bash
-export BLOCKRUN_WALLET_KEY=0x...
+# Chat LLMs — every chat model the SDK exposes
 python examples/sweep_all_chat_models.py --output-json sweep-results.json
-```
 
-The script captures status, latency, token counts and per-call cost for each model and exits non-zero if any expected-to-work model fails.
-
-For image + music models there's a sister script:
-
-```bash
+# Image + music models (video excluded — long polling, expensive per clip)
 python examples/sweep_all_media_models.py --output-json sweep-media-results.json
-# --skip-image / --skip-music to scope down; --budget-cap 1.00 by default
 ```
 
-`smart_chat()` and `chat()` accept an optional `fallback_models=[...]` list — on
-timeout / 5xx / network error, the SDK transparently walks the chain before
-raising. `smart_chat()` populates this from the tier's fallback list
-automatically, so a hung NVIDIA NIM upstream no longer hard-fails the call.
+Each script captures per-model status, latency, token counts, and per-call
+cost, prints a grouped report, and exits non-zero if any expected-to-work
+model fails. Useful before a release or after router/catalog changes.
+
+`smart_chat()` and `chat()` accept an optional `fallback_models=[...]` list —
+on timeout / 5xx / network error the SDK transparently walks the chain
+before raising. `smart_chat()` populates this from the tier's fallback list
+automatically.
 
 ### Image Generation
-
-Last verified 2026-05-09 via `examples/sweep_all_media_models.py` — 8/8 ok, $0.55 total.
 
 | Model | Price |
 |-------|-------|

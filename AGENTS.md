@@ -4,7 +4,7 @@ Guidance for AI coding agents working with the BlockRun Python SDK.
 
 ## Project Overview
 
-**blockrun-llm** is a Python SDK for pay-per-request access to AI models (GPT, Claude, Gemini, DeepSeek, NVIDIA) via x402 micropayments on Base. **Includes 8 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M ctx, NIM-degraded as of 2026-05-09), Nemotron Nano Omni (vision), Qwen3 Next + Coder, Llama 4 Maverick, Mistral Small 4, plus `gpt-oss-120b/20b` (hidden from `/v1/models` but direct calls still work). Accessible via `routing_profile="free"` or any `nvidia/*` model id.
+**blockrun-llm** is a Python SDK for pay-per-request access to AI models (GPT, Claude, Gemini, DeepSeek, NVIDIA) via x402 micropayments on Base. **Includes 8 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M ctx), Nemotron Nano Omni (vision), Qwen3 Next + Coder, Llama 4 Maverick, Mistral Small 4, plus `gpt-oss-120b/20b` (hidden from `/v1/models` but direct calls still work). Accessible via `routing_profile="free"` or any `nvidia/*` model id.
 
 **Package:** `blockrun-llm` (PyPI)
 **Python:** >=3.9
@@ -97,24 +97,16 @@ export BLOCKRUN_WALLET_KEY=0x...
 pytest tests/integration -v
 ```
 
-### Full Chat-LLM Sweep
-Before a release or after router/catalog changes, run the end-to-end sweep that
-calls every chat model the SDK exposes (~$0.10, ~5–8 min):
+### End-to-End Model Sweeps
+Before a release or after router/catalog changes:
 ```bash
 python examples/sweep_all_chat_models.py --output-json sweep-results.json
-```
-Captures status / latency / token counts / per-call cost for each model and
-exits non-zero if any expected-to-work model fails. Forward-compat block flags
-new IDs in `/v1/models` not yet in the sweep list.
-
-### Media Sweep (Image + Music)
-For image and music model verification (~$0.75, ~15–25 min — generation is slow):
-```bash
 python examples/sweep_all_media_models.py --output-json sweep-media-results.json
-# --skip-image / --skip-music to scope down; --budget-cap 1.00 default
 ```
-Video models are intentionally not in this sweep — single clip can take >2 min
-and cost up to $0.30; run those manually when you need to verify them.
+Each script captures per-model status / latency / token counts / per-call
+cost and exits non-zero if any expected-to-work model fails. The chat sweep
+also runs a forward-compat diff against `/v1/models` to flag new IDs not in
+the sweep list. Video is excluded from the media sweep by design.
 
 ## Publishing
 
