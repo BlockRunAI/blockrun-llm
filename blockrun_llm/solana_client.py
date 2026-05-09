@@ -672,6 +672,14 @@ class SolanaLLMClient:
         """Resolve a canonical Predexon outcome ID (Predexon v2). Tier 1 ($0.001/call)."""
         return self.pm(f"outcomes/{predexon_id}")
 
+    def pm_polymarket_markets(self, **params: Any) -> Dict[str, Any]:
+        """List Polymarket markets (Predexon v2). Tier 1 ($0.001/call)."""
+        return self.pm("polymarket/markets", **params)
+
+    def pm_polymarket_events(self, **params: Any) -> Dict[str, Any]:
+        """List Polymarket events (Predexon v2). Tier 1 ($0.001/call)."""
+        return self.pm("polymarket/events", **params)
+
     def pm_polymarket_markets_keyset(self, **params: Any) -> Dict[str, Any]:
         """Polymarket markets with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
         return self.pm("polymarket/markets/keyset", **params)
@@ -679,6 +687,27 @@ class SolanaLLMClient:
     def pm_polymarket_events_keyset(self, **params: Any) -> Dict[str, Any]:
         """Polymarket events with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
         return self.pm("polymarket/events/keyset", **params)
+
+    def pm_polymarket_positions(self, **params: Any) -> Dict[str, Any]:
+        """Polymarket open positions (per-wallet, market-level PnL).
+        Tier 1 ($0.001/call)."""
+        return self.pm("polymarket/positions", **params)
+
+    def pm_polymarket_trades(self, **params: Any) -> Dict[str, Any]:
+        """Recent Polymarket trades. Tier 1 ($0.001/call)."""
+        return self.pm("polymarket/trades", **params)
+
+    def pm_polymarket_leaderboard(self, **params: Any) -> Dict[str, Any]:
+        """Polymarket trader leaderboard. Tier 1 ($0.001/call)."""
+        return self.pm("polymarket/leaderboard", **params)
+
+    def pm_kalshi_markets(self, **params: Any) -> Dict[str, Any]:
+        """List Kalshi markets. Tier 1 ($0.001/call)."""
+        return self.pm("kalshi/markets", **params)
+
+    def pm_limitless_markets(self, **params: Any) -> Dict[str, Any]:
+        """List Limitless markets. Tier 1 ($0.001/call)."""
+        return self.pm("limitless/markets", **params)
 
     def pm_sports_categories(self) -> Dict[str, Any]:
         """List available sports categories. Tier 1 ($0.001/call)."""
