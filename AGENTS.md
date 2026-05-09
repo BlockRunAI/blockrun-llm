@@ -107,6 +107,15 @@ Captures status / latency / token counts / per-call cost for each model and
 exits non-zero if any expected-to-work model fails. Forward-compat block flags
 new IDs in `/v1/models` not yet in the sweep list.
 
+### Media Sweep (Image + Music)
+For image and music model verification (~$0.75, ~15–25 min — generation is slow):
+```bash
+python examples/sweep_all_media_models.py --output-json sweep-media-results.json
+# --skip-image / --skip-music to scope down; --budget-cap 1.00 default
+```
+Video models are intentionally not in this sweep — single clip can take >2 min
+and cost up to $0.30; run those manually when you need to verify them.
+
 ## Publishing
 
 ```bash

@@ -314,18 +314,33 @@ python examples/sweep_all_chat_models.py --output-json sweep-results.json
 
 The script captures status, latency, token counts and per-call cost for each model and exits non-zero if any expected-to-work model fails.
 
+For image + music models there's a sister script:
+
+```bash
+python examples/sweep_all_media_models.py --output-json sweep-media-results.json
+# --skip-image / --skip-music to scope down; --budget-cap 1.00 by default
+```
+
+`smart_chat()` and `chat()` accept an optional `fallback_models=[...]` list — on
+timeout / 5xx / network error, the SDK transparently walks the chain before
+raising. `smart_chat()` populates this from the tier's fallback list
+automatically, so a hung NVIDIA NIM upstream no longer hard-fails the call.
+
 ### Image Generation
-| Model | Price |
-|-------|-------|
-| `openai/dall-e-3` | $0.04-0.08/image |
-| `openai/gpt-image-1` | $0.02-0.04/image |
-| `openai/gpt-image-2` | $0.06-0.12/image (reasoning-driven, multilingual text rendering, character consistency) |
-| `black-forest/flux-1.1-pro` | $0.04/image |
-| `google/nano-banana` | $0.05/image |
-| `google/nano-banana-pro` | $0.10-0.15/image |
-| `xai/grok-imagine-image` | $0.02/image |
-| `xai/grok-imagine-image-pro` | $0.07/image |
-| `zai/cogview-4` | $0.015/image |
+
+Last verified 2026-05-09 via `examples/sweep_all_media_models.py` — 8/9 ok, $0.55 total.
+
+| Model | Price | Status |
+|-------|-------|--------|
+| `openai/dall-e-3` | $0.04/image | ok |
+| `openai/gpt-image-1` | $0.02/image | ok |
+| `openai/gpt-image-2` | $0.06/image (reasoning-driven, multilingual text rendering, character consistency) | ok |
+| `google/nano-banana` | $0.05/image | ok |
+| `google/nano-banana-pro` | $0.10/image | ok |
+| `xai/grok-imagine-image` | $0.02/image | ok |
+| `xai/grok-imagine-image-pro` | $0.07/image | ok |
+| `zai/cogview-4` | $0.015/image | ok |
+| `black-forest/flux-1.1-pro` | $0.04/image | **broken — not in `/v1/models`, returns HTTP 400. Pending backend wire-up.** |
 
 Image editing (`client.edit`): `openai/gpt-image-1` and `openai/gpt-image-2` both support the `/v1/images/image2image` endpoint.
 

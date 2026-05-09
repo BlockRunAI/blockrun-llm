@@ -2,6 +2,32 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## Unreleased — media sweep + fallback param (2026-05-09)
+
+- **Added `examples/sweep_all_media_models.py`** — runnable end-to-end sweep
+  for the 9 image generation models and 2 music models the SDK exposes.
+  Mirrors the chat sweep shape: pre-flight balance + pricing-catalog read,
+  per-model status / latency / cost capture, ASCII report grouped by
+  modality, optional JSON output, $1.00 default budget cap. Video is
+  intentionally separate (long polling, expensive per clip).
+- README + AGENTS pick up a how-to-run pointer; the chat-sweep section now
+  cross-references the media sweep so contributors find both.
+- **Sweep findings (2026-05-09 run, 9/11 ok, $0.55 charged, 4m 3s):**
+  - `black-forest/flux-1.1-pro` returns HTTP 400 (135ms — fast fail) and is
+    absent from `/v1/models`, so the backend isn't actually routing it.
+    README image table now flags it as broken pending backend wire-up; the
+    other 8 image models all return valid generations.
+  - `minimax/music-2.5` returns HTTP 500 "API error after payment" — the
+    "after payment" wording means the gateway accepted x402 settlement but
+    the upstream music gen failed, so the user is charged ~$0.05 with no
+    artifact. Backend issue worth flagging to the music pipeline owner.
+    `minimax/music-2.5+` works fine (~112s for a 30s track).
+  - `/v1/images/models` endpoint returns 404 server-side — `LLMClient.list_image_models()`
+    can't be relied on. `examples/sweep_all_media_models.py` switched to
+    filtering `list_models()` by `category=="image"` for pricing lookup;
+    `pricing.per_image` (not `pricing.flat`) is the actual key for image
+    models in the catalog response.
+
 ## Unreleased — chat() timeout fallback (2026-05-09)
 
 - **`chat()` and `chat_completion()` now accept `fallback_models=[...]`.** On
