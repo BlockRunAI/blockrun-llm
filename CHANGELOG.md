@@ -6,6 +6,13 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ### New
 
+- **Predexon v2 typed helpers on `AsyncLLMClient` and `SolanaLLMClient`.**
+  Both clients gain the same 10 typed methods that already existed on
+  `LLMClient` (`pm_markets`, `pm_listings`, `pm_outcome`,
+  `pm_polymarket_markets_keyset`, `pm_polymarket_events_keyset`,
+  `pm_sports_categories`, `pm_sports_markets`, `pm_wallet_identity`,
+  `pm_wallet_identities`, `pm_wallet_cluster`) so the API surface is
+  consistent across sync/async/Solana.
 - **`exa_*` methods on `LLMClient` (Base USDC).** `exa()`, `exa_search()`,
   `exa_find_similar()`, `exa_contents()`, `exa_answer()` — same surface and
   pricing as the existing `SolanaLLMClient` versions ($0.01/request for

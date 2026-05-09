@@ -660,6 +660,47 @@ class SolanaLLMClient:
         """Structured query for Predexon data (POST, Solana payment). Powered by Predexon."""
         return self._request_with_payment_raw(f"/v1/pm/{path}", query)
 
+    def pm_markets(self, **params: Any) -> Dict[str, Any]:
+        """List canonical cross-venue markets (Predexon v2). Tier 1 ($0.001/call)."""
+        return self.pm("markets", **params)
+
+    def pm_listings(self, **params: Any) -> Dict[str, Any]:
+        """List venue-native executable listings (Predexon v2). Tier 1 ($0.001/call)."""
+        return self.pm("markets/listings", **params)
+
+    def pm_outcome(self, predexon_id: str) -> Dict[str, Any]:
+        """Resolve a canonical Predexon outcome ID (Predexon v2). Tier 1 ($0.001/call)."""
+        return self.pm(f"outcomes/{predexon_id}")
+
+    def pm_polymarket_markets_keyset(self, **params: Any) -> Dict[str, Any]:
+        """Polymarket markets with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
+        return self.pm("polymarket/markets/keyset", **params)
+
+    def pm_polymarket_events_keyset(self, **params: Any) -> Dict[str, Any]:
+        """Polymarket events with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
+        return self.pm("polymarket/events/keyset", **params)
+
+    def pm_sports_categories(self) -> Dict[str, Any]:
+        """List available sports categories. Tier 1 ($0.001/call)."""
+        return self.pm("sports/categories")
+
+    def pm_sports_markets(self, **params: Any) -> Dict[str, Any]:
+        """List sports markets grouped by game. Tier 1 ($0.001/call)."""
+        return self.pm("sports/markets", **params)
+
+    def pm_wallet_identity(self, wallet: str) -> Dict[str, Any]:
+        """Identity + profile for one wallet. Tier 2 ($0.005/call)."""
+        return self.pm(f"polymarket/wallet/identity/{wallet}")
+
+    def pm_wallet_identities(self, addresses: List[str]) -> Dict[str, Any]:
+        """Bulk identity for up to 200 wallet addresses. Tier 2 ($0.005/call)."""
+        return self.pm_query("polymarket/wallet/identities", {"addresses": addresses})
+
+    def pm_wallet_cluster(self, address: str) -> Dict[str, Any]:
+        """Wallet-cluster discovery (on-chain transfers + identity proofs).
+        Tier 2 ($0.005/call)."""
+        return self.pm(f"polymarket/wallet/{address}/cluster")
+
     # ── Exa Web Search (Powered by Exa) ─────────────────────────────────────
 
     def exa(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
