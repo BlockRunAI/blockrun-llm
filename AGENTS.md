@@ -4,7 +4,7 @@ Guidance for AI coding agents working with the BlockRun Python SDK.
 
 ## Project Overview
 
-**blockrun-llm** is a Python SDK for pay-per-request access to AI models (GPT, Claude, Gemini, DeepSeek, NVIDIA) via x402 micropayments on Base. **Includes 9 fully-free NVIDIA-hosted models** — DeepSeek V4 Pro/Flash (1M ctx), Nemotron Nano Omni (vision), Qwen3, Llama 4, GLM-4.7, Mistral. Accessible via `routing_profile="free"` or any `nvidia/*` model id.
+**blockrun-llm** is a Python SDK for pay-per-request access to AI models (GPT, Claude, Gemini, DeepSeek, NVIDIA) via x402 micropayments on Base. **Includes 8 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M ctx, NIM-degraded as of 2026-05-09), Nemotron Nano Omni (vision), Qwen3 Next + Coder, Llama 4 Maverick, Mistral Small 4, plus `gpt-oss-120b/20b` (hidden from `/v1/models` but direct calls still work). Accessible via `routing_profile="free"` or any `nvidia/*` model id.
 
 **Package:** `blockrun-llm` (PyPI)
 **Python:** >=3.9
@@ -96,6 +96,16 @@ Requires `BLOCKRUN_WALLET_KEY` with funded Base wallet (~$1 USDC):
 export BLOCKRUN_WALLET_KEY=0x...
 pytest tests/integration -v
 ```
+
+### Full Chat-LLM Sweep
+Before a release or after router/catalog changes, run the end-to-end sweep that
+calls every chat model the SDK exposes (~$0.10, ~5–8 min):
+```bash
+python examples/sweep_all_chat_models.py --output-json sweep-results.json
+```
+Captures status / latency / token counts / per-call cost for each model and
+exits non-zero if any expected-to-work model fails. Forward-compat block flags
+new IDs in `/v1/models` not yet in the sweep list.
 
 ## Publishing
 

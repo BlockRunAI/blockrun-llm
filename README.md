@@ -2,7 +2,7 @@
 
 > **blockrun-llm** is a Python SDK for accessing 80+ large language models (GPT-5.x, Claude 4.x, Gemini 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, X/Twitter APIs, and Pyth-backed market data — all with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required; your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
 >
-> 🆓 **Includes 9 fully-free NVIDIA-hosted models** — DeepSeek V4 Pro/Flash (1M context), Nemotron Nano Omni (vision), Qwen3, Llama 4, GLM-4.7, Mistral. Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any `nvidia/*` model directly.
+> 🆓 **Includes 8 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M context, currently degraded — see notes below), Nemotron Nano Omni (vision), Qwen3 Next + Coder, Llama 4 Maverick, Mistral Small 4, plus `gpt-oss-120b/20b` (hidden from `/v1/models` but direct calls still work). Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any `nvidia/*` model directly.
 
 [![PyPI](https://img.shields.io/pypi/v/blockrun-llm.svg)](https://pypi.org/project/blockrun-llm/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -59,21 +59,22 @@ print(result.model)     # e.g. 'nvidia/deepseek-v4-flash' (cheapest capable for 
 print(result.response)  # '4'
 ```
 
-**Available free models** (input + output both $0, all NVIDIA-hosted, last refreshed 2026-04-28):
+**Available free models** (input + output both $0, all NVIDIA-hosted, last verified 2026-05-09 via `examples/sweep_all_chat_models.py`):
 
 | Model ID | Context | Best For |
 |----------|---------|----------|
-| `nvidia/deepseek-v4-pro` | 1M | Flagship reasoning — MMLU-Pro 87.5, GPQA 90.1, SWE-bench 80.6, LiveCodeBench 93.5 |
-| `nvidia/deepseek-v4-flash` | 1M | ~5× faster than V4 Pro — chat, summarization, light reasoning (weaker factual recall) |
+| `nvidia/deepseek-v4-flash` | 1M | DeepSeek V4 Flash — 284B / 13B active MoE, ~5× faster than V4 Pro. Best free chat / summarization / light reasoning. **Note (2026-05-09): NIM upstream is currently slow / timing out at 120s; consider `mistral-small-4-119b` or `qwen3-next-80b-a3b-thinking` until resolved** |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Only vision-capable free model — text + images + video (≤2 min) + audio (≤1 hr) |
 | `nvidia/qwen3-next-80b-a3b-thinking` | 131K | 116 tok/s reasoning with thinking mode |
 | `nvidia/mistral-small-4-119b` | 131K | 114 tok/s — fastest free chat |
-| `nvidia/glm-4.7` | 131K | 237 tok/s — GLM-4.7 with thinking mode |
 | `nvidia/llama-4-maverick` | 131K | Meta Llama 4 Maverick MoE |
 | `nvidia/qwen3-coder-480b` | 131K | Coding-optimised 480B MoE |
-| `nvidia/deepseek-v3.2` | 131K | Legacy V3.2 — auto-upgrades to V4 Pro via fallback |
+| `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models` (so SmartChat won't auto-pick it) but direct calls still work |
+| `nvidia/gpt-oss-20b` | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models` but direct calls still work |
 
-> Note: `nvidia/gpt-oss-120b` and `nvidia/gpt-oss-20b` were retired 2026-04-28 — NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement, which conflicts with our data-privacy policy.
+> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.50/$1.00 with the 75% promo through 2026-05-31) — `nvidia/deepseek-v4-pro` is currently hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash, which is itself slow as of 2026-05-09.
+
+> **Privacy note for `gpt-oss-120b/20b`**: NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement. The models are hidden from `/v1/models` so SmartChat won't auto-route to them, but direct calls still work — use them only when prompts contain no sensitive data.
 
 ## Solana Support
 
@@ -208,12 +209,13 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 | `openai/o3-mini` | $1.10/M | $4.40/M | 128K |
 
 ### Anthropic Claude
-| Model | Input Price | Output Price | Context |
-|-------|-------------|--------------|---------|
-| `anthropic/claude-opus-4.6` | $5.00/M | $25.00/M | 200K |
-| `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M | 200K |
-| `anthropic/claude-sonnet-4.6` | $3.00/M | $15.00/M | 200K |
-| `anthropic/claude-haiku-4.5` | $1.00/M | $5.00/M | 200K |
+| Model | Input Price | Output Price | Context | Notes |
+|-------|-------------|--------------|---------|-------|
+| `anthropic/claude-opus-4.7` | $5.00/M | $25.00/M | 1M | Most capable Claude — agentic coding + adaptive thinking, 128K output |
+| `anthropic/claude-opus-4.6` | $5.00/M | $25.00/M | 200K | Hidden from `/v1/models` (superseded by 4.7); direct calls still work |
+| `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M | 200K | |
+| `anthropic/claude-sonnet-4.6` | $3.00/M | $15.00/M | 200K | |
+| `anthropic/claude-haiku-4.5` | $1.00/M | $5.00/M | 200K | |
 
 ### Google Gemini
 | Model | Input Price | Output Price | Context |
@@ -227,10 +229,17 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 | `google/gemini-2.5-flash-lite` | $0.10/M | $0.40/M | 1M |
 
 ### DeepSeek
-| Model | Input Price | Output Price | Context |
-|-------|-------------|--------------|---------|
-| `deepseek/deepseek-chat` | $0.28/M | $0.42/M | 128K |
-| `deepseek/deepseek-reasoner` | $0.28/M | $0.42/M | 128K |
+
+V4 family launched 2026-04-24. DeepSeek upstream now serves the legacy
+`deepseek-chat` / `deepseek-reasoner` aliases as V4 Flash non-thinking /
+thinking modes. V4 Pro is the new flagship paid SKU — 1.6T MoE / 49B active,
+1M context, MMLU-Pro 87.5, GPQA 90.1, SWE-bench 80.6, LiveCodeBench 93.5.
+
+| Model | Input Price | Output Price | Context | Notes |
+|-------|-------------|--------------|---------|-------|
+| `deepseek/deepseek-v4-pro` | $0.50/M | $1.00/M | 1M | V4 flagship — strongest open-weight reasoner. **75% off until 2026-05-31** (list $2.00/$4.00) |
+| `deepseek/deepseek-chat` | $0.20/M | $0.40/M | 1M | V4 Flash non-thinking (paid endpoint with 5MB request bodies; same upstream as `nvidia/deepseek-v4-flash`) |
+| `deepseek/deepseek-reasoner` | $0.20/M | $0.40/M | 1M | V4 Flash thinking (same upstream as `deepseek-chat`, thinking enabled by default) |
 
 ### MiniMax
 | Model | Input Price | Output Price | Context |
@@ -238,27 +247,38 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 | `minimax/minimax-m2.7` | $0.30/M | $1.20/M | 200K |
 
 ### ZAI
-| Model | Input Price | Output Price | Context |
-|-------|-------------|--------------|---------|
-| `zai/glm-5` | $1.00/M | $3.20/M | 200K |
-| `zai/glm-5-turbo` | $1.20/M | $4.00/M | 200K |
+
+The GLM-5 family bills as **flat $0.001/call** (no token counting) — `/v1/models` reports them under `billing_mode: "flat"`. Per-call pricing makes them cheapest-of-class for short prompts.
+
+| Model | Price | Context | Notes |
+|-------|-------|---------|-------|
+| `zai/glm-5.1` | $0.001/call | 200K | Z.AI's latest flagship — #1 open-source on SWE-Bench Pro, 8-hour autonomous execution |
+| `zai/glm-5` | $0.001/call | 200K | |
+| `zai/glm-5-turbo` | $0.001/call | 200K | |
 
 ### NVIDIA (Free & Hosted)
 
-Free tier refreshed 2026-04-21: retired Nemotron family, `mistral-large-3-675b`,
-`devstral-2-123b`, `qwen3.5-397b-a17b` and paid `nvidia/kimi-k2.5` (the backend
-now auto-redirects these IDs to the replacements below).
+Free tier refreshed 2026-04-28: added `nvidia/deepseek-v4-flash` (1M context)
+and `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` (vision). `nvidia/gpt-oss-120b`
+and `nvidia/gpt-oss-20b` were briefly delisted over privacy concerns
+(NVIDIA's free build.nvidia.com tier reserves the right to use prompts for
+service improvement) but **re-enabled 2026-04-30 with `available: true` +
+`hidden: true`** — they no longer appear in `/v1/models` (so SmartChat won't
+auto-pick them) but direct calls by full ID still return HTTP 200.
+`nvidia/deepseek-v4-pro`, `nvidia/deepseek-v3.2`, and `nvidia/glm-4.7` are
+hidden because NVIDIA's NIM deployment is hung — backend MODEL_REDIRECTS
+auto-forwards calls to V4 Flash / qwen3-coder.
 
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
+| `nvidia/deepseek-v4-flash` | **FREE** | **FREE** | 1M | DeepSeek V4 Flash — 284B / 13B active MoE, ~5× faster than V4 Pro. Best free chat / summarization |
+| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | **FREE** | **FREE** | 256K | First vision-capable free model — RGB images, mp4 video |
 | `nvidia/qwen3-next-80b-a3b-thinking` | **FREE** | **FREE** | 131K | Reasoning flagship — 116 tok/s, thinking mode |
 | `nvidia/mistral-small-4-119b` | **FREE** | **FREE** | 131K | Fastest chat — 114 tok/s |
-| `nvidia/glm-4.7` | **FREE** | **FREE** | 131K | GLM-4.7 with thinking mode — 237 tok/s |
 | `nvidia/llama-4-maverick` | **FREE** | **FREE** | 131K | Meta Llama 4 Maverick MoE |
 | `nvidia/qwen3-coder-480b` | **FREE** | **FREE** | 131K | Coding-optimised 480B MoE |
-| `nvidia/deepseek-v3.2` | **FREE** | **FREE** | 131K | DeepSeek V3.2 hosted |
-| `nvidia/gpt-oss-120b` | **FREE** | **FREE** | 128K | OpenAI open-weight 120B — 123 tok/s |
-| `nvidia/gpt-oss-20b` | **FREE** | **FREE** | 128K | OpenAI open-weight 20B — 155 tok/s |
+| `nvidia/gpt-oss-120b` | **FREE** | **FREE** | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models`; direct calls work |
+| `nvidia/gpt-oss-20b` | **FREE** | **FREE** | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models`; direct calls work |
 | `moonshot/kimi-k2.5` | $0.60/M | $3.00/M | 262K | Kimi K2.5 direct from Moonshot (replaces `nvidia/kimi-k2.5`) |
 | `moonshot/kimi-k2.6` | $0.95/M | $4.00/M | 256K | Moonshot flagship (vision + reasoning_content) |
 
@@ -272,16 +292,27 @@ now auto-redirects these IDs to the replacements below).
 
 ### E2E Verified Models
 
-All models below have been tested end-to-end via the Python SDK (Mar 2026):
+All chat LLMs in the SDK (46 model IDs across 8 providers) are exercised end-to-end on Base mainnet by `examples/sweep_all_chat_models.py`. Last full sweep: **2026-05-09** — 44/46 ok, total cost $0.08, runtime ~8 min.
 
-| Provider | Model | Status |
-|----------|-------|--------|
-| OpenAI | `openai/gpt-5.2` | Passed |
-| Anthropic | `anthropic/claude-opus-4.6` | Passed |
-| Anthropic | `anthropic/claude-sonnet-4.6` | Passed |
-| Google | `google/gemini-2.5-flash` | Passed |
-| DeepSeek | `deepseek/deepseek-chat` | Passed |
-| NVIDIA | `nvidia/gpt-oss-120b` | Passed |
+| Provider | Models tested | Status |
+|----------|---------------|--------|
+| OpenAI | 14 (gpt-5.x family + o1/o1-mini + o3/o3-mini) | 14/14 ok |
+| Anthropic | 5 (opus-4.7, opus-4.6, opus-4.5, sonnet-4.6, haiku-4.5) | 5/5 ok |
+| Google | 7 (gemini-3.x + gemini-2.5.x) | 7/7 ok |
+| DeepSeek | 3 (v4-pro, chat, reasoner) | 3/3 ok |
+| MiniMax | 1 (minimax-m2.7) | 1/1 ok |
+| ZAI | 3 (glm-5.1, glm-5, glm-5-turbo) | 3/3 ok |
+| Moonshot | 2 (kimi-k2.6, kimi-k2.5) | 2/2 ok |
+| NVIDIA | 11 (6 visible free + 2 hidden-callable + 3 hidden-redirected) | 9/11 ok — `nvidia/deepseek-v4-flash` and `nvidia/deepseek-v4-pro` timed out at 120s (NIM upstream degraded; backend redirects expose the same outage) |
+
+To re-verify before a release:
+
+```bash
+export BLOCKRUN_WALLET_KEY=0x...
+python examples/sweep_all_chat_models.py --output-json sweep-results.json
+```
+
+The script captures status, latency, token counts and per-call cost for each model and exits non-zero if any expected-to-work model fails.
 
 ### Image Generation
 | Model | Price |

@@ -2,6 +2,21 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## Unreleased — chat-LLM sweep validation (2026-05-09)
+
+- **Added `examples/sweep_all_chat_models.py`** — runnable end-to-end sweep that calls every chat model the SDK exposes (46 IDs across 8 providers) on Base mainnet via real x402 payments, then prints a grouped pass/fail report with per-model latency, token counts and cost. Includes a forward-compat diff against `/v1/models` to flag new IDs missing from the sweep list, an async smoke (`AsyncLLMClient.chat_completion` + `asyncio.gather`), a $2.50 budget abort, and optional JSON output. Run before releases or after router/catalog changes:
+  ```bash
+  python examples/sweep_all_chat_models.py --output-json sweep-results.json
+  ```
+- **Sweep findings (2026-05-09 run, 44/46 ok, $0.082 total, 8m14s):**
+  - Discovered two new chat models in `/v1/models` not yet in the sweep / docs: `anthropic/claude-opus-4.7` ($5/M in, $25/M out, 1M ctx, 128K output, agentic coding + adaptive thinking) and `zai/glm-5.1` (flat $0.001/call, 200K ctx — Z.AI's #1 open-source SWE-Bench Pro). Both added to `SWEEP_TARGETS`, README pricing tables, and verified passing.
+  - **NVIDIA NIM upstream regression**: `nvidia/deepseek-v4-flash` and `nvidia/deepseek-v4-pro` (which redirects to v4-flash) both timed out at 120s. README's "Available free models" table and the `🆓` header banner have been updated to flag the degraded state and recommend `nvidia/mistral-small-4-119b` or `nvidia/qwen3-next-80b-a3b-thinking` until resolved.
+  - **README contradiction fixed**: a stale Quick Start note claimed `nvidia/gpt-oss-120b/20b` were "retired 2026-04-28" while the table two rows above said direct calls still work. The 2026-04-30 re-enable made the retired note obsolete; replaced with a focused privacy advisory.
+  - **ZAI pricing was misdocumented**: `/v1/models` reports the GLM-5 family as `billing_mode: "flat"` with `pricing.flat = 0.001`, not the per-token rates ($1.00/M, $1.20/M) shown in the README. Sweep cost data ($0.001 per call regardless of token count) confirms flat billing is correct. Pricing table converted to `$0.001/call`.
+  - **Hidden-but-callable models documented**: `anthropic/claude-opus-4.6` and `moonshot/kimi-k2.5` are absent from `/v1/models` but direct calls return 200 OK. Tagged as such in the Anthropic pricing table; moonshot table already had the `kimi-k2.5` entry.
+  - **OpenAI dated-version normalization**: probe classifier now treats `response.model` differing only in date suffix (e.g. `gpt-5.5` → `gpt-5.5-2026-04-20`) as the same model, not an `ok_redirected` event.
+- README "E2E Verified Models" table replaced with the full 46-model sweep summary and a how-to-rerun pointer.
+
 ## 0.19.0
 
 - **Predexon v2 endpoints exposed via typed helpers.** All v2 endpoints went live in production on 2026-05-07 (`blockrun-web-00451-cnw`). The generic `pm()` / `pm_query()` passthrough already handled them, but agents can now discover the new shape from method names + docstrings. Ten new convenience methods on `LLMClient` — each is a thin wrapper, no breaking changes to the existing `pm()` API:
