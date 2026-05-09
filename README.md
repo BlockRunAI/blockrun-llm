@@ -429,66 +429,69 @@ followings = client.x_followings("blockaborr")
 
 Works on all clients: `LLMClient` (Base), `AsyncLLMClient`, and `SolanaLLMClient`.
 
-## Prediction Markets (Powered by Predexon)
+## Prediction Markets (Powered by Predexon v2)
 
-Access real-time prediction market data from Polymarket, Kalshi, and Binance Futures via [Predexon](https://predexon.com). No API keys needed — pay-per-request via x402.
+Access real-time prediction market data from Polymarket, Kalshi, Limitless, sports, and Binance Futures via [Predexon](https://predexon.com). No API keys needed — pay-per-request via x402. Tier 1 endpoints are $0.001/call, Tier 2 (wallet identity / clustering) are $0.005/call.
 
-### Polymarket
+Each method below is available on `LLMClient` (Base), `AsyncLLMClient`, and `SolanaLLMClient`.
+
+### Typed helpers
+
+| Method | Endpoint | Tier |
+|---|---|---|
+| `pm_markets(**filters)` | canonical cross-venue markets | 1 |
+| `pm_listings(**filters)` | venue-native executable listings | 1 |
+| `pm_outcome(predexon_id)` | resolve a canonical outcome | 1 |
+| `pm_polymarket_markets(**filters)` | Polymarket markets (offset pagination) | 1 |
+| `pm_polymarket_events(**filters)` | Polymarket events (offset pagination) | 1 |
+| `pm_polymarket_markets_keyset(**filters)` | Polymarket markets, cursor pagination | 1 |
+| `pm_polymarket_events_keyset(**filters)` | Polymarket events, cursor pagination | 1 |
+| `pm_polymarket_positions(**filters)` | per-wallet open positions + PnL | 1 |
+| `pm_polymarket_trades(**filters)` | recent trades (token, side, price, tx_hash) | 1 |
+| `pm_polymarket_leaderboard(**filters)` | trader leaderboard (window, sort_by) | 1 |
+| `pm_kalshi_markets(**filters)` | Kalshi event contracts | 1 |
+| `pm_limitless_markets(**filters)` | Limitless binary AMM markets | 1 |
+| `pm_sports_categories()` | available sports categories | 1 |
+| `pm_sports_markets(**filters)` | sports markets grouped by game | 1 |
+| `pm_wallet_identity(wallet)` | identity + profile for one wallet | 2 |
+| `pm_wallet_identities(addresses)` | bulk identity for ≤200 wallets (POST) | 2 |
+| `pm_wallet_cluster(address)` | on-chain transfer + identity-proof cluster | 2 |
 
 ```python
 from blockrun_llm import LLMClient
 
 client = LLMClient()
 
-# List markets with optional filters ($0.001/request)
-markets = client.pm("polymarket/markets")
-markets = client.pm("polymarket/markets", status="active", limit=10)
-markets = client.pm("polymarket/markets", search="bitcoin")
+# Canonical cross-venue snapshot
+markets = client.pm_markets(status="active", limit=20)
+listings = client.pm_listings(venue="polymarket", limit=20)
 
-# List events ($0.001/request)
-events = client.pm("polymarket/events")
+# Polymarket
+events = client.pm_polymarket_events(limit=10)
+positions = client.pm_polymarket_positions(user="0xABC123...")
+top = client.pm_polymarket_leaderboard(window="7d", sort_by="pnl", limit=10)
 
-# Historical trades ($0.001/request)
-trades = client.pm("polymarket/trades")
+# Sports + Kalshi + Limitless
+games = client.pm_sports_markets(league="NBA", limit=10)
+kalshi = client.pm_kalshi_markets(limit=10)
+limitless = client.pm_limitless_markets(limit=10)
 
-# OHLCV candlestick data for a specific condition ($0.001/request)
-candles = client.pm("polymarket/candlesticks/0x1234abcd...")
-
-# Wallet profile ($0.005/request — tier 2)
-profile = client.pm("polymarket/wallet/0xABC123...")
-
-# Wallet P&L ($0.005/request — tier 2)
-pnl = client.pm("polymarket/wallet/pnl/0xABC123...")
-
-# Global leaderboard ($0.001/request)
-leaderboard = client.pm("polymarket/leaderboard")
+# Wallet identity (Tier 2)
+profile = client.pm_wallet_identity("0xABC123...")
+batch = client.pm_wallet_identities(["0xABC...", "0xDEF..."])
+cluster = client.pm_wallet_cluster("0xABC123...")
 ```
 
-### Kalshi & Binance
+### Generic passthrough
+
+For endpoints without a typed helper, drop down to `pm()` (GET) or `pm_query()`
+(POST). Same pricing tiers, same return shape:
 
 ```python
-# Kalshi markets ($0.001/request)
-kalshi_markets = client.pm("kalshi/markets")
-
-# Kalshi trades ($0.001/request)
-kalshi_trades = client.pm("kalshi/trades")
-
-# Binance candles for supported pairs ($0.001/request)
-btc_candles = client.pm("binance/candles/BTCUSDT")
-eth_candles = client.pm("binance/candles/ETHUSDT")
-# Also: SOLUSDT, XRPUSDT
+candles = client.pm("polymarket/candlesticks/0x1234abcd...")  # OHLCV
+btc = client.pm("binance/candles/BTCUSDT")                    # crypto candles
+pairs = client.pm("matching-markets/pairs")                   # cross-platform pairs
 ```
-
-### Cross-Platform
-
-```python
-# Cross-platform matching pairs ($0.001/request)
-pairs = client.pm("matching-markets/pairs")
-```
-
-All current endpoints are GET. The `pm_query()` method is available for future POST endpoints.
-
-Works on all clients: `LLMClient` (Base), `AsyncLLMClient`, and `SolanaLLMClient`.
 
 ## Exa Web Search (Powered by Exa)
 
