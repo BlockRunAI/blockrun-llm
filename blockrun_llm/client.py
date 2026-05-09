@@ -2447,6 +2447,47 @@ class AsyncLLMClient:
         """Async structured query for Predexon data (POST). Powered by Predexon."""
         return await self._request_with_payment_raw(f"/v1/pm/{path}", query)
 
+    async def pm_markets(self, **params: Any) -> Dict[str, Any]:
+        """List canonical cross-venue markets (Predexon v2). Tier 1 ($0.001/call)."""
+        return await self.pm("markets", **params)
+
+    async def pm_listings(self, **params: Any) -> Dict[str, Any]:
+        """List venue-native executable listings (Predexon v2). Tier 1 ($0.001/call)."""
+        return await self.pm("markets/listings", **params)
+
+    async def pm_outcome(self, predexon_id: str) -> Dict[str, Any]:
+        """Resolve a canonical Predexon outcome ID (Predexon v2). Tier 1 ($0.001/call)."""
+        return await self.pm(f"outcomes/{predexon_id}")
+
+    async def pm_polymarket_markets_keyset(self, **params: Any) -> Dict[str, Any]:
+        """Polymarket markets with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
+        return await self.pm("polymarket/markets/keyset", **params)
+
+    async def pm_polymarket_events_keyset(self, **params: Any) -> Dict[str, Any]:
+        """Polymarket events with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
+        return await self.pm("polymarket/events/keyset", **params)
+
+    async def pm_sports_categories(self) -> Dict[str, Any]:
+        """List available sports categories. Tier 1 ($0.001/call)."""
+        return await self.pm("sports/categories")
+
+    async def pm_sports_markets(self, **params: Any) -> Dict[str, Any]:
+        """List sports markets grouped by game. Tier 1 ($0.001/call)."""
+        return await self.pm("sports/markets", **params)
+
+    async def pm_wallet_identity(self, wallet: str) -> Dict[str, Any]:
+        """Identity + profile for one wallet. Tier 2 ($0.005/call)."""
+        return await self.pm(f"polymarket/wallet/identity/{wallet}")
+
+    async def pm_wallet_identities(self, addresses: List[str]) -> Dict[str, Any]:
+        """Bulk identity for up to 200 wallet addresses. Tier 2 ($0.005/call)."""
+        return await self.pm_query("polymarket/wallet/identities", {"addresses": addresses})
+
+    async def pm_wallet_cluster(self, address: str) -> Dict[str, Any]:
+        """Wallet-cluster discovery (on-chain transfers + identity proofs).
+        Tier 2 ($0.005/call)."""
+        return await self.pm(f"polymarket/wallet/{address}/cluster")
+
     async def list_models(self) -> List[Dict[str, Any]]:
         """List available LLM models asynchronously."""
         response = await self._client.get(f"{self.api_url}/v1/models")
