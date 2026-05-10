@@ -97,6 +97,17 @@ export BLOCKRUN_WALLET_KEY=0x...
 pytest tests/integration -v
 ```
 
+### Local Billing / Cost Tracking
+Every paid call writes to `~/.blockrun/cost_log.jsonl` with model / wallet /
+network metadata. To audit spending:
+```bash
+python -m blockrun_llm.billing summary --group-by model
+python -m blockrun_llm.billing export csv --from 2026-05-01 --output may.csv
+```
+Programmatic access via `from blockrun_llm import get_cost_log_summary,
+export_cost_log_csv, export_cost_log_json`. Per-machine only; for
+organization-wide accounting query the gateway's ledger.
+
 ### End-to-End Model Sweeps
 Before a release or after router/catalog changes:
 ```bash
