@@ -6,6 +6,18 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ### New
 
+- **Local billing / cost-tracking surface.** Every paid call now writes a
+  `{ts, endpoint, cost_usd, model, wallet, network, client_kind}` row to
+  `~/.blockrun/cost_log.jsonl`. New helpers on top:
+  - `get_cost_log_summary(*, from_date, to_date, wallet, network, group_by)`
+    — aggregate by `endpoint` / `model` / `wallet` / `network` /
+    `client_kind` / `day` / `month`.
+  - `export_cost_log_csv(...)` and `export_cost_log_json(...)` — render
+    filtered per-call records, optionally to a file.
+  - `python -m blockrun_llm.billing summary | export {csv|json}` CLI with
+    `--from / --to / --wallet / --network / --group-by / --output` flags.
+  Older 3-field cost-log rows remain readable; `by_endpoint` is still
+  emitted as a backwards-compat alias when grouping by endpoint.
 - **Predexon v2 typed helpers — full coverage across sync, async, Solana.**
   All three clients now expose the same 17 `pm_*` methods:
   - Canonical cross-venue (Tier 1): `pm_markets`, `pm_listings`, `pm_outcome`

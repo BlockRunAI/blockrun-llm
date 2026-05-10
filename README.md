@@ -735,6 +735,54 @@ client = LLMClient(api_url="https://testnet.blockrun.ai/api")
 response = client.chat("openai/gpt-oss-20b", "Hello!")
 ```
 
+## Billing & Cost Tracking
+
+Every paid call appends one line to `~/.blockrun/cost_log.jsonl` capturing
+timestamp, endpoint, cost, and (when available) `model`, `wallet`, `network`,
+and `client_kind`. The SDK ships a small reader / exporter on top so you can
+audit spending without leaving the Python ecosystem.
+
+### CLI
+
+```bash
+# Aggregated summary, default grouped by endpoint
+python -m blockrun_llm.billing summary
+
+# Group by model / month / wallet / network / client_kind / day
+python -m blockrun_llm.billing summary --group-by model
+python -m blockrun_llm.billing summary --group-by month --from 2026-04-01
+
+# Filter by wallet (when one machine drives multiple keys)
+python -m blockrun_llm.billing summary --wallet 0xCC8c... --network base-mainnet
+
+# Export per-call records
+python -m blockrun_llm.billing export csv  --from 2026-05-01 --output may.csv
+python -m blockrun_llm.billing export json --to 2026-05-09
+```
+
+### Python API
+
+```python
+from blockrun_llm import (
+    get_cost_log_summary,
+    export_cost_log_csv,
+    export_cost_log_json,
+)
+
+summary = get_cost_log_summary(group_by="model", from_date="2026-04-01")
+print(summary["total_usd"], summary["calls"])
+for model, slot in summary["groups"].items():
+    print(f"  {model:40s}  {slot['calls']:>5}  ${slot['cost_usd']:.4f}")
+
+# Returns CSV / JSON text; pass output_path to also write to disk
+csv_text  = export_cost_log_csv("bill.csv", from_date="2026-05-01")
+json_text = export_cost_log_json(from_date="2026-05-01")
+```
+
+Scope: the cost log is per-machine. It records calls made by this Python SDK
+only — calls from other clients (TS SDK, MCP, raw curl) are not included.
+For organization-wide billing, query the gateway's authoritative ledger.
+
 ## Environment Variables
 
 | Variable | Description | Required |
