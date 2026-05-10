@@ -1,6 +1,6 @@
 # BlockRun LLM SDK (Python)
 
-> **blockrun-llm** is a Python SDK for accessing 80+ large language models (GPT-5.x, Claude 4.x, Gemini 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, X/Twitter APIs, and Pyth-backed market data — all with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required; your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
+> **blockrun-llm** is a Python SDK for accessing 80+ large language models (GPT-5.x, Claude 4.x, Gemini 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, prediction-market data (Predexon), Exa neural web search, and Pyth-backed market data — all with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required; your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
 >
 > 🆓 **Includes 8 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M context), Nemotron Nano Omni (vision), Qwen3 Next + Coder, Llama 4 Maverick, Mistral Small 4, plus `gpt-oss-120b/20b` (hidden from `/v1/models` but direct calls still work). Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any `nvidia/*` model directly.
 
@@ -399,35 +399,6 @@ bars = p2.history(
 ```
 
 Supported stock markets: `us, hk, jp, kr, gb, de, fr, nl, ie, lu, cn, ca`.
-
-## X/Twitter Data (Powered by AttentionVC)
-
-Access X/Twitter user profiles, followers, and followings via [AttentionVC](https://attentionvc.ai) partner API. No API keys needed — pay-per-request via x402.
-
-```python
-from blockrun_llm import LLMClient
-
-client = LLMClient()
-
-# Look up user profiles ($0.002/user, min $0.02)
-users = client.x_user_lookup(["elonmusk", "blockaborr"])
-for user in users.users:
-    print(f"@{user.userName}: {user.followers} followers")
-
-# Get followers ($0.05/page, ~200 accounts)
-result = client.x_followers("blockaborr")
-for f in result.followers:
-    print(f"  @{f.screen_name}")
-
-# Paginate through all followers
-while result.has_next_page:
-    result = client.x_followers("blockaborr", cursor=result.next_cursor)
-
-# Get followings ($0.05/page)
-followings = client.x_followings("blockaborr")
-```
-
-Works on all clients: `LLMClient` (Base), `AsyncLLMClient`, and `SolanaLLMClient`.
 
 ## Prediction Markets (Powered by Predexon v2)
 
@@ -975,7 +946,7 @@ The SDK caches responses to avoid duplicate payments:
 from blockrun_llm import clear_cache
 
 # Automatic TTLs by endpoint:
-# - X/Twitter: 1 hour
+# - Prediction Markets: 30 minutes
 # - Search: 15 minutes
 # - Models: 24 hours
 # - Chat/Image: no cache (every call is unique)
@@ -984,21 +955,8 @@ from blockrun_llm import clear_cache
 removed = clear_cache()  # Remove all cached responses
 ```
 
-## Cost Logging
-
-Track spending across sessions:
-
-```python
-from blockrun_llm import get_cost_log_summary
-
-# Costs are logged to ~/.blockrun/cost_log.jsonl
-summary = get_cost_log_summary()
-print(f"Total: ${summary['total_usd']:.2f}")
-print(f"Calls: {summary['calls']}")
-print(f"By endpoint: {summary['by_endpoint']}")
-```
-
-Per-session spending is also available on any client:
+Per-session spending is also available on any client (see also
+[Billing & Cost Tracking](#billing--cost-tracking) for the full surface):
 
 ```python
 from blockrun_llm import LLMClient
