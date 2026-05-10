@@ -175,6 +175,22 @@ def _should_fallback(exc: Exception) -> bool:
     return False
 
 
+def _detect_network(api_url: str) -> str:
+    """Map an API URL to the canonical network label used in billing
+    records. Returns ``base-mainnet`` / ``base-sepolia`` / ``solana-mainnet``
+    / ``unknown``.
+    """
+    if not api_url:
+        return "unknown"
+    if "sol.blockrun" in api_url:
+        return "solana-mainnet"
+    if "testnet" in api_url:
+        return "base-sepolia"
+    if "blockrun.ai" in api_url:
+        return "base-mainnet"
+    return "unknown"
+
+
 # =============================================================================
 # LLM Client Class (requires wallet)
 # =============================================================================
@@ -747,7 +763,13 @@ class LLMClient:
         # Save full response locally (cost log + response archive)
         from .cache import save_to_cache
 
-        save_to_cache("/v1/chat/completions", body, response_data, cost_usd=cost_usd)
+        save_to_cache(
+            "/v1/chat/completions",
+            body,
+            response_data,
+            cost_usd=cost_usd,
+            **self._billing_meta(),
+        )
 
         return chat_response
 
@@ -781,7 +803,13 @@ class LLMClient:
         if response.status_code == 402:
             result = self._handle_payment_and_retry_raw(url, body, response)
             # Save paid response to cache
-            save_to_cache(endpoint, body, result, cost_usd=self._last_call_cost)
+            save_to_cache(
+                endpoint,
+                body,
+                result,
+                cost_usd=self._last_call_cost,
+                **self._billing_meta(),
+            )
             return result
 
         if response.status_code != 200:
@@ -913,7 +941,13 @@ class LLMClient:
 
         if response.status_code == 402:
             result = self._handle_get_payment_and_retry(url, params, response)
-            save_to_cache(endpoint, cache_key_body, result, cost_usd=self._last_call_cost)
+            save_to_cache(
+                endpoint,
+                cache_key_body,
+                result,
+                cost_usd=self._last_call_cost,
+                **self._billing_meta(),
+            )
             return result
 
         if response.status_code != 200:
@@ -1680,6 +1714,15 @@ class LLMClient:
         """Check if client is configured for testnet."""
         return "testnet.blockrun.ai" in self.api_url
 
+    def _billing_meta(self) -> Dict[str, Optional[str]]:
+        """Return billing metadata (wallet / network / client_kind) for the
+        cost log. Used by ``save_to_cache`` call sites."""
+        return {
+            "wallet": self.account.address,
+            "network": _detect_network(self.api_url),
+            "client_kind": type(self).__name__,
+        }
+
     def get_balance(self) -> float:
         """
         Get USDC balance on Base network.
@@ -2053,7 +2096,13 @@ class AsyncLLMClient:
         response_data = retry_response.json()
         from .cache import save_to_cache
 
-        save_to_cache("/v1/chat/completions", body, response_data, cost_usd=cost_usd)
+        save_to_cache(
+            "/v1/chat/completions",
+            body,
+            response_data,
+            cost_usd=cost_usd,
+            **self._billing_meta(),
+        )
 
         return ChatResponse(**response_data)
 
@@ -2082,7 +2131,13 @@ class AsyncLLMClient:
 
         if response.status_code == 402:
             result = await self._handle_payment_and_retry_raw(url, body, response)
-            save_to_cache(endpoint, body, result, cost_usd=self._last_call_cost)
+            save_to_cache(
+                endpoint,
+                body,
+                result,
+                cost_usd=self._last_call_cost,
+                **self._billing_meta(),
+            )
             return result
 
         if response.status_code != 200:
@@ -2200,7 +2255,13 @@ class AsyncLLMClient:
 
         if response.status_code == 402:
             result = await self._handle_get_payment_and_retry(url, params, response)
-            save_to_cache(endpoint, cache_key_body, result, cost_usd=self._last_call_cost)
+            save_to_cache(
+                endpoint,
+                cache_key_body,
+                result,
+                cost_usd=self._last_call_cost,
+                **self._billing_meta(),
+            )
             return result
 
         if response.status_code != 200:
@@ -2610,6 +2671,14 @@ class AsyncLLMClient:
     def is_testnet(self) -> bool:
         """Check if client is configured for testnet."""
         return "testnet.blockrun.ai" in self.api_url
+
+    def _billing_meta(self) -> Dict[str, Optional[str]]:
+        """Billing metadata for cost-log entries."""
+        return {
+            "wallet": self.account.address,
+            "network": _detect_network(self.api_url),
+            "client_kind": type(self).__name__,
+        }
 
     async def get_balance(self) -> float:
         """

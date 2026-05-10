@@ -139,9 +139,14 @@ from .solana_wallet import (
     load_solana_wallet,
     get_solana_public_key,
 )
-from .cache import clear_cache, get_cost_log_summary
+from .cache import (
+    clear_cache,
+    export_cost_log_csv,
+    export_cost_log_json,
+    get_cost_log_summary,
+)
 
-__version__ = "0.17.1"
+__version__ = "0.18.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -236,7 +241,9 @@ __all__ = [
     "create_solana_wallet",
     "load_solana_wallet",
     "get_solana_public_key",
-    # Cache utilities
+    # Cache + billing utilities
     "clear_cache",
     "get_cost_log_summary",
+    "export_cost_log_csv",
+    "export_cost_log_json",
 ]
