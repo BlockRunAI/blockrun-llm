@@ -1,23 +1,28 @@
 """
-Local response cache and archive for paid BlockRun API calls.
+Local response cache, archive, and cost log for paid BlockRun API calls.
 
-Two storage layers:
-1. **Cache** (~/.blockrun/cache/) — hash-keyed, TTL-based dedup to avoid paying twice
-2. **Data**  (~/.blockrun/data/)  — human-readable JSON files for every paid call
+Three storage layers:
+1. **Cache**     (~/.blockrun/cache/)        — hash-keyed, TTL-based dedup to avoid paying twice
+2. **Data**      (~/.blockrun/data/)         — human-readable JSON files for every paid call
+3. **Cost log**  (~/.blockrun/cost_log.jsonl) — append-only ledger for billing / audit
 
-Cache keys are based on (endpoint, request body).
-TTL is configurable per endpoint type.
+Cost log entries (one per line) include endpoint, cost, plus model / wallet /
+network / client_kind metadata when the caller provides it. Older entries with
+only `{ts, endpoint, cost_usd}` are still readable — missing fields surface as
+``None`` in the summary / export views.
 """
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, List, Optional, Union
 
 
 # Default TTL in seconds per endpoint pattern
@@ -37,6 +42,7 @@ DEFAULT_TTL: Dict[str, int] = {
 
 CACHE_DIR = Path.home() / ".blockrun" / "cache"
 DATA_DIR = Path.home() / ".blockrun" / "data"
+COST_LOG_PATH = Path.home() / ".blockrun" / "cost_log.jsonl"
 
 
 def _get_ttl(endpoint: str) -> int:
@@ -50,8 +56,6 @@ def _get_ttl(endpoint: str) -> int:
 
 def _cache_key(endpoint: str, body: Dict[str, Any]) -> str:
     """Generate a deterministic cache key from endpoint + request body."""
-    # Remove cursor/pagination from cache key — different pages are different requests
-    # But keep everything else
     key_data = json.dumps({"endpoint": endpoint, "body": body}, sort_keys=True)
     return hashlib.sha256(key_data.encode()).hexdigest()[:16]
 
@@ -94,16 +98,10 @@ def get_cached(endpoint: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def _readable_filename(endpoint: str, body: Dict[str, Any]) -> str:
     """
     Generate a human-readable filename from endpoint + request body.
-
-    Examples:
-        x_search_2026-03-13_x402_payment.json
-        chat_2026-03-13_gpt-5.2.json
-        x_followers_2026-03-13_elonmusk.json
     """
     ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
-    # Extract a short label from the endpoint
-    ep = endpoint.rstrip("/").rsplit("/", 1)[-1]  # e.g. "completions", "followers", "search"
+    ep = endpoint.rstrip("/").rsplit("/", 1)[-1]
     if "/v1/chat/" in endpoint:
         ep = "chat"
     elif "/v1/x/" in endpoint:
@@ -113,7 +111,6 @@ def _readable_filename(endpoint: str, body: Dict[str, Any]) -> str:
     elif "/v1/image" in endpoint:
         ep = "image"
 
-    # Extract a short identifier from the body
     label = (
         body.get("query")
         or body.get("username")
@@ -122,7 +119,6 @@ def _readable_filename(endpoint: str, body: Dict[str, Any]) -> str:
         or body.get("prompt", "")[:40]
         or ""
     )
-    # Sanitize for filesystem
     label = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(label))[:40].strip("_")
 
     return f"{ep}_{ts}_{label}.json" if label else f"{ep}_{ts}.json"
@@ -133,13 +129,18 @@ def save_to_cache(
     body: Dict[str, Any],
     response: Dict[str, Any],
     cost_usd: float = 0.0,
+    *,
+    model: Optional[str] = None,
+    wallet: Optional[str] = None,
+    network: Optional[str] = None,
+    client_kind: Optional[str] = None,
 ) -> None:
     """
     Save a paid API response locally.
 
     1. Hash-keyed cache file (for TTL-based dedup)
     2. Human-readable data file (browsable archive of every paid call)
-    3. Cost log entry
+    3. Cost log entry (with billing metadata when supplied)
     """
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -155,13 +156,21 @@ def save_to_cache(
     try:
         _cache_path(key).write_text(json.dumps(entry, default=str))
     except OSError:
-        pass  # Don't fail the request if cache write fails
+        pass
 
     # Save human-readable copy to ~/.blockrun/data/
     _save_readable(endpoint, body, response, cost_usd)
 
-    # Also append to the cost log (never overwritten)
-    _append_cost_log(endpoint, cost_usd)
+    # Append to the cost log (never overwritten). Pull model from the body
+    # if the caller didn't pass one explicitly.
+    _append_cost_log(
+        endpoint,
+        cost_usd,
+        model=model or body.get("model"),
+        wallet=wallet,
+        network=network,
+        client_kind=client_kind,
+    )
 
 
 def _save_readable(
@@ -186,20 +195,43 @@ def _save_readable(
         pass
 
 
-def _append_cost_log(endpoint: str, cost_usd: float) -> None:
-    """Append to a running cost log at ~/.blockrun/cost_log.jsonl"""
+def _append_cost_log(
+    endpoint: str,
+    cost_usd: float,
+    *,
+    model: Optional[str] = None,
+    wallet: Optional[str] = None,
+    network: Optional[str] = None,
+    client_kind: Optional[str] = None,
+) -> None:
+    """Append one JSONL row to ``~/.blockrun/cost_log.jsonl``.
+
+    The full schema is::
+
+        {ts, endpoint, cost_usd, model, wallet, network, client_kind}
+
+    Older rows that only carry ``{ts, endpoint, cost_usd}`` are still readable
+    — missing fields surface as ``None`` in summary / export views.
+    """
     if cost_usd <= 0:
         return
 
-    log_path = Path.home() / ".blockrun" / "cost_log.jsonl"
     try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a") as f:
-            entry = {
+        COST_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(COST_LOG_PATH, "a") as f:
+            entry: Dict[str, Any] = {
                 "ts": time.time(),
                 "endpoint": endpoint,
                 "cost_usd": cost_usd,
             }
+            if model is not None:
+                entry["model"] = model
+            if wallet is not None:
+                entry["wallet"] = wallet
+            if network is not None:
+                entry["network"] = network
+            if client_kind is not None:
+                entry["client_kind"] = client_kind
             f.write(json.dumps(entry) + "\n")
     except OSError:
         pass
@@ -216,27 +248,248 @@ def clear_cache() -> int:
     return count
 
 
-def get_cost_log_summary() -> Dict[str, Any]:
-    """Read the cost log and return a summary."""
-    log_path = Path.home() / ".blockrun" / "cost_log.jsonl"
-    if not log_path.exists():
-        return {"total_usd": 0.0, "calls": 0, "by_endpoint": {}}
+# ---------------------------------------------------------------------------
+# Cost-log readers
+# ---------------------------------------------------------------------------
+
+
+def _parse_date(value: Optional[str]) -> Optional[float]:
+    """Parse a YYYY-MM-DD or ISO 8601 date into a unix timestamp.
+
+    Bare dates (YYYY-MM-DD) anchor to UTC midnight. Returns ``None`` when
+    ``value`` is ``None``; raises ``ValueError`` on malformed input.
+    """
+    if value is None:
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        s = s + "T00:00:00+00:00"
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"could not parse date {value!r}: {exc}") from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _iter_cost_log(
+    *,
+    from_ts: Optional[float] = None,
+    to_ts: Optional[float] = None,
+    wallet: Optional[str] = None,
+    network: Optional[str] = None,
+) -> Iterator[Dict[str, Any]]:
+    """Yield cost-log entries that match the optional filters."""
+    if not COST_LOG_PATH.exists():
+        return
+    try:
+        text = COST_LOG_PATH.read_text()
+    except OSError:
+        return
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        ts = entry.get("ts")
+        if not isinstance(ts, (int, float)):
+            continue
+        if from_ts is not None and ts < from_ts:
+            continue
+        if to_ts is not None and ts > to_ts:
+            continue
+        if wallet is not None and entry.get("wallet") != wallet:
+            continue
+        if network is not None and entry.get("network") != network:
+            continue
+        yield entry
+
+
+def _group_key(entry: Dict[str, Any], group_by: str) -> str:
+    """Compute the bucket key for a given grouping field."""
+    if group_by == "day":
+        ts = entry.get("ts")
+        if not isinstance(ts, (int, float)):
+            return "unknown"
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
+    if group_by == "month":
+        ts = entry.get("ts")
+        if not isinstance(ts, (int, float)):
+            return "unknown"
+        return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m")
+    return str(entry.get(group_by) or "unknown")
+
+
+_VALID_GROUP_BY = {"endpoint", "model", "wallet", "network", "client_kind", "day", "month"}
+
+
+def get_cost_log_summary(
+    *,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    wallet: Optional[str] = None,
+    network: Optional[str] = None,
+    group_by: str = "endpoint",
+) -> Dict[str, Any]:
+    """Read the cost log and return an aggregated summary.
+
+    Args:
+        from_date: ISO date / datetime — entries strictly older are skipped.
+        to_date: ISO date / datetime — entries strictly newer are skipped.
+        wallet: Filter to a single wallet address.
+        network: Filter to a single network (``base-mainnet`` etc.).
+        group_by: One of ``endpoint`` (default), ``model``, ``wallet``,
+            ``network``, ``client_kind``, ``day``, ``month``.
+
+    Returns:
+        ``{"from_date", "to_date", "total_usd", "calls", "group_by",
+        "groups"}`` where ``groups`` maps each bucket key to
+        ``{"calls": int, "cost_usd": float}``. When ``group_by == "endpoint"``
+        the response also includes a ``by_endpoint`` alias mapping endpoint
+        path to total cost (a float) for backwards compatibility with the
+        original 3-key shape.
+    """
+    if group_by not in _VALID_GROUP_BY:
+        raise ValueError(f"group_by must be one of {sorted(_VALID_GROUP_BY)}; got {group_by!r}")
+
+    from_ts = _parse_date(from_date)
+    to_ts = _parse_date(to_date)
 
     total = 0.0
     calls = 0
-    by_endpoint: Dict[str, float] = {}
+    groups: Dict[str, Dict[str, Any]] = {}
 
-    try:
-        for line in log_path.read_text().strip().split("\n"):
-            if not line:
-                continue
-            entry = json.loads(line)
-            cost = entry.get("cost_usd", 0.0)
-            ep = entry.get("endpoint", "unknown")
-            total += cost
-            calls += 1
-            by_endpoint[ep] = by_endpoint.get(ep, 0.0) + cost
-    except (json.JSONDecodeError, OSError):
-        pass
+    for entry in _iter_cost_log(from_ts=from_ts, to_ts=to_ts, wallet=wallet, network=network):
+        cost = float(entry.get("cost_usd") or 0.0)
+        bucket = _group_key(entry, group_by)
+        total += cost
+        calls += 1
+        slot = groups.setdefault(bucket, {"calls": 0, "cost_usd": 0.0})
+        slot["calls"] += 1
+        slot["cost_usd"] += cost
 
-    return {"total_usd": total, "calls": calls, "by_endpoint": by_endpoint}
+    result: Dict[str, Any] = {
+        "from_date": from_date,
+        "to_date": to_date,
+        "total_usd": total,
+        "calls": calls,
+        "group_by": group_by,
+        "groups": groups,
+    }
+    # Backwards-compat: callers that depended on the historical
+    # ``by_endpoint`` mapping (cost only, no calls) keep it when the user
+    # is grouping by endpoint.
+    if group_by == "endpoint":
+        result["by_endpoint"] = {k: v["cost_usd"] for k, v in groups.items()}
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Cost-log exporters
+# ---------------------------------------------------------------------------
+
+
+_EXPORT_COLUMNS = (
+    "ts_iso",
+    "endpoint",
+    "model",
+    "wallet",
+    "network",
+    "client_kind",
+    "cost_usd",
+)
+
+
+def _entry_to_record(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize one raw cost-log entry into the export record shape."""
+    ts = entry.get("ts")
+    ts_iso = (
+        datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        if isinstance(ts, (int, float))
+        else None
+    )
+    return {
+        "ts_iso": ts_iso,
+        "endpoint": entry.get("endpoint"),
+        "model": entry.get("model"),
+        "wallet": entry.get("wallet"),
+        "network": entry.get("network"),
+        "client_kind": entry.get("client_kind"),
+        "cost_usd": float(entry.get("cost_usd") or 0.0),
+    }
+
+
+def _filtered_records(
+    *,
+    from_date: Optional[str],
+    to_date: Optional[str],
+    wallet: Optional[str],
+    network: Optional[str],
+) -> List[Dict[str, Any]]:
+    from_ts = _parse_date(from_date)
+    to_ts = _parse_date(to_date)
+    return [
+        _entry_to_record(e)
+        for e in _iter_cost_log(from_ts=from_ts, to_ts=to_ts, wallet=wallet, network=network)
+    ]
+
+
+def export_cost_log_csv(
+    output_path: Optional[Union[str, Path]] = None,
+    *,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    wallet: Optional[str] = None,
+    network: Optional[str] = None,
+) -> str:
+    """Render filtered cost-log entries as CSV.
+
+    Columns: ``ts_iso, endpoint, model, wallet, network, client_kind, cost_usd``.
+
+    When ``output_path`` is supplied the CSV is also written to that file (the
+    parent directory is created if missing). The CSV text is always returned
+    so callers can pipe it into other tools.
+    """
+    records = _filtered_records(
+        from_date=from_date, to_date=to_date, wallet=wallet, network=network
+    )
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=list(_EXPORT_COLUMNS))
+    writer.writeheader()
+    for record in records:
+        writer.writerow({k: ("" if record.get(k) is None else record[k]) for k in _EXPORT_COLUMNS})
+    text = buffer.getvalue()
+    if output_path is not None:
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return text
+
+
+def export_cost_log_json(
+    output_path: Optional[Union[str, Path]] = None,
+    *,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    wallet: Optional[str] = None,
+    network: Optional[str] = None,
+) -> str:
+    """Render filtered cost-log entries as a JSON array of records.
+
+    Same fields as ``export_cost_log_csv``. Pretty-printed with 2-space
+    indentation. Returns the JSON text; writes to ``output_path`` when given.
+    """
+    records = _filtered_records(
+        from_date=from_date, to_date=to_date, wallet=wallet, network=network
+    )
+    text = json.dumps(records, indent=2, default=str)
+    if output_path is not None:
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return text

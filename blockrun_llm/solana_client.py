@@ -146,6 +146,14 @@ class SolanaLLMClient:
     def get_spending(self) -> Dict[str, Any]:
         return {"total_usd": self._session_total_usd, "calls": self._session_calls}
 
+    def _billing_meta(self) -> Dict[str, Optional[str]]:
+        """Billing metadata for cost-log entries."""
+        return {
+            "wallet": self.get_wallet_address(),
+            "network": "solana-mainnet" if self.is_solana() else "solana-other",
+            "client_kind": type(self).__name__,
+        }
+
     def chat(
         self,
         model: str,
@@ -294,7 +302,13 @@ class SolanaLLMClient:
         response_data = retry_response.json()
         from .cache import save_to_cache
 
-        save_to_cache("/v1/chat/completions", body, response_data, cost_usd=cost_usd)
+        save_to_cache(
+            "/v1/chat/completions",
+            body,
+            response_data,
+            cost_usd=cost_usd,
+            **self._billing_meta(),
+        )
 
         return ChatResponse(**response_data)
 
@@ -321,7 +335,13 @@ class SolanaLLMClient:
 
         if response.status_code == 402:
             result = self._handle_payment_and_retry_raw(url, body, response)
-            save_to_cache(endpoint, body, result, cost_usd=self._last_call_cost)
+            save_to_cache(
+                endpoint,
+                body,
+                result,
+                cost_usd=self._last_call_cost,
+                **self._billing_meta(),
+            )
             return result
 
         if not response.is_success:
@@ -409,7 +429,13 @@ class SolanaLLMClient:
 
         if response.status_code == 402:
             result = self._handle_get_payment_and_retry(url, params, response)
-            save_to_cache(endpoint, cache_key_body, result, cost_usd=self._last_call_cost)
+            save_to_cache(
+                endpoint,
+                cache_key_body,
+                result,
+                cost_usd=self._last_call_cost,
+                **self._billing_meta(),
+            )
             return result
 
         if not response.is_success:
