@@ -779,9 +779,46 @@ csv_text  = export_cost_log_csv("bill.csv", from_date="2026-05-01")
 json_text = export_cost_log_json(from_date="2026-05-01")
 ```
 
-Scope: the cost log is per-machine. It records calls made by this Python SDK
-only — calls from other clients (TS SDK, MCP, raw curl) are not included.
-For organization-wide billing, query the gateway's authoritative ledger.
+### Example output
+
+Real session — four cheap chat calls across providers, then queried by model:
+
+```
+$ python -m blockrun_llm.billing summary --from 2026-05-10 --group-by model
+================================================================
+BLOCKRUN — LOCAL COST LOG SUMMARY
+================================================================
+  log file       : /Users/me/.blockrun/cost_log.jsonl
+  from           : 2026-05-10
+  group_by       : model
+  total          : $0.0070 (9 calls)
+
+  KEY                             CALLS        COST
+  ----------------------------  -------  ----------
+  deepseek/deepseek-chat              2     $0.0020
+  google/gemini-2.5-flash-lite        1     $0.0010
+  anthropic/claude-haiku-4.5          1     $0.0010
+  zai/glm-5-turbo                     1     $0.0010
+  unknown                             4     $0.0020
+```
+
+The four `unknown` rows are pre-existing entries from before this release —
+they had only `{ts, endpoint, cost_usd}` so the model column reads `unknown`.
+Calls made after upgrading carry the full metadata (wallet / network /
+client_kind / model). CSV export shows it directly:
+
+```
+$ python -m blockrun_llm.billing export csv --from 2026-05-10 | head -3
+ts_iso,endpoint,model,wallet,network,client_kind,cost_usd
+2026-05-10T03:38:28.198937+00:00,/v1/chat/completions,deepseek/deepseek-chat,0xCC8c...5EF8,base-mainnet,LLMClient,0.001
+2026-05-10T03:38:31.192060+00:00,/v1/chat/completions,google/gemini-2.5-flash-lite,0xCC8c...5EF8,base-mainnet,LLMClient,0.001
+```
+
+### Scope
+
+The cost log is per-machine. It records calls made by this Python SDK only —
+calls from other clients (TS SDK, MCP, raw curl) are not included. For
+organization-wide billing, query the gateway's authoritative ledger.
 
 ## Environment Variables
 
