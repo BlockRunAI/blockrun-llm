@@ -784,7 +784,9 @@ class LLMClient:
                         self._session_calls += 1
                         self._session_total_usd += cost_usd
                         self._last_call_cost = cost_usd
-                    yield from self._iter_sse_chunks(resp2)
+                    yield from self._iter_and_archive(
+                        resp2, body, cost_usd, streaming=True
+                    )
                     return
                 resp2.read()
                 if resp2.status_code == 402:
@@ -795,6 +797,77 @@ class LLMClient:
                     time.sleep(backoffs[attempt])
                     continue
                 self._raise_stream_error(resp2, after_payment=True)
+
+    def _iter_and_archive(
+        self,
+        response: httpx.Response,
+        body: Dict[str, Any],
+        cost_usd: float,
+        *,
+        streaming: bool = True,
+    ) -> Iterator[ChatCompletionChunk]:
+        """Yield each SSE chunk, accumulate content for the local archive,
+        then once ``data: [DONE]`` arrives ``save_to_cache`` the assembled
+        ``chat.completion`` response so paid streaming calls show up in
+        ``~/.blockrun/cost_log.jsonl`` and ``~/.blockrun/data/`` the same
+        way non-stream paid calls do."""
+        assembled_id: Optional[str] = None
+        assembled_model: Optional[str] = None
+        assembled_created: int = 0
+        content_parts: List[str] = []
+        finish_reason: Optional[str] = None
+        usage_dict: Optional[Dict[str, Any]] = None
+
+        for chunk in self._iter_sse_chunks(response):
+            if chunk.choices:
+                choice = chunk.choices[0]
+                if choice.delta.content:
+                    content_parts.append(choice.delta.content)
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+            if assembled_id is None and chunk.id:
+                assembled_id = chunk.id
+                assembled_model = chunk.model
+                assembled_created = chunk.created
+            if chunk.usage is not None:
+                usage_dict = chunk.usage.model_dump(exclude_none=True)
+            yield chunk
+
+        # Stream complete (saw [DONE]). Free models have cost_usd == 0; only
+        # archive paid calls to mirror the non-stream save_to_cache path.
+        if cost_usd > 0:
+            from .cache import save_to_cache
+
+            response_data: Dict[str, Any] = {
+                "id": assembled_id or "stream",
+                "object": "chat.completion",
+                "created": assembled_created or int(__import__("time").time()),
+                "model": assembled_model or body.get("model"),
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "".join(content_parts),
+                        },
+                        "finish_reason": finish_reason,
+                    }
+                ],
+                "stream": streaming,
+            }
+            if usage_dict:
+                response_data["usage"] = usage_dict
+            try:
+                save_to_cache(
+                    "/v1/chat/completions",
+                    body,
+                    response_data,
+                    cost_usd=cost_usd,
+                    **self._billing_meta(),
+                )
+            except Exception:
+                # Logging never breaks the call.
+                pass
 
     @staticmethod
     def _iter_sse_chunks(response: httpx.Response) -> Iterator[ChatCompletionChunk]:
@@ -2391,7 +2464,9 @@ class AsyncLLMClient:
                     # chat_completion convention).
                     if cost_usd > 0:
                         self._last_call_cost = cost_usd
-                    async for chunk in self._aiter_sse_chunks(resp2):
+                    async for chunk in self._aiter_and_archive(
+                        resp2, body, cost_usd, streaming=True
+                    ):
                         yield chunk
                     return
                 await resp2.aread()
@@ -2403,6 +2478,73 @@ class AsyncLLMClient:
                     await asyncio.sleep(backoffs[attempt])
                     continue
                 self._raise_stream_error(resp2, after_payment=True)
+
+    async def _aiter_and_archive(
+        self,
+        response: httpx.Response,
+        body: Dict[str, Any],
+        cost_usd: float,
+        *,
+        streaming: bool = True,
+    ) -> AsyncIterator[ChatCompletionChunk]:
+        """Async mirror of :meth:`LLMClient._iter_and_archive`. Writes the
+        assembled ``chat.completion`` response to ``~/.blockrun/data/`` and
+        the cost row to ``~/.blockrun/cost_log.jsonl`` once the stream
+        finishes — only for paid calls (cost_usd > 0)."""
+        assembled_id: Optional[str] = None
+        assembled_model: Optional[str] = None
+        assembled_created: int = 0
+        content_parts: List[str] = []
+        finish_reason: Optional[str] = None
+        usage_dict: Optional[Dict[str, Any]] = None
+
+        async for chunk in self._aiter_sse_chunks(response):
+            if chunk.choices:
+                choice = chunk.choices[0]
+                if choice.delta.content:
+                    content_parts.append(choice.delta.content)
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+            if assembled_id is None and chunk.id:
+                assembled_id = chunk.id
+                assembled_model = chunk.model
+                assembled_created = chunk.created
+            if chunk.usage is not None:
+                usage_dict = chunk.usage.model_dump(exclude_none=True)
+            yield chunk
+
+        if cost_usd > 0:
+            from .cache import save_to_cache
+
+            response_data: Dict[str, Any] = {
+                "id": assembled_id or "stream",
+                "object": "chat.completion",
+                "created": assembled_created or int(__import__("time").time()),
+                "model": assembled_model or body.get("model"),
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "".join(content_parts),
+                        },
+                        "finish_reason": finish_reason,
+                    }
+                ],
+                "stream": streaming,
+            }
+            if usage_dict:
+                response_data["usage"] = usage_dict
+            try:
+                save_to_cache(
+                    "/v1/chat/completions",
+                    body,
+                    response_data,
+                    cost_usd=cost_usd,
+                    **self._billing_meta(),
+                )
+            except Exception:
+                pass
 
     @staticmethod
     async def _aiter_sse_chunks(response: httpx.Response) -> AsyncIterator[ChatCompletionChunk]:

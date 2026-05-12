@@ -2,6 +2,40 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.22.0 — 2026-05-12
+
+### New
+- **``AsyncSolanaLLMClient``** — async counterpart of
+  ``SolanaLLMClient``. Mirrors the sync API for chat completions (both
+  non-streaming and streaming) so ``asyncio`` callers don't need to
+  thread-pool around blocking I/O. Built on the async ``x402Client``
+  (instead of ``x402ClientSync``) + ``httpx.AsyncClient``. Public
+  surface for the first release: ``chat()``, ``chat_completion()``,
+  ``chat_completion_stream()``, ``list_models()``, ``close()`` plus
+  ``__aenter__`` / ``__aexit__``. Image / Exa / Predexon / Music
+  endpoints are still sync-only on Solana (they'll follow if there's
+  demand). Same retry policy and ``fallback_models`` semantics as
+  every other streaming client.
+- **Paid streaming now writes to ``~/.blockrun/cost_log.jsonl`` and
+  ``~/.blockrun/data/``** — closing the audit-trail gap that 0.20.x
+  introduced. ``LLMClient`` (sync + async) and ``SolanaLLMClient``
+  (sync + new async) all accumulate streamed content during the SSE
+  iteration, then call ``save_to_cache`` once ``data: [DONE]`` arrives,
+  building a synthetic ``chat.completion`` response so the local
+  archive matches the non-stream paid path one-for-one. Free models
+  skip the archive (``cost_usd == 0``). Failures during the stream do
+  not produce a partial archive row.
+
+### Verified e2e
+- Async Solana streaming via ``AsyncSolanaLLMClient.chat_completion_stream``
+  against ``sol.blockrun.ai`` with the free
+  ``nvidia/deepseek-v4-flash`` model: 2 content chunks,
+  ``"Hello! How can I"``, on the second attempt (first hit a
+  transient NVIDIA NIM upstream timeout that resolved itself).
+- 12/12 Base streaming unit tests + 6/6 Solana streaming unit tests
+  still pass — the archive-on-completion change is additive and
+  doesn't touch the existing assertions.
+
 ## 0.21.0 — 2026-05-12
 
 ### New

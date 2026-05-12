@@ -375,7 +375,7 @@ class SolanaLLMClient:
                         self._session_calls += 1
                         self._session_total_usd += cost_usd
                         self._last_call_cost = cost_usd
-                    yield from self._iter_sse_chunks(resp2)
+                    yield from self._iter_and_archive(resp2, body, cost_usd)
                     return
                 resp2.read()
                 if resp2.status_code == 402:
@@ -388,6 +388,73 @@ class SolanaLLMClient:
                     time.sleep(backoffs[attempt])
                     continue
                 self._raise_stream_error(resp2, after_payment=True)
+
+    def _iter_and_archive(
+        self,
+        response: httpx.Response,
+        body: Dict[str, Any],
+        cost_usd: float,
+    ) -> Iterator[ChatCompletionChunk]:
+        """Yield SSE chunks; on stream completion, archive the assembled
+        response to ``~/.blockrun/data/`` and append a row to
+        ``~/.blockrun/cost_log.jsonl``. Paid streaming calls now show up
+        in the same audit trail as non-stream paid calls.
+
+        ``cost_usd == 0`` skips the archive (free models / unauth probe)."""
+        assembled_id: Optional[str] = None
+        assembled_model: Optional[str] = None
+        assembled_created: int = 0
+        content_parts: List[str] = []
+        finish_reason: Optional[str] = None
+        usage_dict: Optional[Dict[str, Any]] = None
+
+        for chunk in self._iter_sse_chunks(response):
+            if chunk.choices:
+                choice = chunk.choices[0]
+                if choice.delta.content:
+                    content_parts.append(choice.delta.content)
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+            if assembled_id is None and chunk.id:
+                assembled_id = chunk.id
+                assembled_model = chunk.model
+                assembled_created = chunk.created
+            if chunk.usage is not None:
+                usage_dict = chunk.usage.model_dump(exclude_none=True)
+            yield chunk
+
+        if cost_usd > 0:
+            from .cache import save_to_cache
+
+            response_data: Dict[str, Any] = {
+                "id": assembled_id or "stream",
+                "object": "chat.completion",
+                "created": assembled_created or int(__import__("time").time()),
+                "model": assembled_model or body.get("model"),
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "".join(content_parts),
+                        },
+                        "finish_reason": finish_reason,
+                    }
+                ],
+                "stream": True,
+            }
+            if usage_dict:
+                response_data["usage"] = usage_dict
+            try:
+                save_to_cache(
+                    "/v1/chat/completions",
+                    body,
+                    response_data,
+                    cost_usd=cost_usd,
+                    **self._billing_meta(),
+                )
+            except Exception:
+                pass
 
     @staticmethod
     def _iter_sse_chunks(response: httpx.Response) -> Iterator[ChatCompletionChunk]:
@@ -1048,3 +1115,457 @@ class SolanaLLMClient:
             answer = client.exa_answer("What is the current state of AI safety research?")
         """
         return self._request_with_payment_raw("/v1/exa/answer", {"query": query, **kwargs})
+
+
+# ===========================================================================
+# AsyncSolanaLLMClient — async mirror of SolanaLLMClient (chat only, v0.22.0)
+# ===========================================================================
+#
+# Scope for the first release: chat completions, sync **and** streaming. Image,
+# music, video, exa, predexon are sync-only on Solana for now — same as the
+# Solana sync class shipped initially. They can be added in follow-up releases.
+
+
+class AsyncSolanaLLMClient:
+    """
+    Async BlockRun Solana LLM Client — pays via Solana USDC x402.
+
+    Mirrors :class:`SolanaLLMClient` but exposes ``await``-able methods so
+    Python ``asyncio`` callers (FastAPI handlers, LiteLLM Proxy, etc.) don't
+    have to thread-pool around blocking I/O.
+
+    Usage::
+
+        client = AsyncSolanaLLMClient()                  # SOLANA_WALLET_KEY env
+        resp = await client.chat_completion(
+            "openai/gpt-5.5",
+            [{"role": "user", "content": "gm Solana"}],
+        )
+        await client.close()
+    """
+
+    SOLANA_API_URL = SOLANA_API_URL
+    _STREAM_5XX_STATUSES = SolanaLLMClient._STREAM_5XX_STATUSES
+    _STREAM_5XX_BACKOFFS = SolanaLLMClient._STREAM_5XX_BACKOFFS
+
+    def __init__(
+        self,
+        private_key: Optional[str] = None,
+        api_url: str = SOLANA_API_URL,
+        rpc_url: str = "https://api.mainnet-beta.solana.com",
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> None:
+        if not _HAS_X402:
+            raise ImportError(
+                "Solana payment requires the x402 SDK. "
+                "Install with: pip install blockrun-llm[solana]"
+            )
+        key = private_key or os.environ.get("SOLANA_WALLET_KEY")
+        if not key:
+            raise ValueError(
+                "Private key required. Pass private_key or set SOLANA_WALLET_KEY env var."
+            )
+        self._private_key = key
+        validate_api_url(api_url)
+        self._api_url = api_url.rstrip("/")
+        self._rpc_url = rpc_url
+        self._timeout = timeout
+        self._client = httpx.AsyncClient(timeout=timeout)
+        self._session_total_usd = 0.0
+        self._session_calls = 0
+        self._last_call_cost: float = 0.0
+        self._address: Optional[str] = None
+
+        # Async x402 client + same SVM signer the sync class uses.
+        from x402 import x402Client  # local import to keep optional dep clean
+
+        self._x402_client = x402Client()
+        signer = _create_signer(self._private_key)
+        register_exact_svm_client(self._x402_client, signer, rpc_url=rpc_url)
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def close(self) -> None:
+        await self._client.aclose()
+
+    async def __aenter__(self) -> "AsyncSolanaLLMClient":
+        return self
+
+    async def __aexit__(self, *_exc: Any) -> None:
+        await self.close()
+
+    # ------------------------------------------------------------------
+    # Identity / state
+    # ------------------------------------------------------------------
+
+    def get_wallet_address(self) -> str:
+        if not self._address:
+            self._address = get_solana_public_key(self._private_key)
+        return self._address
+
+    def is_solana(self) -> bool:
+        return "sol.blockrun.ai" in self._api_url
+
+    def get_spending(self) -> Dict[str, Any]:
+        return {"total_usd": self._session_total_usd, "calls": self._session_calls}
+
+    def _billing_meta(self) -> Dict[str, Optional[str]]:
+        return {
+            "wallet": self.get_wallet_address(),
+            "network": "solana-mainnet" if self.is_solana() else "solana-other",
+            "client_kind": type(self).__name__,
+        }
+
+    # ------------------------------------------------------------------
+    # Non-streaming chat
+    # ------------------------------------------------------------------
+
+    async def chat(
+        self,
+        model: str,
+        prompt: str,
+        system: Optional[str] = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: Optional[float] = None,
+        search: bool = False,
+    ) -> str:
+        messages: List[Dict[str, str]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        result = await self.chat_completion(
+            model,
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            search=search,
+        )
+        return result.choices[0].message.content or ""
+
+    async def chat_completion(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        search: bool = False,
+        search_parameters: Optional[Dict[str, Any]] = None,
+    ) -> ChatResponse:
+        body: Dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
+        if temperature is not None:
+            body["temperature"] = temperature
+        if top_p is not None:
+            body["top_p"] = top_p
+        if search_parameters:
+            body["search_parameters"] = search_parameters
+        elif search:
+            body["search_parameters"] = {"mode": "on"}
+        return await self._request_with_payment("/v1/chat/completions", body)
+
+    async def list_models(self) -> List[Dict[str, Any]]:
+        resp = await self._client.get(f"{self._api_url}/v1/models")
+        resp.raise_for_status()
+        return resp.json().get("data", [])
+
+    # ------------------------------------------------------------------
+    # Streaming chat
+    # ------------------------------------------------------------------
+
+    async def chat_completion_stream(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        *,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        search: bool = False,
+        search_parameters: Optional[Dict[str, Any]] = None,
+        fallback_models: Optional[List[str]] = None,
+    ) -> "AsyncSolanaIterator":
+        """Async streaming. Same protocol semantics as the sync
+        :meth:`SolanaLLMClient.chat_completion_stream`; only the iteration
+        protocol differs (``async for``)."""
+        body: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "max_tokens": max_tokens,
+        }
+        if temperature is not None:
+            body["temperature"] = temperature
+        if top_p is not None:
+            body["top_p"] = top_p
+        if search_parameters:
+            body["search_parameters"] = search_parameters
+        elif search:
+            body["search_parameters"] = {"mode": "on"}
+
+        attempts = [model, *(fallback_models or [])]
+        last_exc: Optional[Exception] = None
+
+        for i, attempt_model in enumerate(attempts):
+            body["model"] = attempt_model
+            inner = self._stream_with_payment("/v1/chat/completions", body)
+            chunks_yielded = 0
+            try:
+                async for chunk in inner:
+                    chunks_yielded += 1
+                    yield chunk
+                return
+            except Exception as exc:
+                if chunks_yielded > 0:
+                    raise
+                if not _should_fallback_solana(exc):
+                    raise
+                last_exc = exc
+                if i + 1 < len(attempts):
+                    next_model = attempts[i + 1]
+                    sys.stderr.write(
+                        f"[blockrun_llm] async solana stream {attempt_model} -> "
+                        f"{next_model} ({type(exc).__name__}: {str(exc)[:80]})\n"
+                    )
+        assert last_exc is not None
+        raise last_exc
+
+    async def _stream_with_payment(
+        self,
+        endpoint: str,
+        body: Dict[str, Any],
+    ):
+        """Async version of :meth:`SolanaLLMClient._stream_with_payment`."""
+        url = f"{self._api_url}{endpoint}"
+        req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
+        backoffs = self._STREAM_5XX_BACKOFFS
+
+        # ----- Phase 1: probe (no payment header) -----
+        payment_headers: Optional[Dict[str, str]] = None
+        cost_usd = 0.0
+
+        for attempt in range(len(backoffs) + 1):
+            async with self._client.stream(
+                "POST", url, json=body, headers=req_headers, timeout=self._timeout
+            ) as resp1:
+                if resp1.status_code == 200:
+                    async for chunk in self._aiter_sse_chunks(resp1):
+                        yield chunk
+                    return
+                await resp1.aread()
+                if resp1.status_code == 402:
+                    payment_headers, cost_usd = await self._sign_payment_from_response(resp1)
+                    break
+                if resp1.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
+                    import asyncio
+
+                    await asyncio.sleep(backoffs[attempt])
+                    continue
+                self._raise_stream_error(resp1, after_payment=False)
+        else:
+            raise APIError("solana stream probe exhausted retries", 0, None)
+
+        # ----- Phase 2: stream with PAYMENT-SIGNATURE -----
+        assert payment_headers is not None
+        for attempt in range(len(backoffs) + 1):
+            async with self._client.stream(
+                "POST", url, json=body, headers=payment_headers, timeout=self._timeout
+            ) as resp2:
+                if resp2.status_code == 200:
+                    if cost_usd > 0:
+                        self._session_calls += 1
+                        self._session_total_usd += cost_usd
+                        self._last_call_cost = cost_usd
+                    async for chunk in self._aiter_and_archive(resp2, body, cost_usd):
+                        yield chunk
+                    return
+                await resp2.aread()
+                if resp2.status_code == 402:
+                    raise PaymentError(
+                        "Payment rejected. Check your Solana USDC balance."
+                    )
+                if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
+                    import asyncio
+
+                    await asyncio.sleep(backoffs[attempt])
+                    continue
+                self._raise_stream_error(resp2, after_payment=True)
+
+    @staticmethod
+    async def _aiter_sse_chunks(response: httpx.Response):
+        async for raw_line in response.aiter_lines():
+            if not raw_line or not raw_line.startswith("data: "):
+                continue
+            payload = raw_line[6:].strip()
+            if payload == "[DONE]":
+                return
+            try:
+                chunk_dict = _json.loads(payload)
+            except Exception:
+                continue
+            try:
+                yield ChatCompletionChunk(**chunk_dict)
+            except Exception:
+                yield ChatCompletionChunk.model_construct(**chunk_dict)
+
+    async def _aiter_and_archive(
+        self,
+        response: httpx.Response,
+        body: Dict[str, Any],
+        cost_usd: float,
+    ):
+        """Async version of :meth:`SolanaLLMClient._iter_and_archive`."""
+        assembled_id: Optional[str] = None
+        assembled_model: Optional[str] = None
+        assembled_created: int = 0
+        content_parts: List[str] = []
+        finish_reason: Optional[str] = None
+        usage_dict: Optional[Dict[str, Any]] = None
+
+        async for chunk in self._aiter_sse_chunks(response):
+            if chunk.choices:
+                choice = chunk.choices[0]
+                if choice.delta.content:
+                    content_parts.append(choice.delta.content)
+                if choice.finish_reason:
+                    finish_reason = choice.finish_reason
+            if assembled_id is None and chunk.id:
+                assembled_id = chunk.id
+                assembled_model = chunk.model
+                assembled_created = chunk.created
+            if chunk.usage is not None:
+                usage_dict = chunk.usage.model_dump(exclude_none=True)
+            yield chunk
+
+        if cost_usd > 0:
+            from .cache import save_to_cache
+
+            response_data: Dict[str, Any] = {
+                "id": assembled_id or "stream",
+                "object": "chat.completion",
+                "created": assembled_created or int(__import__("time").time()),
+                "model": assembled_model or body.get("model"),
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "".join(content_parts),
+                        },
+                        "finish_reason": finish_reason,
+                    }
+                ],
+                "stream": True,
+            }
+            if usage_dict:
+                response_data["usage"] = usage_dict
+            try:
+                save_to_cache(
+                    "/v1/chat/completions",
+                    body,
+                    response_data,
+                    cost_usd=cost_usd,
+                    **self._billing_meta(),
+                )
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Payment + transport helpers
+    # ------------------------------------------------------------------
+
+    async def _sign_payment_from_response(
+        self,
+        response: httpx.Response,
+    ) -> Tuple[Dict[str, str], float]:
+        payment_header = SolanaLLMClient._extract_payment_header(response)
+        if not payment_header:
+            raise PaymentError("402 response but no payment requirements found")
+        payment_required = decode_payment_required_header(payment_header)
+        payment_payload = await self._x402_client.create_payment_payload(payment_required)
+        encoded_payment = encode_payment_signature_header(payment_payload)
+        cost_usd = float(payment_payload.accepted.amount) / 1e6
+        return (
+            {
+                "Content-Type": "application/json",
+                "User-Agent": _get_user_agent(),
+                "PAYMENT-SIGNATURE": encoded_payment,
+            },
+            cost_usd,
+        )
+
+    # Reuse the sync class's pure helper — it doesn't touch async state.
+    _raise_stream_error = SolanaLLMClient._raise_stream_error
+
+    async def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ChatResponse:
+        url = f"{self._api_url}{endpoint}"
+        headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
+
+        response = await self._client.post(url, json=body, headers=headers)
+        if response.status_code in (502, 503):
+            import asyncio
+
+            await asyncio.sleep(1)
+            response = await self._client.post(url, json=body, headers=headers)
+
+        if response.status_code == 402:
+            return await self._handle_payment_and_retry(url, body, response)
+
+        if not response.is_success:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error: {response.status_code}",
+                response.status_code,
+                sanitize_error_response(error_body),
+            )
+        return ChatResponse(**response.json())
+
+    async def _handle_payment_and_retry(
+        self, url: str, body: Dict[str, Any], response: httpx.Response
+    ) -> ChatResponse:
+        payment_headers, cost_usd = await self._sign_payment_from_response(response)
+
+        retry_response = await self._client.post(url, json=body, headers=payment_headers)
+        if retry_response.status_code in (502, 503):
+            import asyncio
+
+            await asyncio.sleep(1)
+            retry_response = await self._client.post(url, json=body, headers=payment_headers)
+
+        if retry_response.status_code == 402:
+            raise PaymentError("Payment rejected. Check your Solana USDC balance.")
+        if not retry_response.is_success:
+            try:
+                error_body = retry_response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error after payment: {retry_response.status_code}",
+                retry_response.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        self._session_calls += 1
+        self._session_total_usd += cost_usd
+        self._last_call_cost = cost_usd
+
+        response_data = retry_response.json()
+        from .cache import save_to_cache
+
+        save_to_cache(
+            "/v1/chat/completions",
+            body,
+            response_data,
+            cost_usd=cost_usd,
+            **self._billing_meta(),
+        )
+        return ChatResponse(**response_data)
+
+
+# A typing placeholder so the chat_completion_stream return type docs above
+# don't reference a name pyright can't resolve.
+AsyncSolanaIterator = Any

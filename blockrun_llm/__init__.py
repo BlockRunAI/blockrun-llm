@@ -50,7 +50,7 @@ from .client import (
     async_testnet_client,
 )
 from .anthropic_client import AnthropicClient
-from .solana_client import SolanaLLMClient
+from .solana_client import AsyncSolanaLLMClient, SolanaLLMClient
 from .image import ImageClient
 from .music import MusicClient
 from .video import VideoClient
@@ -149,12 +149,13 @@ from .cache import (
     get_cost_log_summary,
 )
 
-__version__ = "0.21.0"
+__version__ = "0.22.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
     "AnthropicClient",
     "SolanaLLMClient",
+    "AsyncSolanaLLMClient",
     # Testnet convenience functions
     "testnet_client",
     "async_testnet_client",
