@@ -2,6 +2,32 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.21.0 — 2026-05-12
+
+### New
+- **Streaming on Solana.** `SolanaLLMClient.chat_completion_stream(...)`
+  is now a thing, mirroring the Base `LLMClient` API one-for-one:
+  yields `ChatCompletionChunk` per SSE `data:` line, does the 402 →
+  sign-locally-with-SVM-x402 → retry-with-PAYMENT-SIGNATURE dance
+  before the first chunk, supports the same retry policy (5xx ×3 with
+  1s/2s/4s backoff) and `fallback_models` chain walking.
+- Constraint: like Base, fallback can only fire **before** the first
+  chunk is yielded — once any chunk has reached the caller, switching
+  models would concatenate two distinct responses.
+- Async is not yet implemented for the Solana client (consistent with
+  the rest of `SolanaLLMClient` which is sync-only today).
+
+### Tests
+- 6 new mock-based unit tests in `tests/unit/test_streaming_solana.py`:
+  free-model direct streaming, paid-model sign-and-retry, recovery
+  after 2× 503, raising after exhausted retries, fallback-chain
+  walking, and payment-rejected → `PaymentError`.
+
+### Verified e2e
+- Live call against `sol.blockrun.ai` with the free
+  `nvidia/deepseek-v4-flash` model: 2 content chunks, content
+  "Silence.", 0.8s.
+
 ## 0.20.1 — 2026-05-12
 
 ### Improved
