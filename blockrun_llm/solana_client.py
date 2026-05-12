@@ -17,12 +17,15 @@ Usage:
 
 from __future__ import annotations
 
+import json as _json
 import os
-from typing import Any, Dict, List, Optional, Union
+import sys
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import httpx
 
 from .types import (
+    ChatCompletionChunk,
     ChatResponse,
     ImageResponse,
     APIError,
@@ -85,6 +88,24 @@ def _get_user_agent() -> str:
     from . import __version__
 
     return f"blockrun-python/{__version__}"
+
+
+def _should_fallback_solana(exc: Exception) -> bool:
+    """Whether an exception during Solana streaming is retriable enough to
+    warrant trying the next ``fallback_models`` entry. Matches the Base
+    :func:`blockrun_llm.client._should_fallback` semantics:
+
+    - Timeouts and network errors → fall back
+    - APIError with 5xx-ish status → fall back
+    - 4xx and PaymentError → propagate
+    """
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    if isinstance(exc, httpx.NetworkError):
+        return True
+    if isinstance(exc, APIError) and exc.status_code in (502, 503, 504, 522, 524):
+        return True
+    return False
 
 
 class SolanaLLMClient:
@@ -223,6 +244,211 @@ class SolanaLLMClient:
             except Exception:
                 pass
         return payment_header
+
+    # ------------------------------------------------------------------
+    # Streaming (SSE) chat completions
+    # ------------------------------------------------------------------
+
+    # Retry policy mirrors LLMClient. ``1 + len(_STREAM_5XX_BACKOFFS)`` tries
+    # per phase (probe / paid-retry), exponential backoff in seconds.
+    _STREAM_5XX_STATUSES = (500, 502, 503, 504)
+    _STREAM_5XX_BACKOFFS = (1.0, 2.0, 4.0)
+
+    def chat_completion_stream(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        *,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        search: bool = False,
+        search_parameters: Optional[Dict[str, Any]] = None,
+        fallback_models: Optional[List[str]] = None,
+    ) -> Iterator[ChatCompletionChunk]:
+        """
+        Stream a chat completion via Server-Sent Events, paid in Solana USDC
+        via x402. Mirrors :meth:`LLMClient.chat_completion_stream` semantics:
+
+        - Yields one :class:`ChatCompletionChunk` per ``data:`` line until
+          the upstream emits ``data: [DONE]``.
+        - Free models stream on the first request; paid models do the
+          402 → sign locally with the SVM signer → retry with
+          ``PAYMENT-SIGNATURE`` dance before the first chunk.
+        - 5xx upstream errors are retried in-band with exponential
+          backoff (1s / 2s / 4s).
+        - ``fallback_models`` walks the chain on retriable errors, but
+          only **before** the first chunk has been yielded (mid-stream
+          fallback would concatenate two distinct responses).
+
+        Note: ``search_parameters`` is rejected by the BlockRun gateway in
+        stream mode (HTTP 400). Codex / GPT-5.4-Pro also can't stream.
+        """
+        body: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "max_tokens": max_tokens,
+        }
+        if temperature is not None:
+            body["temperature"] = temperature
+        if top_p is not None:
+            body["top_p"] = top_p
+        if search_parameters:
+            body["search_parameters"] = search_parameters
+        elif search:
+            body["search_parameters"] = {"mode": "on"}
+
+        attempts = [model, *(fallback_models or [])]
+        last_exc: Optional[Exception] = None
+
+        for i, attempt_model in enumerate(attempts):
+            body["model"] = attempt_model
+            inner = self._stream_with_payment("/v1/chat/completions", body)
+            chunks_yielded = 0
+            try:
+                for chunk in inner:
+                    chunks_yielded += 1
+                    yield chunk
+                return  # finished cleanly
+            except Exception as exc:
+                if chunks_yielded > 0:
+                    raise  # mid-stream — can't fall back
+                if not _should_fallback_solana(exc):
+                    raise
+                last_exc = exc
+                if i + 1 < len(attempts):
+                    next_model = attempts[i + 1]
+                    sys.stderr.write(
+                        f"[blockrun_llm] solana stream {attempt_model} -> "
+                        f"{next_model} ({type(exc).__name__}: {str(exc)[:80]})\n"
+                    )
+        assert last_exc is not None
+        raise last_exc
+
+    def _stream_with_payment(
+        self,
+        endpoint: str,
+        body: Dict[str, Any],
+    ) -> Iterator[ChatCompletionChunk]:
+        """402 → sign (SVM) → retry → SSE iter. Same shape as the Base
+        :meth:`LLMClient._stream_with_payment`; differs only in the
+        signing path (we go through the x402 SDK's SVM client)."""
+        url = f"{self._api_url}{endpoint}"
+        req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
+
+        backoffs = self._STREAM_5XX_BACKOFFS
+
+        # ----- Phase 1: probe (no payment header) -----
+        payment_headers: Optional[Dict[str, str]] = None
+        cost_usd = 0.0
+
+        for attempt in range(len(backoffs) + 1):
+            with self._client.stream(
+                "POST", url, json=body, headers=req_headers, timeout=self._timeout
+            ) as resp1:
+                if resp1.status_code == 200:
+                    # Free model — stream directly.
+                    yield from self._iter_sse_chunks(resp1)
+                    return
+                resp1.read()
+                if resp1.status_code == 402:
+                    payment_headers, cost_usd = self._sign_payment_from_response(resp1)
+                    break
+                if resp1.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
+                    import time
+
+                    time.sleep(backoffs[attempt])
+                    continue
+                self._raise_stream_error(resp1, after_payment=False)
+        else:
+            raise APIError("solana stream probe exhausted retries", 0, None)
+
+        # ----- Phase 2: stream with PAYMENT-SIGNATURE -----
+        assert payment_headers is not None
+        for attempt in range(len(backoffs) + 1):
+            with self._client.stream(
+                "POST", url, json=body, headers=payment_headers, timeout=self._timeout
+            ) as resp2:
+                if resp2.status_code == 200:
+                    if cost_usd > 0:
+                        self._session_calls += 1
+                        self._session_total_usd += cost_usd
+                        self._last_call_cost = cost_usd
+                    yield from self._iter_sse_chunks(resp2)
+                    return
+                resp2.read()
+                if resp2.status_code == 402:
+                    raise PaymentError(
+                        "Payment rejected. Check your Solana USDC balance."
+                    )
+                if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
+                    import time
+
+                    time.sleep(backoffs[attempt])
+                    continue
+                self._raise_stream_error(resp2, after_payment=True)
+
+    @staticmethod
+    def _iter_sse_chunks(response: httpx.Response) -> Iterator[ChatCompletionChunk]:
+        """OpenAI-format SSE parser. ``data: <json>\\n\\n`` lines, terminated
+        by ``data: [DONE]``. Malformed chunks are skipped, not raised."""
+        for raw_line in response.iter_lines():
+            if not raw_line or not raw_line.startswith("data: "):
+                continue
+            payload = raw_line[6:].strip()
+            if payload == "[DONE]":
+                return
+            try:
+                chunk_dict = _json.loads(payload)
+            except Exception:
+                continue
+            try:
+                yield ChatCompletionChunk(**chunk_dict)
+            except Exception:
+                yield ChatCompletionChunk.model_construct(**chunk_dict)
+
+    def _sign_payment_from_response(
+        self,
+        response: httpx.Response,
+    ) -> Tuple[Dict[str, str], float]:
+        """Extract a 402 response's payment requirements, sign locally with
+        the SVM x402 client, return ``(headers_with_PAYMENT_SIGNATURE,
+        cost_usd)``. Mirrors the inline logic in
+        :meth:`_handle_payment_and_retry` but returns headers instead of
+        making the retry POST itself — lets the streaming path open an
+        SSE connection for the retry."""
+        payment_header = self._extract_payment_header(response)
+        if not payment_header:
+            raise PaymentError("402 response but no payment requirements found")
+
+        payment_required = decode_payment_required_header(payment_header)
+        payment_payload = self._x402_client.create_payment_payload(payment_required)
+        encoded_payment = encode_payment_signature_header(payment_payload)
+
+        cost_usd = float(payment_payload.accepted.amount) / 1e6
+
+        return (
+            {
+                "Content-Type": "application/json",
+                "User-Agent": _get_user_agent(),
+                "PAYMENT-SIGNATURE": encoded_payment,
+            },
+            cost_usd,
+        )
+
+    @staticmethod
+    def _raise_stream_error(response: httpx.Response, *, after_payment: bool) -> None:
+        try:
+            error_body = response.json()
+        except Exception:
+            error_body = {"error": "Stream request failed"}
+        prefix = "API error after payment" if after_payment else "API error"
+        raise APIError(
+            f"{prefix}: {response.status_code}",
+            response.status_code,
+            sanitize_error_response(error_body),
+        )
 
     def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ChatResponse:
         url = f"{self._api_url}{endpoint}"
