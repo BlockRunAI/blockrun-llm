@@ -2,6 +2,24 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.22.1 — 2026-05-12
+
+### Fixed
+- **Tool calling on Solana.** `SolanaLLMClient.chat_completion`,
+  `SolanaLLMClient.chat_completion_stream`,
+  `AsyncSolanaLLMClient.chat_completion`, and
+  `AsyncSolanaLLMClient.chat_completion_stream` now accept ``tools`` /
+  ``tool_choice`` kwargs and forward them to the upstream model.
+  Previously the parameters were missing from the Solana SDK methods so
+  partners couldn't use function calling on the Solana chain — but the
+  BlockRun backend always supported the field uniformly; the SDK was
+  the bottleneck.
+
+  Live-verified: ``client.chat_completion("nvidia/deepseek-v4-flash",
+  [...], tools=[get_weather], tool_choice="auto")`` returned
+  ``tool_call: get_weather('{"city": "Tokyo"}')`` against
+  ``sol.blockrun.ai``.
+
 ## 0.22.0 — 2026-05-12
 
 ### New
