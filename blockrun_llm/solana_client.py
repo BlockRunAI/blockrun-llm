@@ -207,8 +207,16 @@ class SolanaLLMClient:
         top_p: Optional[float] = None,
         search: bool = False,
         search_parameters: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
     ) -> ChatResponse:
-        """Full chat completion (OpenAI-compatible)."""
+        """Full chat completion (OpenAI-compatible).
+
+        Supports OpenAI-style function calling via ``tools`` /
+        ``tool_choice`` — the BlockRun gateway forwards them to the
+        upstream model unchanged (Base and Solana use the same backend
+        schema; the only chain difference is the payment leg).
+        """
         body: Dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
             body["temperature"] = temperature
@@ -218,6 +226,10 @@ class SolanaLLMClient:
             body["search_parameters"] = search_parameters
         elif search:
             body["search_parameters"] = {"mode": "on"}
+        if tools is not None:
+            body["tools"] = tools
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
         return self._request_with_payment("/v1/chat/completions", body)
 
     def close(self) -> None:
@@ -264,6 +276,8 @@ class SolanaLLMClient:
         top_p: Optional[float] = None,
         search: bool = False,
         search_parameters: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
         fallback_models: Optional[List[str]] = None,
     ) -> Iterator[ChatCompletionChunk]:
         """
@@ -280,6 +294,9 @@ class SolanaLLMClient:
         - ``fallback_models`` walks the chain on retriable errors, but
           only **before** the first chunk has been yielded (mid-stream
           fallback would concatenate two distinct responses).
+        - ``tools`` / ``tool_choice`` work the same as on Base — the
+          gateway forwards them to the upstream model regardless of
+          chain.
 
         Note: ``search_parameters`` is rejected by the BlockRun gateway in
         stream mode (HTTP 400). Codex / GPT-5.4-Pro also can't stream.
@@ -298,6 +315,10 @@ class SolanaLLMClient:
             body["search_parameters"] = search_parameters
         elif search:
             body["search_parameters"] = {"mode": "on"}
+        if tools is not None:
+            body["tools"] = tools
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
 
         attempts = [model, *(fallback_models or [])]
         last_exc: Optional[Exception] = None
@@ -1253,6 +1274,8 @@ class AsyncSolanaLLMClient:
         top_p: Optional[float] = None,
         search: bool = False,
         search_parameters: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
     ) -> ChatResponse:
         body: Dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
@@ -1263,6 +1286,10 @@ class AsyncSolanaLLMClient:
             body["search_parameters"] = search_parameters
         elif search:
             body["search_parameters"] = {"mode": "on"}
+        if tools is not None:
+            body["tools"] = tools
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
         return await self._request_with_payment("/v1/chat/completions", body)
 
     async def list_models(self) -> List[Dict[str, Any]]:
@@ -1284,6 +1311,8 @@ class AsyncSolanaLLMClient:
         top_p: Optional[float] = None,
         search: bool = False,
         search_parameters: Optional[Dict[str, Any]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
         fallback_models: Optional[List[str]] = None,
     ) -> "AsyncSolanaIterator":
         """Async streaming. Same protocol semantics as the sync
@@ -1303,6 +1332,10 @@ class AsyncSolanaLLMClient:
             body["search_parameters"] = search_parameters
         elif search:
             body["search_parameters"] = {"mode": "on"}
+        if tools is not None:
+            body["tools"] = tools
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
 
         attempts = [model, *(fallback_models or [])]
         last_exc: Optional[Exception] = None
