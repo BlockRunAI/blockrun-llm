@@ -625,6 +625,7 @@ class LLMClient:
         tool_choice: Optional[Any] = None,
         search: Optional[bool] = None,
         search_parameters: Optional[Dict[str, Any]] = None,
+        fallback_models: Optional[List[str]] = None,
     ) -> Iterator[ChatCompletionChunk]:
         """
         Stream a chat completion via Server-Sent Events.
@@ -640,11 +641,21 @@ class LLMClient:
         ``PAYMENT-SIGNATURE`` header. Free models (e.g.
         ``nvidia/deepseek-v4-flash``) skip the 402 and stream directly.
 
+        Fallback semantics
+        ------------------
+        ``fallback_models=[...]`` walks the list when the primary upstream
+        produces a retriable error (timeouts, network errors, 5xx). Unlike
+        the non-streaming :meth:`chat_completion` path, fallback is only
+        possible **before the first chunk is yielded** — once any byte has
+        reached the caller, switching models would concatenate two distinct
+        responses. After-first-chunk failures propagate to the caller.
+
         Example::
 
             for chunk in client.chat_completion_stream(
                 "nvidia/deepseek-v4-flash",
                 [{"role": "user", "content": "Hello"}],
+                fallback_models=["nvidia/llama-4-maverick"],
             ):
                 delta = chunk.choices[0].delta
                 if delta.content:
@@ -678,7 +689,41 @@ class LLMClient:
         elif search is True:
             body["search_parameters"] = {"mode": "on"}
 
-        yield from self._stream_with_payment("/v1/chat/completions", body)
+        attempts = [model, *(fallback_models or [])]
+        last_exc: Optional[Exception] = None
+
+        for i, attempt_model in enumerate(attempts):
+            body["model"] = attempt_model
+            inner = self._stream_with_payment("/v1/chat/completions", body)
+            chunks_yielded = 0
+            try:
+                for chunk in inner:
+                    chunks_yielded += 1
+                    yield chunk
+                return  # finished cleanly
+            except Exception as exc:
+                if chunks_yielded > 0:
+                    # Already streamed partial output; can't swap models now.
+                    raise
+                if not _should_fallback(exc):
+                    raise
+                last_exc = exc
+                if i + 1 < len(attempts):
+                    next_model = attempts[i + 1]
+                    sys.stderr.write(
+                        f"[blockrun_llm] stream {attempt_model} -> {next_model} "
+                        f"({type(exc).__name__}: {str(exc)[:80]})\n"
+                    )
+        # Exhausted all attempts — re-raise the last retriable error.
+        assert last_exc is not None  # at least one attempt always runs
+        raise last_exc
+
+    # Streaming retry policy. Both the probe (unauthenticated) and the
+    # paid-retry (with PAYMENT-SIGNATURE) honor this — total tries per
+    # phase is ``1 + len(_STREAM_5XX_BACKOFFS)`` (== 4 here). Exponential
+    # backoff so we don't hammer a struggling upstream.
+    _STREAM_5XX_STATUSES = (500, 502, 503, 504)
+    _STREAM_5XX_BACKOFFS = (1.0, 2.0, 4.0)
 
     def _stream_with_payment(
         self,
@@ -690,6 +735,8 @@ class LLMClient:
 
         Free models return 200 + SSE on the first request; paid models
         return JSON 402 first, after which we sign locally and re-stream.
+        Transient 5xx responses (NVIDIA NIM hiccups, etc.) are retried
+        in-band with exponential backoff before raising.
         """
         url = f"{self.api_url}{endpoint}"
         req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
@@ -697,53 +744,57 @@ class LLMClient:
         is_search = "search_parameters" in body or body.get("search") is True
         timeout = self.search_timeout if is_search else self.timeout
 
-        # Attempt 1: unauthenticated probe.
+        # ----- Phase 1: probe (no payment header) -----
         payment_headers: Optional[Dict[str, str]] = None
         cost_usd = 0.0
-        first_status = 0
 
-        with self._client.stream(
-            "POST", url, json=body, headers=req_headers, timeout=timeout
-        ) as resp1:
-            first_status = resp1.status_code
-            if resp1.status_code == 200:
-                # Free model — stream directly without payment.
-                yield from self._iter_sse_chunks(resp1)
-                return
-            # Drain body for 402 / 5xx so we can read JSON + reuse connection.
-            resp1.read()
-            if resp1.status_code == 402:
-                payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
-            elif resp1.status_code in (502, 503):
-                # Will retry below without payment.
-                pass
-            else:
+        backoffs = self._STREAM_5XX_BACKOFFS
+        for attempt in range(len(backoffs) + 1):
+            with self._client.stream(
+                "POST", url, json=body, headers=req_headers, timeout=timeout
+            ) as resp1:
+                if resp1.status_code == 200:
+                    # Free model (or already-authed session) — stream directly.
+                    yield from self._iter_sse_chunks(resp1)
+                    return
+                resp1.read()
+                if resp1.status_code == 402:
+                    payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
+                    break  # advance to phase 2
+                if resp1.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
+                    import time
+
+                    time.sleep(backoffs[attempt])
+                    continue
+                # Out of retries on 5xx, or non-retriable 4xx.
                 self._raise_stream_error(resp1, after_payment=False)
+        else:
+            # Loop exhausted without 402 or 200 — shouldn't reach here because
+            # the final iteration above raises, but defensive.
+            raise APIError("stream probe exhausted retries", 0, None)
 
-        if first_status in (502, 503):
-            import time
-
-            time.sleep(1)
-            payment_headers = None  # retry without payment
-
-        # Attempt 2: stream with payment header (or simple retry on 5xx).
-        retry_headers = payment_headers if payment_headers is not None else req_headers
-        with self._client.stream(
-            "POST", url, json=body, headers=retry_headers, timeout=timeout
-        ) as resp2:
-            if resp2.status_code == 402:
+        # ----- Phase 2: stream with PAYMENT-SIGNATURE -----
+        assert payment_headers is not None  # break implies signing succeeded
+        for attempt in range(len(backoffs) + 1):
+            with self._client.stream(
+                "POST", url, json=body, headers=payment_headers, timeout=timeout
+            ) as resp2:
+                if resp2.status_code == 200:
+                    if cost_usd > 0:
+                        self._session_calls += 1
+                        self._session_total_usd += cost_usd
+                        self._last_call_cost = cost_usd
+                    yield from self._iter_sse_chunks(resp2)
+                    return
                 resp2.read()
-                raise PaymentError("Payment was rejected. Check your wallet balance.")
-            if resp2.status_code != 200:
-                resp2.read()
+                if resp2.status_code == 402:
+                    raise PaymentError("Payment was rejected. Check your wallet balance.")
+                if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
+                    import time
+
+                    time.sleep(backoffs[attempt])
+                    continue
                 self._raise_stream_error(resp2, after_payment=True)
-
-            if cost_usd > 0:
-                self._session_calls += 1
-                self._session_total_usd += cost_usd
-                self._last_call_cost = cost_usd
-
-            yield from self._iter_sse_chunks(resp2)
 
     @staticmethod
     def _iter_sse_chunks(response: httpx.Response) -> Iterator[ChatCompletionChunk]:
@@ -2225,21 +2276,12 @@ class AsyncLLMClient:
         tool_choice: Optional[Any] = None,
         search: Optional[bool] = None,
         search_parameters: Optional[Dict[str, Any]] = None,
+        fallback_models: Optional[List[str]] = None,
     ) -> AsyncIterator[ChatCompletionChunk]:
         """
         Async streaming chat completion. See :meth:`LLMClient.chat_completion_stream`
-        for protocol details — semantics are identical, only the iteration
-        protocol differs (``async for`` instead of ``for``).
-
-        Example::
-
-            async for chunk in client.chat_completion_stream(
-                "nvidia/deepseek-v4-flash",
-                [{"role": "user", "content": "Hello"}],
-            ):
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    print(delta.content, end="", flush=True)
+        for protocol details and the ``fallback_models`` semantics —
+        identical here, only the iteration protocol differs (``async for``).
         """
         validate_model(model)
         validate_max_tokens(max_tokens)
@@ -2265,66 +2307,102 @@ class AsyncLLMClient:
         elif search is True:
             body["search_parameters"] = {"mode": "on"}
 
-        async for chunk in self._stream_with_payment("/v1/chat/completions", body):
-            yield chunk
+        attempts = [model, *(fallback_models or [])]
+        last_exc: Optional[Exception] = None
+
+        for i, attempt_model in enumerate(attempts):
+            body["model"] = attempt_model
+            inner = self._stream_with_payment("/v1/chat/completions", body)
+            chunks_yielded = 0
+            try:
+                async for chunk in inner:
+                    chunks_yielded += 1
+                    yield chunk
+                return
+            except Exception as exc:
+                if chunks_yielded > 0:
+                    raise
+                if not _should_fallback(exc):
+                    raise
+                last_exc = exc
+                if i + 1 < len(attempts):
+                    next_model = attempts[i + 1]
+                    sys.stderr.write(
+                        f"[blockrun_llm] stream {attempt_model} -> {next_model} "
+                        f"({type(exc).__name__}: {str(exc)[:80]})\n"
+                    )
+        assert last_exc is not None
+        raise last_exc
 
     async def _stream_with_payment(
         self,
         endpoint: str,
         body: Dict[str, Any],
     ) -> AsyncIterator[ChatCompletionChunk]:
-        """Async version of LLMClient._stream_with_payment."""
+        """Async version of LLMClient._stream_with_payment.
+
+        Honors :data:`LLMClient._STREAM_5XX_STATUSES` and
+        :data:`LLMClient._STREAM_5XX_BACKOFFS` for retries (in-band exponential
+        backoff on transient upstream errors before raising).
+        """
         url = f"{self.api_url}{endpoint}"
         req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
 
         is_search = "search_parameters" in body or body.get("search") is True
         timeout = self.search_timeout if is_search else self.timeout
 
+        backoffs = LLMClient._STREAM_5XX_BACKOFFS
+        statuses_5xx = LLMClient._STREAM_5XX_STATUSES
+
+        # ----- Phase 1: probe (no payment header) -----
         payment_headers: Optional[Dict[str, str]] = None
         cost_usd = 0.0
-        first_status = 0
 
-        async with self._client.stream(
-            "POST", url, json=body, headers=req_headers, timeout=timeout
-        ) as resp1:
-            first_status = resp1.status_code
-            if resp1.status_code == 200:
-                async for chunk in self._aiter_sse_chunks(resp1):
-                    yield chunk
-                return
-            await resp1.aread()
-            if resp1.status_code == 402:
-                payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
-            elif resp1.status_code in (502, 503):
-                pass
-            else:
+        for attempt in range(len(backoffs) + 1):
+            async with self._client.stream(
+                "POST", url, json=body, headers=req_headers, timeout=timeout
+            ) as resp1:
+                if resp1.status_code == 200:
+                    async for chunk in self._aiter_sse_chunks(resp1):
+                        yield chunk
+                    return
+                await resp1.aread()
+                if resp1.status_code == 402:
+                    payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
+                    break
+                if resp1.status_code in statuses_5xx and attempt < len(backoffs):
+                    import asyncio
+
+                    await asyncio.sleep(backoffs[attempt])
+                    continue
                 self._raise_stream_error(resp1, after_payment=False)
+        else:
+            raise APIError("stream probe exhausted retries", 0, None)
 
-        if first_status in (502, 503):
-            import asyncio
-
-            await asyncio.sleep(1)
-            payment_headers = None
-
-        retry_headers = payment_headers if payment_headers is not None else req_headers
-        async with self._client.stream(
-            "POST", url, json=body, headers=retry_headers, timeout=timeout
-        ) as resp2:
-            if resp2.status_code == 402:
+        # ----- Phase 2: stream with PAYMENT-SIGNATURE -----
+        assert payment_headers is not None
+        for attempt in range(len(backoffs) + 1):
+            async with self._client.stream(
+                "POST", url, json=body, headers=payment_headers, timeout=timeout
+            ) as resp2:
+                if resp2.status_code == 200:
+                    # AsyncLLMClient only tracks ``_last_call_cost`` (no session
+                    # totals in the async path — matches the existing async
+                    # chat_completion convention).
+                    if cost_usd > 0:
+                        self._last_call_cost = cost_usd
+                    async for chunk in self._aiter_sse_chunks(resp2):
+                        yield chunk
+                    return
                 await resp2.aread()
-                raise PaymentError("Payment was rejected. Check your wallet balance.")
-            if resp2.status_code != 200:
-                await resp2.aread()
+                if resp2.status_code == 402:
+                    raise PaymentError("Payment was rejected. Check your wallet balance.")
+                if resp2.status_code in statuses_5xx and attempt < len(backoffs):
+                    import asyncio
+
+                    await asyncio.sleep(backoffs[attempt])
+                    continue
                 self._raise_stream_error(resp2, after_payment=True)
-
-            # AsyncLLMClient only tracks ``_last_call_cost`` (no session totals
-            # in the async path — matches the existing async chat_completion
-            # convention).
-            if cost_usd > 0:
-                self._last_call_cost = cost_usd
-
-            async for chunk in self._aiter_sse_chunks(resp2):
-                yield chunk
 
     @staticmethod
     async def _aiter_sse_chunks(response: httpx.Response) -> AsyncIterator[ChatCompletionChunk]:
