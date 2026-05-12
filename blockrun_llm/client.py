@@ -39,13 +39,15 @@ Usage:
 
 import os
 import sys
-from typing import List, Dict, Any, Optional, Union
+import json as _json
+from typing import AsyncIterator, Iterator, List, Dict, Any, Optional, Tuple, Union
 import httpx
 from eth_account import Account
 from dotenv import load_dotenv
 
 from .types import (
     ChatResponse,
+    ChatCompletionChunk,
     ImageResponse,
     APIError,
     PaymentError,
@@ -606,6 +608,248 @@ class LLMClient:
         # Exhausted all attempts — re-raise the last retriable error.
         assert last_exc is not None  # at least one attempt always runs
         raise last_exc
+
+    # ------------------------------------------------------------------
+    # Streaming (SSE) chat completions
+    # ------------------------------------------------------------------
+
+    def chat_completion_stream(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        *,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
+        search: Optional[bool] = None,
+        search_parameters: Optional[Dict[str, Any]] = None,
+    ) -> Iterator[ChatCompletionChunk]:
+        """
+        Stream a chat completion via Server-Sent Events.
+
+        Yields one :class:`ChatCompletionChunk` per SSE ``data:`` line until
+        the upstream emits ``data: [DONE]``. The first chunk's ``delta`` is
+        typically ``{"role": "assistant"}``; subsequent chunks carry
+        ``content`` deltas; the final chunk carries ``finish_reason``.
+
+        Payment flow is the same as :meth:`chat_completion`: the first
+        request returns 402, the SDK signs an EIP-712 payment locally, then
+        re-issues the request with ``stream=true`` and the
+        ``PAYMENT-SIGNATURE`` header. Free models (e.g.
+        ``nvidia/deepseek-v4-flash``) skip the 402 and stream directly.
+
+        Example::
+
+            for chunk in client.chat_completion_stream(
+                "nvidia/deepseek-v4-flash",
+                [{"role": "user", "content": "Hello"}],
+            ):
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    print(delta.content, end="", flush=True)
+
+        Note: ``search`` / ``search_parameters`` are not supported in stream
+        mode by the BlockRun backend — the server will reject with 400.
+        Codex / GPT-5.4 Pro also do not support streaming.
+        """
+        validate_model(model)
+        validate_max_tokens(max_tokens)
+        validate_temperature(temperature)
+        validate_top_p(top_p)
+
+        body: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "max_tokens": max_tokens or self.DEFAULT_MAX_TOKENS,
+        }
+        if temperature is not None:
+            body["temperature"] = temperature
+        if top_p is not None:
+            body["top_p"] = top_p
+        if tools is not None:
+            body["tools"] = tools
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
+        if search_parameters is not None:
+            body["search_parameters"] = search_parameters
+        elif search is True:
+            body["search_parameters"] = {"mode": "on"}
+
+        yield from self._stream_with_payment("/v1/chat/completions", body)
+
+    def _stream_with_payment(
+        self,
+        endpoint: str,
+        body: Dict[str, Any],
+    ) -> Iterator[ChatCompletionChunk]:
+        """
+        Run the 402 → sign → retry dance, then yield SSE chunks.
+
+        Free models return 200 + SSE on the first request; paid models
+        return JSON 402 first, after which we sign locally and re-stream.
+        """
+        url = f"{self.api_url}{endpoint}"
+        req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
+
+        is_search = "search_parameters" in body or body.get("search") is True
+        timeout = self.search_timeout if is_search else self.timeout
+
+        # Attempt 1: unauthenticated probe.
+        payment_headers: Optional[Dict[str, str]] = None
+        cost_usd = 0.0
+        first_status = 0
+
+        with self._client.stream(
+            "POST", url, json=body, headers=req_headers, timeout=timeout
+        ) as resp1:
+            first_status = resp1.status_code
+            if resp1.status_code == 200:
+                # Free model — stream directly without payment.
+                yield from self._iter_sse_chunks(resp1)
+                return
+            # Drain body for 402 / 5xx so we can read JSON + reuse connection.
+            resp1.read()
+            if resp1.status_code == 402:
+                payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
+            elif resp1.status_code in (502, 503):
+                # Will retry below without payment.
+                pass
+            else:
+                self._raise_stream_error(resp1, after_payment=False)
+
+        if first_status in (502, 503):
+            import time
+
+            time.sleep(1)
+            payment_headers = None  # retry without payment
+
+        # Attempt 2: stream with payment header (or simple retry on 5xx).
+        retry_headers = payment_headers if payment_headers is not None else req_headers
+        with self._client.stream(
+            "POST", url, json=body, headers=retry_headers, timeout=timeout
+        ) as resp2:
+            if resp2.status_code == 402:
+                resp2.read()
+                raise PaymentError("Payment was rejected. Check your wallet balance.")
+            if resp2.status_code != 200:
+                resp2.read()
+                self._raise_stream_error(resp2, after_payment=True)
+
+            if cost_usd > 0:
+                self._session_calls += 1
+                self._session_total_usd += cost_usd
+                self._last_call_cost = cost_usd
+
+            yield from self._iter_sse_chunks(resp2)
+
+    @staticmethod
+    def _iter_sse_chunks(response: httpx.Response) -> Iterator[ChatCompletionChunk]:
+        """Parse a ``text/event-stream`` response into chunk objects.
+
+        OpenAI format: each event is ``data: {json}\\n\\n``; the terminator is
+        ``data: [DONE]\\n\\n``. Non-``data:`` lines (comments, heartbeats)
+        are ignored, and malformed chunks are skipped rather than abort the
+        stream — partial output is still useful.
+        """
+        for raw_line in response.iter_lines():
+            if not raw_line or not raw_line.startswith("data: "):
+                continue
+            payload = raw_line[6:].strip()
+            if payload == "[DONE]":
+                return
+            try:
+                chunk_dict = _json.loads(payload)
+            except Exception:
+                continue
+            try:
+                yield ChatCompletionChunk(**chunk_dict)
+            except Exception:
+                # Schema drift — surface the raw dict shape via a permissive
+                # model construction to avoid silently dropping output.
+                yield ChatCompletionChunk.model_construct(**chunk_dict)
+
+    def _sign_payment_from_response(
+        self,
+        body: Dict[str, Any],
+        response: httpx.Response,
+    ) -> Tuple[Dict[str, str], float]:
+        """
+        Extract a 402's payment requirements, sign locally, and return
+        ``(headers_with_PAYMENT_SIGNATURE, cost_usd)``.
+
+        Mirrors the inline signing logic in :meth:`_handle_payment_and_retry`
+        but returns the signed headers instead of doing the retry POST —
+        which lets the streaming path open an SSE connection for the retry.
+        """
+        payment_header = response.headers.get("payment-required")
+        price_info: Dict[str, Any] = {}
+        if not payment_header:
+            try:
+                resp_body = response.json()
+                if "x402" in resp_body:
+                    payment_header = resp_body
+                price_info = resp_body.get("price", {})
+            except Exception:
+                pass
+
+        if not payment_header:
+            raise PaymentError("402 response but no payment requirements found")
+
+        if isinstance(payment_header, str):
+            payment_required = parse_payment_required(payment_header)
+        else:
+            payment_required = payment_header
+
+        details = extract_payment_details(payment_required)
+
+        cost_usd = (
+            float(price_info.get("amount", 0))
+            if price_info
+            else float(details.get("amount", 0)) / 1e6
+        )
+
+        resource = details.get("resource") or {}
+        extensions = payment_required.get("extensions", {})
+        payment_payload = create_payment_payload(
+            account=self.account,
+            recipient=details["recipient"],
+            amount=details["amount"],
+            network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
+            resource_url=validate_resource_url(
+                resource.get("url", f"{self.api_url}/v1/chat/completions"), self.api_url
+            ),
+            resource_description=resource.get("description", "BlockRun AI API call"),
+            max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
+            extra=details.get("extra"),
+            extensions=extensions,
+            asset=details.get("asset"),
+        )
+
+        return (
+            {
+                "Content-Type": "application/json",
+                "User-Agent": _get_user_agent(),
+                "PAYMENT-SIGNATURE": payment_payload,
+            },
+            cost_usd,
+        )
+
+    @staticmethod
+    def _raise_stream_error(response: httpx.Response, *, after_payment: bool) -> None:
+        """Common error path for unexpected HTTP statuses during streaming."""
+        try:
+            error_body = response.json()
+        except Exception:
+            error_body = {"error": "Stream request failed"}
+        prefix = "API error after payment" if after_payment else "API error"
+        raise APIError(
+            f"{prefix}: {response.status_code}",
+            response.status_code,
+            sanitize_error_response(error_body),
+        )
 
     def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ChatResponse:
         """
@@ -1964,6 +2208,146 @@ class AsyncLLMClient:
                     )
         assert last_exc is not None
         raise last_exc
+
+    # ------------------------------------------------------------------
+    # Streaming (SSE) chat completions — async mirror of LLMClient
+    # ------------------------------------------------------------------
+
+    async def chat_completion_stream(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        *,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
+        search: Optional[bool] = None,
+        search_parameters: Optional[Dict[str, Any]] = None,
+    ) -> AsyncIterator[ChatCompletionChunk]:
+        """
+        Async streaming chat completion. See :meth:`LLMClient.chat_completion_stream`
+        for protocol details — semantics are identical, only the iteration
+        protocol differs (``async for`` instead of ``for``).
+
+        Example::
+
+            async for chunk in client.chat_completion_stream(
+                "nvidia/deepseek-v4-flash",
+                [{"role": "user", "content": "Hello"}],
+            ):
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    print(delta.content, end="", flush=True)
+        """
+        validate_model(model)
+        validate_max_tokens(max_tokens)
+        validate_temperature(temperature)
+        validate_top_p(top_p)
+
+        body: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "max_tokens": max_tokens or self.DEFAULT_MAX_TOKENS,
+        }
+        if temperature is not None:
+            body["temperature"] = temperature
+        if top_p is not None:
+            body["top_p"] = top_p
+        if tools is not None:
+            body["tools"] = tools
+        if tool_choice is not None:
+            body["tool_choice"] = tool_choice
+        if search_parameters is not None:
+            body["search_parameters"] = search_parameters
+        elif search is True:
+            body["search_parameters"] = {"mode": "on"}
+
+        async for chunk in self._stream_with_payment("/v1/chat/completions", body):
+            yield chunk
+
+    async def _stream_with_payment(
+        self,
+        endpoint: str,
+        body: Dict[str, Any],
+    ) -> AsyncIterator[ChatCompletionChunk]:
+        """Async version of LLMClient._stream_with_payment."""
+        url = f"{self.api_url}{endpoint}"
+        req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
+
+        is_search = "search_parameters" in body or body.get("search") is True
+        timeout = self.search_timeout if is_search else self.timeout
+
+        payment_headers: Optional[Dict[str, str]] = None
+        cost_usd = 0.0
+        first_status = 0
+
+        async with self._client.stream(
+            "POST", url, json=body, headers=req_headers, timeout=timeout
+        ) as resp1:
+            first_status = resp1.status_code
+            if resp1.status_code == 200:
+                async for chunk in self._aiter_sse_chunks(resp1):
+                    yield chunk
+                return
+            await resp1.aread()
+            if resp1.status_code == 402:
+                payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
+            elif resp1.status_code in (502, 503):
+                pass
+            else:
+                self._raise_stream_error(resp1, after_payment=False)
+
+        if first_status in (502, 503):
+            import asyncio
+
+            await asyncio.sleep(1)
+            payment_headers = None
+
+        retry_headers = payment_headers if payment_headers is not None else req_headers
+        async with self._client.stream(
+            "POST", url, json=body, headers=retry_headers, timeout=timeout
+        ) as resp2:
+            if resp2.status_code == 402:
+                await resp2.aread()
+                raise PaymentError("Payment was rejected. Check your wallet balance.")
+            if resp2.status_code != 200:
+                await resp2.aread()
+                self._raise_stream_error(resp2, after_payment=True)
+
+            # AsyncLLMClient only tracks ``_last_call_cost`` (no session totals
+            # in the async path — matches the existing async chat_completion
+            # convention).
+            if cost_usd > 0:
+                self._last_call_cost = cost_usd
+
+            async for chunk in self._aiter_sse_chunks(resp2):
+                yield chunk
+
+    @staticmethod
+    async def _aiter_sse_chunks(response: httpx.Response) -> AsyncIterator[ChatCompletionChunk]:
+        """Async variant of :meth:`LLMClient._iter_sse_chunks`."""
+        async for raw_line in response.aiter_lines():
+            if not raw_line or not raw_line.startswith("data: "):
+                continue
+            payload = raw_line[6:].strip()
+            if payload == "[DONE]":
+                return
+            try:
+                chunk_dict = _json.loads(payload)
+            except Exception:
+                continue
+            try:
+                yield ChatCompletionChunk(**chunk_dict)
+            except Exception:
+                yield ChatCompletionChunk.model_construct(**chunk_dict)
+
+    # Reuse the sync helpers — Python class-attribute lookup binds them
+    # correctly to whatever self is passed when the bound method is called.
+    _sign_payment_from_response = LLMClient._sign_payment_from_response
+    _raise_stream_error = LLMClient._raise_stream_error
 
     async def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ChatResponse:
         """Make async request with automatic payment handling."""
