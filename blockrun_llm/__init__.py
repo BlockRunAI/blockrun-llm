@@ -60,6 +60,9 @@ from .price import PriceClient
 from .types import (
     ChatMessage,
     ChatResponse,
+    ChatCompletionChunk,
+    ChatChunkChoice,
+    ChatChunkDelta,
     Model,
     APIError,
     PaymentError,
@@ -146,7 +149,7 @@ from .cache import (
     get_cost_log_summary,
 )
 
-__version__ = "0.18.0"
+__version__ = "0.20.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -169,6 +172,9 @@ __all__ = [
     "PriceClient",
     "ChatMessage",
     "ChatResponse",
+    "ChatCompletionChunk",
+    "ChatChunkChoice",
+    "ChatChunkDelta",
     "Model",
     "APIError",
     "PaymentError",

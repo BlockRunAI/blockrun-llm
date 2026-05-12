@@ -90,6 +90,53 @@ class ChatResponse(BaseModel):
     citations: Optional[List[str]] = None  # xAI Live Search citation URLs
 
 
+# ---------------------------------------------------------------------------
+# Streaming (SSE) chunk types — OpenAI Chat Completions chunk schema.
+#
+# Backend emits ``data: <json>\n\n`` lines terminated by ``data: [DONE]\n\n``.
+# First chunk's delta has ``role="assistant"``; subsequent chunks fill
+# ``content``; final chunk carries ``finish_reason`` and optionally ``usage``.
+# ---------------------------------------------------------------------------
+
+
+class ChatChunkDelta(BaseModel):
+    """Incremental ``message`` delta sent over SSE.
+
+    Any field may be absent in a given chunk — ``role`` typically only on the
+    first, ``content`` on body chunks, ``tool_calls`` when the model decides
+    to call a tool. ``reasoning_content`` / ``thinking`` appear on
+    reasoning-capable upstreams.
+    """
+
+    role: Optional[Literal["system", "user", "assistant", "tool"]] = None
+    content: Optional[str] = None
+    tool_calls: Optional[List[ToolCall]] = None
+    reasoning_content: Optional[str] = None
+    thinking: Optional[str] = None
+
+
+class ChatChunkChoice(BaseModel):
+    """One choice within a streaming chunk."""
+
+    index: int
+    delta: ChatChunkDelta
+    finish_reason: Optional[Literal["stop", "length", "content_filter", "tool_calls"]] = None
+
+
+class ChatCompletionChunk(BaseModel):
+    """A single SSE chunk emitted by ``/v1/chat/completions`` when stream=True."""
+
+    id: str
+    object: str = "chat.completion.chunk"
+    created: int
+    model: str
+    choices: List[ChatChunkChoice]
+    # Usage is populated only on the final chunk for providers that support it
+    # (some upstreams omit it entirely — callers must tolerate ``None``).
+    usage: Optional[ChatUsage] = None
+    citations: Optional[List[str]] = None  # xAI Live Search citation URLs (final chunk only)
+
+
 class Model(BaseModel):
     """Available model information."""
 

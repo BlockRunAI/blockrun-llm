@@ -2,10 +2,24 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
-## Unreleased
+## 0.20.0 — 2026-05-11
 
 ### New
 
+- **Server-Sent Events streaming for chat completions.** New methods
+  `LLMClient.chat_completion_stream(...)` and
+  `AsyncLLMClient.chat_completion_stream(...)` return an iterator of
+  :class:`ChatCompletionChunk` objects, yielding one chunk per SSE event
+  until the upstream emits `data: [DONE]`. The 402 → sign-locally →
+  retry flow is identical to the non-streaming path; free models
+  (e.g. `nvidia/deepseek-v4-flash`) stream directly without a payment
+  dance. New types exported: `ChatCompletionChunk`, `ChatChunkChoice`,
+  `ChatChunkDelta`. Validated end-to-end against the production
+  `blockrun.ai` gateway (sync + async, free model). Caveats:
+  `search_parameters` and the Responses-API models (`codex`,
+  `gpt-5.4-pro`) reject streaming server-side with 400 — same constraint
+  as the gateway. Six new unit tests cover the free path, paid 402-sign-
+  retry path, payment rejection, and tolerance for malformed chunks.
 - **Local billing / cost-tracking surface.** Every paid call now writes a
   `{ts, endpoint, cost_usd, model, wallet, network, client_kind}` row to
   `~/.blockrun/cost_log.jsonl`. New helpers on top:
