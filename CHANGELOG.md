@@ -2,6 +2,33 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.20.1 — 2026-05-12
+
+### Improved
+- **Streaming 5xx retry policy.** `_stream_with_payment` now retries
+  transient upstream errors (500 / 502 / 503 / 504) up to three times per
+  phase with exponential backoff (1s / 2s / 4s), instead of the single
+  retry shipped in 0.20.0. Both the unauthenticated probe and the
+  paid retry honor the same policy. Tuned for NVIDIA NIM upstream
+  flakiness on free models — most transient hiccups now self-heal
+  before bubbling up to the caller. Exposed as
+  `LLMClient._STREAM_5XX_STATUSES` / `_STREAM_5XX_BACKOFFS` so callers
+  can monkey-patch the policy in tests or override at runtime.
+- **`fallback_models` parameter on `chat_completion_stream`** (sync +
+  async). Walks the chain when the primary upstream produces a retriable
+  error (timeouts, network errors, 5xx after exhausting in-band retries).
+  **Constraint:** fallback only triggers *before the first chunk is
+  yielded* — once any byte has reached the caller, switching upstreams
+  would concatenate two distinct responses. After-first-chunk failures
+  propagate to the caller as before.
+
+### Tests
+- Six new unit tests in `tests/unit/test_streaming.py` covering:
+  recovery after two 503s, raising after exhausting retries, retry on
+  the paid (post-402) retry leg, fallback to a healthy model after a
+  primary 503-storm, no fallback after a chunk has been yielded, and
+  no fallback on a non-retriable 4xx.
+
 ## 0.20.0 — 2026-05-11
 
 ### New

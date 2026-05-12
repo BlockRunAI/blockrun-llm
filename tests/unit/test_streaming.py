@@ -280,3 +280,229 @@ class TestAsyncStreaming:
         assert "PAYMENT-SIGNATURE" not in calls[0].headers
         assert "PAYMENT-SIGNATURE" in calls[1].headers
         await client.close()
+
+
+# ---------------------------------------------------------------------------
+# 5xx retry tests
+# ---------------------------------------------------------------------------
+
+def _make_flaky_free_transport(
+    sse_body: bytes,
+    fail_count: int,
+    calls: List[httpx.Request],
+    status: int = 503,
+) -> httpx.MockTransport:
+    """Returns ``status`` (default 503) for the first ``fail_count`` requests,
+    then 200 + SSE on the next one. Used to verify retry-with-backoff logic."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len(calls) <= fail_count:
+            return httpx.Response(
+                status, headers={"content-type": "application/json"}, json={"error": "transient"}
+            )
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=sse_body
+        )
+
+    return httpx.MockTransport(handler)
+
+
+class TestStreamingRetries:
+    """LLMClient._STREAM_5XX_BACKOFFS controls the retry policy. With three
+    backoffs the SDK tries up to 4 times per phase before raising."""
+
+    def test_recovers_after_two_503s(self, monkeypatch):
+        # Zero out sleeps to keep tests fast.
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+
+        calls: List[httpx.Request] = []
+        client = LLMClient(private_key=TEST_PRIVATE_KEY)
+        client._client = httpx.Client(
+            transport=_make_flaky_free_transport(_sse_events(["OK"]), fail_count=2, calls=calls)
+        )
+        chunks = list(
+            client.chat_completion_stream(
+                "nvidia/deepseek-v4-flash",
+                [{"role": "user", "content": "hi"}],
+            )
+        )
+        # 2 failed + 1 success
+        assert len(calls) == 3
+        assert any(c.choices[0].delta.content == "OK" for c in chunks)
+
+    def test_raises_after_exhausting_retries(self, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+
+        calls: List[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(
+                503,
+                headers={"content-type": "application/json"},
+                json={"error": "persistent"},
+            )
+
+        client = LLMClient(private_key=TEST_PRIVATE_KEY)
+        client._client = httpx.Client(transport=httpx.MockTransport(handler))
+
+        from blockrun_llm.types import APIError
+
+        with pytest.raises(APIError):
+            list(client.chat_completion_stream(
+                "nvidia/deepseek-v4-flash",
+                [{"role": "user", "content": "hi"}],
+            ))
+        # 1 + 3 backoffs == 4 probe attempts before raising.
+        assert len(calls) == 1 + len(LLMClient._STREAM_5XX_BACKOFFS)
+
+    def test_5xx_retry_also_works_after_payment(self, monkeypatch):
+        """After signing a 402, subsequent 5xx on the retry stream should
+        also trigger in-band retries before raising."""
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+
+        calls: List[httpx.Request] = []
+        body = _sse_events(["paid-OK"])
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            sig = request.headers.get("PAYMENT-SIGNATURE")
+            if not sig:
+                # Probe → 402 with payment requirements.
+                return httpx.Response(
+                    402,
+                    headers={
+                        "content-type": "application/json",
+                        "payment-required": build_payment_required_response(),
+                    },
+                    json={"error": "Payment Required", "price": {"amount": "0.001"}},
+                )
+            # After payment: fail twice with 503, then succeed.
+            paid_calls = sum(1 for c in calls if c.headers.get("PAYMENT-SIGNATURE"))
+            if paid_calls <= 2:
+                return httpx.Response(503, json={"error": "transient"})
+            return httpx.Response(
+                200, headers={"content-type": "text/event-stream"}, content=body
+            )
+
+        client = LLMClient(private_key=TEST_PRIVATE_KEY)
+        client._client = httpx.Client(transport=httpx.MockTransport(handler))
+
+        chunks = list(client.chat_completion_stream(
+            "openai/gpt-5.5",
+            [{"role": "user", "content": "hi"}],
+        ))
+        # 1 probe (402) + 2 paid-503 + 1 paid-200 == 4 total
+        assert len(calls) == 4
+        assert any(c.choices[0].delta.content == "paid-OK" for c in chunks)
+
+
+# ---------------------------------------------------------------------------
+# Fallback chain tests
+# ---------------------------------------------------------------------------
+
+class TestStreamingFallback:
+    """``fallback_models`` walks the chain only on retriable pre-stream
+    errors. Once a chunk is yielded, the upstream is committed."""
+
+    def test_falls_back_to_next_model_on_503(self, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+
+        calls: List[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            body = request.read()
+            import json as _json
+            payload = _json.loads(body)
+            if payload["model"] == "primary/bad":
+                return httpx.Response(503, json={"error": "down"})
+            # Fallback model succeeds.
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=_sse_events(["FALLBACK"]),
+            )
+
+        client = LLMClient(private_key=TEST_PRIVATE_KEY)
+        client._client = httpx.Client(transport=httpx.MockTransport(handler))
+
+        chunks = list(client.chat_completion_stream(
+            "primary/bad",
+            [{"role": "user", "content": "hi"}],
+            fallback_models=["fallback/good"],
+        ))
+
+        # 4 hits on primary (1 + 3 retries) all 503 → swap to fallback → 1 success
+        assert len(calls) >= 5
+        assert any(c.choices[0].delta.content == "FALLBACK" for c in chunks)
+
+    def test_no_fallback_after_first_chunk(self, monkeypatch):
+        """If the upstream successfully streams a few chunks then drops, we
+        must NOT fall back — partial output has already gone to the caller."""
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+
+        # Build SSE that's truncated (no [DONE]) so iter_lines simulates a
+        # mid-stream connection drop via httpx parsing exception.
+        truncated = (
+            'data: {"id":"x","object":"chat.completion.chunk","created":1,'
+            '"model":"primary/bad","choices":[{"index":0,"delta":{"role":"assistant"},'
+            '"finish_reason":null}]}\n\n'
+            'data: {"id":"x","object":"chat.completion.chunk","created":1,'
+            '"model":"primary/bad","choices":[{"index":0,"delta":{"content":"par"},'
+            '"finish_reason":null}]}\n\n'
+        ).encode()
+
+        calls: List[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=truncated,
+            )
+
+        client = LLMClient(private_key=TEST_PRIVATE_KEY)
+        client._client = httpx.Client(transport=httpx.MockTransport(handler))
+
+        # Even with a fallback configured, the partial stream completes
+        # naturally — no exception, no fallback. The fallback handler should
+        # NEVER be invoked because we got valid chunks before the stream
+        # ended.
+        chunks = list(client.chat_completion_stream(
+            "primary/bad",
+            [{"role": "user", "content": "hi"}],
+            fallback_models=["fallback/good"],
+        ))
+        # Exactly one upstream call: no fallback because partial chunks were
+        # already yielded.
+        assert len(calls) == 1
+        contents = [c.choices[0].delta.content for c in chunks if c.choices[0].delta.content]
+        assert "par" in contents
+
+    def test_non_retriable_error_does_not_fall_back(self, monkeypatch):
+        """4xx (other than 402) must NOT trigger fallback — those are
+        permanent client errors, not transient upstream issues."""
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+
+        calls: List[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(400, json={"error": "bad request"})
+
+        client = LLMClient(private_key=TEST_PRIVATE_KEY)
+        client._client = httpx.Client(transport=httpx.MockTransport(handler))
+
+        from blockrun_llm.types import APIError
+
+        with pytest.raises(APIError):
+            list(client.chat_completion_stream(
+                "primary/bad",
+                [{"role": "user", "content": "hi"}],
+                fallback_models=["fallback/good"],
+            ))
+        # Single attempt; no retries (400 isn't 5xx), no fallback (400 isn't retriable).
+        assert len(calls) == 1
