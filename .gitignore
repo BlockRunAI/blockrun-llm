@@ -54,3 +54,13 @@ htmlcov/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Local Claude Code config (machine-specific allowlists)
+.claude/settings.local.json
+
+# Sweep / test-run artifacts
+sweep-*.json
+sweep-*.log
+
+# Ruff cache
+.ruff_cache/

@@ -55,6 +55,15 @@ Repository = "https://github.com/BlockRunAI/blockrun-llm"
 [tool.hatch.build.targets.wheel]
 packages = ["blockrun_llm"]
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "sweep-*.json",
+  "sweep-*.log",
+  ".claude/",
+  ".ruff_cache/",
+  "*.png",
+]
+
 [tool.black]
 line-length = 100
 target-version = ["py39"]
