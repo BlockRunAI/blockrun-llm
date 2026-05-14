@@ -90,6 +90,93 @@ def _get_user_agent() -> str:
     return f"blockrun-python/{__version__}"
 
 
+def _resolve_rpc_config(
+    rpc_url: Optional[str],
+    rpc_headers: Optional[Dict[str, str]],
+) -> Tuple[str, Optional[Dict[str, str]]]:
+    """Resolve the effective RPC URL + headers from explicit args, env vars,
+    or defaults — in that priority order.
+
+    Env vars (since 0.23.0):
+      * ``SOLANA_RPC_URL`` — full RPC URL (e.g. Helius / Tatum / QuickNode).
+      * ``SOLANA_RPC_API_KEY`` — convenience shortcut for the common
+        ``x-api-key: <value>`` header style (Tatum, some QuickNode setups).
+      * ``SOLANA_RPC_HEADERS`` — JSON dict for arbitrary headers
+        (e.g. ``'{"x-api-key":"...", "x-rate-limit-tier":"pro"}'``).
+
+    Helius style (key embedded in URL) needs ``SOLANA_RPC_URL`` only.
+    Tatum style (header auth) needs ``SOLANA_RPC_URL`` + one of
+    ``SOLANA_RPC_API_KEY`` / ``SOLANA_RPC_HEADERS``.
+    """
+    import json as _json
+
+    resolved_url = rpc_url or os.environ.get("SOLANA_RPC_URL") or "https://api.mainnet-beta.solana.com"
+
+    resolved_headers: Optional[Dict[str, str]] = None
+    if rpc_headers is not None:
+        resolved_headers = dict(rpc_headers)
+    else:
+        env_headers_json = os.environ.get("SOLANA_RPC_HEADERS")
+        env_api_key = os.environ.get("SOLANA_RPC_API_KEY")
+        if env_headers_json:
+            try:
+                parsed = _json.loads(env_headers_json)
+                if isinstance(parsed, dict):
+                    resolved_headers = {str(k): str(v) for k, v in parsed.items()}
+            except Exception:
+                pass
+        elif env_api_key:
+            resolved_headers = {"x-api-key": env_api_key}
+
+    return resolved_url, resolved_headers
+
+
+def _register_svm_with_headers(
+    x402_client: Any,
+    signer: Any,
+    rpc_url: str,
+    rpc_headers: Optional[Dict[str, str]],
+) -> None:
+    """Register the SVM exact scheme on an x402 client, with optional
+    extra HTTP headers for the underlying Solana RPC.
+
+    The x402 SDK's :func:`register_exact_svm_client` doesn't pass headers
+    through to ``solana.rpc.api.Client``, so when the user picks a gateway
+    that authenticates by header (Tatum, some Triton setups) we need a
+    pre-populated client cache. This function wires that up.
+
+    If ``rpc_headers`` is ``None`` we delegate to the upstream helper so
+    behavior is unchanged for users on Helius-URL-style auth.
+    """
+    if not rpc_headers:
+        register_exact_svm_client(x402_client, signer, rpc_url=rpc_url)
+        return
+
+    # Header-auth path — pre-build SolanaClients with extra_headers and
+    # populate the scheme's _clients cache so it never falls back to the
+    # header-less default.
+    from solana.rpc.api import Client as SolanaClient
+    from x402.mechanisms.svm.exact.client import ExactSvmScheme
+    from x402.mechanisms.svm.exact.v1.client import ExactSvmSchemeV1
+    from x402.mechanisms.svm.exact.register import V1_NETWORKS
+
+    pre_client = SolanaClient(rpc_url, extra_headers=rpc_headers)
+
+    def _populated(scheme):
+        # Hit several common network keys so the lazy _get_client never
+        # constructs a header-less SolanaClient.
+        for net in ("solana", "solana:mainnet", "solana-mainnet", "solana:devnet"):
+            scheme._clients[net] = pre_client
+        return scheme
+
+    v2 = _populated(ExactSvmScheme(signer, rpc_url))
+    v1 = _populated(ExactSvmSchemeV1(signer, rpc_url))
+
+    x402_client.register("solana:*", v2)
+    for network in V1_NETWORKS:
+        x402_client.register_v1(network, v1)
+
+
 def _should_fallback_solana(exc: Exception) -> bool:
     """Whether an exception during Solana streaming is retriable enough to
     warrant trying the next ``fallback_models`` entry. Matches the Base
@@ -121,9 +208,23 @@ class SolanaLLMClient:
         self,
         private_key: Optional[str] = None,
         api_url: str = SOLANA_API_URL,
-        rpc_url: str = "https://api.mainnet-beta.solana.com",
+        rpc_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
+        rpc_headers: Optional[Dict[str, str]] = None,
     ) -> None:
+        """Initialise the Solana client.
+
+        ``rpc_url`` / ``rpc_headers`` fall back to the env vars
+        ``SOLANA_RPC_URL`` / ``SOLANA_RPC_HEADERS`` / ``SOLANA_RPC_API_KEY``
+        when not passed explicitly (see :func:`_resolve_rpc_config`).
+        Default is the public mainnet-beta RPC if nothing is configured —
+        fine for low QPS, will 429 under burst load (~10-40 RPS).
+
+        For production traffic point this at Helius / Tatum / QuickNode /
+        Triton. Tatum uses header-auth (``x-api-key``), which the upstream
+        x402 SDK doesn't pass through — we handle it here via
+        :func:`_register_svm_with_headers`.
+        """
         if not _HAS_X402:
             raise ImportError(
                 "Solana payment requires the x402 SDK. "
@@ -137,7 +238,12 @@ class SolanaLLMClient:
         self._private_key = key
         validate_api_url(api_url)
         self._api_url = api_url.rstrip("/")
-        self._rpc_url = rpc_url
+
+        # Resolve effective RPC URL + headers (explicit args > env vars > default).
+        resolved_url, resolved_headers = _resolve_rpc_config(rpc_url, rpc_headers)
+        self._rpc_url = resolved_url
+        self._rpc_headers = resolved_headers
+
         self._timeout = timeout
         self._client = httpx.Client(timeout=timeout)
         self._session_total_usd = 0.0
@@ -145,10 +251,10 @@ class SolanaLLMClient:
         self._last_call_cost: float = 0.0
         self._address: Optional[str] = None
 
-        # Initialize x402 SDK client for Solana payment signing
+        # Initialize x402 SDK client for Solana payment signing.
         self._x402_client = x402ClientSync()
         signer = _create_signer(self._private_key)
-        register_exact_svm_client(self._x402_client, signer, rpc_url=rpc_url)
+        _register_svm_with_headers(self._x402_client, signer, resolved_url, resolved_headers)
 
     def get_wallet_address(self) -> str:
         if not self._address:
@@ -1173,9 +1279,13 @@ class AsyncSolanaLLMClient:
         self,
         private_key: Optional[str] = None,
         api_url: str = SOLANA_API_URL,
-        rpc_url: str = "https://api.mainnet-beta.solana.com",
+        rpc_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
+        rpc_headers: Optional[Dict[str, str]] = None,
     ) -> None:
+        """Async mirror of :class:`SolanaLLMClient.__init__`. Same env-var
+        fallback for ``rpc_url`` / ``rpc_headers`` — see
+        :func:`_resolve_rpc_config`."""
         if not _HAS_X402:
             raise ImportError(
                 "Solana payment requires the x402 SDK. "
@@ -1189,7 +1299,11 @@ class AsyncSolanaLLMClient:
         self._private_key = key
         validate_api_url(api_url)
         self._api_url = api_url.rstrip("/")
-        self._rpc_url = rpc_url
+
+        resolved_url, resolved_headers = _resolve_rpc_config(rpc_url, rpc_headers)
+        self._rpc_url = resolved_url
+        self._rpc_headers = resolved_headers
+
         self._timeout = timeout
         self._client = httpx.AsyncClient(timeout=timeout)
         self._session_total_usd = 0.0
@@ -1202,7 +1316,7 @@ class AsyncSolanaLLMClient:
 
         self._x402_client = x402Client()
         signer = _create_signer(self._private_key)
-        register_exact_svm_client(self._x402_client, signer, rpc_url=rpc_url)
+        _register_svm_with_headers(self._x402_client, signer, resolved_url, resolved_headers)
 
     # ------------------------------------------------------------------
     # Lifecycle
