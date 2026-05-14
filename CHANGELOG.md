@@ -2,6 +2,76 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.23.0 — 2026-05-14
+
+### New
+- **Custom Solana RPC support via env vars** — Solana clients
+  (`SolanaLLMClient` + `AsyncSolanaLLMClient`) now resolve their RPC
+  endpoint from explicit args, then these env vars, then the public
+  default:
+  - ``SOLANA_RPC_URL`` — the JSON-RPC endpoint URL. Use this when
+    your provider embeds auth in the URL (Helius style:
+    ``https://mainnet.helius-rpc.com/?api-key=...``).
+  - ``SOLANA_RPC_API_KEY`` — convenience shortcut for the common
+    ``x-api-key: <value>`` header style (Tatum, some Triton tiers).
+    Internally becomes ``SOLANA_RPC_HEADERS='{"x-api-key":"..."}'``.
+  - ``SOLANA_RPC_HEADERS`` — JSON dict for arbitrary header auth
+    (``'{"x-api-key":"...","x-rate-tier":"pro"}'``).
+
+  This unblocks production traffic — the public
+  ``api.mainnet-beta.solana.com`` rate-limits aggressively
+  (~10-40 RPS) and a partner deploying behind a free-tier Helius
+  key was seeing failures at 30-100 concurrent requests.
+
+  Previously the only way to switch RPCs was to edit
+  ``_adapter.py`` source; that change is lost on every upgrade.
+  Env vars make this idempotent across releases.
+
+- **Header-auth Solana gateways (Tatum, header-only Triton) now
+  work** — the upstream x402 SDK's
+  ``register_exact_svm_client`` only takes ``rpc_url``, not custom
+  headers, so the underlying ``solana.rpc.api.Client`` was always
+  built without ``extra_headers``. We now pre-populate the SVM
+  scheme's client cache with a properly-configured ``SolanaClient``
+  before any payment payload is constructed.
+
+### Configuration example
+
+For Tatum (header-auth):
+```bash
+export SOLANA_RPC_URL=https://solana-mainnet.gateway.tatum.io
+export SOLANA_RPC_API_KEY=t-...
+```
+
+For Helius (URL-embedded auth):
+```bash
+export SOLANA_RPC_URL='https://mainnet.helius-rpc.com/?api-key=...'
+```
+
+For arbitrary header schemes:
+```bash
+export SOLANA_RPC_URL=https://your.gateway/...
+export SOLANA_RPC_HEADERS='{"x-api-key":"...","x-rate-tier":"pro"}'
+```
+
+### Verified e2e
+- Live test against ``solana-mainnet.gateway.tatum.io`` with
+  ``x-api-key`` header — the signing pipeline (blockhash fetch +
+  TransferChecked tx construction + signature) completed
+  end-to-end through Tatum and submitted the payment to BlockRun's
+  gateway. (Final on-chain settlement failed for an unrelated
+  reason: the test wallet was empty.)
+
+### Notes for partners hitting RPC rate limits
+- Helius free tier is 10 RPS — adequate for low QPS, not for
+  bursty 50-100 concurrent. Move to Helius Developer ($99/mo,
+  25 RPS) or Tatum (200 RPS).
+- A separate ``0.24.0`` will add client-side blockhash caching so
+  ~10 RPS of paid traffic resolves to <1 RPS of upstream RPC calls
+  — at that point Helius free becomes viable for most production
+  loads. Tracked separately because the change touches the x402
+  scheme cache more invasively.
+
 ## 0.22.1 — 2026-05-12
 
 ### Fixed
