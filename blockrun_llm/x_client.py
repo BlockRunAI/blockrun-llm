@@ -37,6 +37,7 @@ Usage:
 from __future__ import annotations
 
 import os
+import warnings
 from typing import Optional, Dict, Any, List, Union, Literal
 import httpx
 from eth_account import Account
@@ -74,6 +75,13 @@ class XClient:
     """
     BlockRun X/Twitter Client.
 
+    .. deprecated::
+        BlockRun's ``/v1/x/*`` (AttentionVC-partnered) integration was
+        removed from the backend on 2026-04-30 (commit 80dcf52). All
+        ``XClient`` calls will return HTTP 404 until a replacement upstream
+        is wired up. The class is kept in the SDK so existing imports do
+        not break; instantiation emits a ``DeprecationWarning``.
+
     Every method issues a POST, hits the x402 gate, signs the payment, and
     returns the parsed response. Errors raise :class:`APIError` or
     :class:`PaymentError`.
@@ -88,6 +96,13 @@ class XClient:
         api_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
     ):
+        warnings.warn(
+            "BlockRun's /v1/x/* (AttentionVC) integration was removed "
+            "2026-04-30. All XClient calls will return HTTP 404 until a "
+            "replacement X data upstream is reintroduced.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         from .wallet import load_wallet
 
         key = (

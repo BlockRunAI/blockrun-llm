@@ -90,6 +90,9 @@ def _get_user_agent() -> str:
     return f"blockrun-python/{__version__}"
 
 
+DEFAULT_SOLANA_RPC_URL = "https://sol.blockrun.ai/api/v1/solana/rpc"
+
+
 def _resolve_rpc_config(
     rpc_url: Optional[str],
     rpc_headers: Optional[Dict[str, str]],
@@ -97,12 +100,27 @@ def _resolve_rpc_config(
     """Resolve the effective RPC URL + headers from explicit args, env vars,
     or defaults — in that priority order.
 
+    Since 0.24.0 the default is ``https://sol.blockrun.ai/api/v1/solana/rpc``
+    — BlockRun's own multi-region Tatum-backed proxy. Free for anyone
+    using the BlockRun SDK; the cost is bundled into LLM inference fees
+    you already pay. Method-aware caching on the server side
+    (``getLatestBlockhash`` at 30s TTL) collapses bursty signing traffic
+    to a handful of upstream RPC calls, so partners no longer need to
+    register Helius / Tatum / QuickNode for typical loads. The public
+    ``api.mainnet-beta.solana.com`` is still reachable via explicit
+    config but is no longer the default — too aggressive a rate limit
+    for any real concurrency.
+
     Env vars (since 0.23.0):
-      * ``SOLANA_RPC_URL`` — full RPC URL (e.g. Helius / Tatum / QuickNode).
+      * ``SOLANA_RPC_URL`` — full RPC URL. Override to point at your
+        own Helius / Tatum / QuickNode account, or to bypass the
+        BlockRun proxy entirely.
       * ``SOLANA_RPC_API_KEY`` — convenience shortcut for the common
-        ``x-api-key: <value>`` header style (Tatum, some QuickNode setups).
+        ``x-api-key: <value>`` header style (Tatum, some QuickNode
+        setups). Not needed when using the BlockRun default (the
+        proxy handles its own upstream auth server-side).
       * ``SOLANA_RPC_HEADERS`` — JSON dict for arbitrary headers
-        (e.g. ``'{"x-api-key":"...", "x-rate-limit-tier":"pro"}'``).
+        (``'{"x-api-key":"...", "x-rate-limit-tier":"pro"}'``).
 
     Helius style (key embedded in URL) needs ``SOLANA_RPC_URL`` only.
     Tatum style (header auth) needs ``SOLANA_RPC_URL`` + one of
@@ -110,7 +128,7 @@ def _resolve_rpc_config(
     """
     import json as _json
 
-    resolved_url = rpc_url or os.environ.get("SOLANA_RPC_URL") or "https://api.mainnet-beta.solana.com"
+    resolved_url = rpc_url or os.environ.get("SOLANA_RPC_URL") or DEFAULT_SOLANA_RPC_URL
 
     resolved_headers: Optional[Dict[str, str]] = None
     if rpc_headers is not None:
