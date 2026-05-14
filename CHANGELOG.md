@@ -2,6 +2,39 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.24.0 — 2026-05-14
+
+### Changed
+- **Default Solana RPC is now BlockRun's proxy** —
+  `SolanaLLMClient` / `AsyncSolanaLLMClient` resolve their RPC
+  endpoint to ``https://sol.blockrun.ai/api/v1/solana/rpc`` when no
+  ``SOLANA_RPC_URL`` env var or explicit ``rpc_url`` arg is set.
+  This is BlockRun's own multi-region, Tatum-backed Solana JSON-RPC
+  proxy. It is free for anyone using the SDK — the cost is bundled
+  into LLM inference fees you already pay. Method-aware caching on
+  the server (``getLatestBlockhash`` at 30s TTL) collapses bursty
+  signing traffic to a handful of upstream RPC calls, so partners
+  no longer need to register Helius / Tatum / QuickNode for typical
+  loads.
+
+  The previous default ``https://api.mainnet-beta.solana.com`` is
+  still reachable via ``SOLANA_RPC_URL=...`` but is no longer the
+  default — its public rate limit (~10-40 RPS) is too aggressive
+  for any real concurrency.
+
+  No code change required to opt in: upgrade and you're using it.
+  To stay on a private Helius / Tatum / QuickNode RPC, set
+  ``SOLANA_RPC_URL`` (the 0.23.0 env-var mechanism is unchanged).
+
+### Deprecated
+- **`XClient` (BlockRun `/v1/x/*` AttentionVC integration)** — the
+  backend ``/v1/x/*`` endpoints were removed on 2026-04-30. All
+  ``XClient`` method calls now return HTTP 404 until a replacement
+  X/Twitter data upstream is reintroduced. The class is kept in the
+  SDK so existing imports do not break; instantiation now emits a
+  ``DeprecationWarning`` so callers can migrate cleanly when a
+  replacement ships.
+
 ## 0.23.0 — 2026-05-14
 
 ### New
