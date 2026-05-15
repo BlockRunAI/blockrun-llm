@@ -292,8 +292,10 @@ class LLMClient:
         self.timeout = timeout
         self.search_timeout = search_timeout
 
-        # HTTP client (default timeout, will be overridden for search requests)
-        self._client = httpx.Client(timeout=timeout)
+        self._client = httpx.Client(
+            timeout=timeout,
+            limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
+        )
 
         # Session spending tracking
         self._session_total_usd: float = 0.0
@@ -2232,7 +2234,15 @@ class AsyncLLMClient:
 
         self.timeout = timeout
         self.search_timeout = search_timeout
-        self._client = httpx.AsyncClient(timeout=timeout)
+        # Default httpx pool (max_connections=100) is exhausted by ~50 concurrent
+        # paid requests because each request uses two HTTP connections: Phase 1
+        # (402 probe) + Phase 2 (authenticated SSE stream).  Raise the limit so
+        # high-concurrency deployments don't hit pool exhaustion before hitting
+        # any upstream rate limit.
+        self._client = httpx.AsyncClient(
+            timeout=timeout,
+            limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
+        )
         self._last_call_cost: float = 0.0
 
     async def chat(
