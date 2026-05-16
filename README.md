@@ -349,6 +349,35 @@ result = client.generate(
 )
 ```
 
+## Voice Calls (`VoiceClient`)
+
+`VoiceClient` wraps `POST /v1/voice/call` (paid, $0.54/call) and
+`GET /v1/voice/call/{call_id}` (free polling) — AI-powered outbound phone
+calls powered by Bland.ai. The agent dials the recipient and runs a real-time
+conversation based on your `task` instructions. US + Canada destinations.
+
+```python
+from blockrun_llm import VoiceClient
+
+client = VoiceClient()
+
+# Initiate (paid $0.54)
+result = client.call(
+    to="+14155552671",
+    task="You are a friendly assistant calling to confirm a 3pm dentist appointment.",
+    voice="maya",          # nat / josh / maya / june / paige / derek / florian
+    max_duration=5,        # minutes (1–30)
+)
+print(result["call_id"])
+
+# Poll for transcript + recording (free)
+status = client.get_status(result["call_id"])
+print(status.get("status"), status.get("recording_url"))
+```
+
+Bring your own caller-ID: pass `from_="+14155552671"` (must be a BlockRun
+phone number you own; buy via `/v1/phone/numbers/buy`).
+
 ## Standalone Search (`SearchClient`)
 
 `SearchClient` wraps `POST /v1/search` — standalone Grok Live Search with

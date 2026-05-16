@@ -54,6 +54,7 @@ from .solana_client import AsyncSolanaLLMClient, SolanaLLMClient
 from .image import ImageClient
 from .music import MusicClient
 from .video import VideoClient
+from .voice import VoiceClient
 from .search import SearchClient
 from .x_client import XClient
 from .price import PriceClient
@@ -149,7 +150,7 @@ from .cache import (
     get_cost_log_summary,
 )
 
-__version__ = "0.24.1"
+__version__ = "0.25.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -168,6 +169,7 @@ __all__ = [
     "ImageClient",
     "MusicClient",
     "VideoClient",
+    "VoiceClient",
     "SearchClient",
     "XClient",
     "PriceClient",
