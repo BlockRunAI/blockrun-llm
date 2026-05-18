@@ -68,6 +68,10 @@ class VoiceClient:
     conducts a real-time conversation following your 'task' description.
 
     Pricing: $0.54 per call. Status polling is free.
+
+    Caller-ID requirements: every call needs a `from` number your wallet owns.
+    Provision one with PhoneClient.buy_number() before placing calls; if your
+    wallet owns exactly one active number, the backend auto-picks it.
     """
 
     DEFAULT_API_URL = "https://blockrun.ai/api"
@@ -137,8 +141,15 @@ class VoiceClient:
             task: Natural-language instructions for the AI agent
                 (10-4000 chars). Describe what the call should accomplish.
             from_: Your provisioned BlockRun phone number (E.164). Shown as caller ID.
-                Must be owned by your wallet (buy via /v1/phone/numbers/buy).
+                Must be owned by your wallet — buy one via PhoneClient.buy_number()
+                or POST /v1/phone/numbers/buy ($5 / 30-day lease).
                 Use the trailing-underscore form because 'from' is a Python keyword.
+
+                If omitted:
+                - wallet owns exactly 1 active number → that number is used automatically
+                - wallet owns 0  → APIError(403) "no_active_number" (buy one first)
+                - wallet owns 2+ → APIError(400) "ambiguous_from" (pass `from_` explicitly;
+                  the error body lists your_active_numbers so the agent can pick)
             voice: One of VOICE_PRESETS (nat, josh, maya, june, paige, derek, florian)
                 or any custom Bland.ai voice ID.
             max_duration: Maximum call length in minutes (1-30, default 5).
