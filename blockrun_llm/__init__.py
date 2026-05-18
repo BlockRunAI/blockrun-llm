@@ -55,6 +55,8 @@ from .image import ImageClient
 from .music import MusicClient
 from .video import VideoClient
 from .voice import VoiceClient
+from .phone import PhoneClient
+from .surf import SurfClient
 from .search import SearchClient
 from .x_client import XClient
 from .price import PriceClient
@@ -150,7 +152,7 @@ from .cache import (
     get_cost_log_summary,
 )
 
-__version__ = "0.25.0"
+__version__ = "0.26.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -170,6 +172,8 @@ __all__ = [
     "MusicClient",
     "VideoClient",
     "VoiceClient",
+    "PhoneClient",
+    "SurfClient",
     "SearchClient",
     "XClient",
     "PriceClient",

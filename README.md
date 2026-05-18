@@ -376,7 +376,66 @@ print(status.get("status"), status.get("recording_url"))
 ```
 
 Bring your own caller-ID: pass `from_="+14155552671"` (must be a BlockRun
-phone number you own; buy via `/v1/phone/numbers/buy`).
+phone number you own; buy via `PhoneClient.buy_number()` or
+`/v1/phone/numbers/buy`). If you omit `from_` and your wallet owns exactly one
+active number, the backend auto-picks it; with multiple active numbers you'll
+get a `400 ambiguous_from` and the error body lists your candidates.
+
+## Phone Numbers (`PhoneClient`)
+
+`PhoneClient` wraps `/v1/phone/*` — Twilio-backed phone lookup and
+wallet-bound number provisioning. Buy a number once to use it as caller ID in
+`VoiceClient`; the number is leased for 30 days and tied to your wallet.
+
+```python
+from blockrun_llm import PhoneClient
+
+client = PhoneClient()
+
+# Carrier + line-type lookup ($0.01)
+info = client.lookup("+14155552671")
+
+# Carrier + SIM-swap/forwarding fraud signals ($0.05)
+fraud = client.lookup_fraud("+14155552671")
+
+# Buy a number — 30-day lease, wallet-bound ($5.00).
+# Payment is held until Twilio confirms the purchase, so failed buys never charge you.
+bought = client.buy_number(country="US", area_code="415")
+print(bought["phone_number"], bought["expires_at"])
+
+# List, renew, release
+print(client.list_numbers())                    # $0.001
+client.renew_number(bought["phone_number"])     # $5.00, +30 days
+client.release_number(bought["phone_number"])   # free
+```
+
+## Surf — Crypto Intelligence (`SurfClient`)
+
+`SurfClient` wraps `/v1/surf/*` — the asksurf.ai partner gateway, ~83 crypto
+endpoints across exchanges, on-chain SQL, prediction markets (Polymarket +
+Kalshi), wallets, social analytics, and project intelligence. Tiered pricing:
+$0.001 / $0.005 / $0.020 per call (tier 1 / 2 / 3).
+
+```python
+from blockrun_llm import SurfClient
+
+client = SurfClient()
+
+# Discovery
+print(SurfClient.endpoints())                       # full catalog
+print(client.price("market/ranking"))               # 0.001
+print(client.endpoint_info("onchain/sql"))          # {'method': 'POST', 'tier': 3, ...}
+
+# GET — pass query params (validated against the catalog)
+btc_price = client.get("exchange/price", {"pair": "BTC/USDT"})
+holders   = client.get("token/holders", {"address": "0x...", "chain": "ethereum"})
+
+# POST — JSON body
+rows = client.post("onchain/sql", {"query": "SELECT count() FROM ethereum.blocks"})
+
+# Generic helper — auto-routes GET vs POST from the catalog
+result = client.call("token/holders", params={"address": "0x...", "chain": "ethereum"})
+```
 
 ## Standalone Search (`SearchClient`)
 

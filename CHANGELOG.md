@@ -2,6 +2,42 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.26.0 — 2026-05-18
+
+### Added
+- **`PhoneClient` — Twilio-backed phone lookup + number provisioning via x402.**
+  New module `blockrun_llm/phone.py` wraps the backend's `/v1/phone/*` partner
+  endpoints. Methods:
+  - `lookup(phone_number)` — carrier + line-type ($0.01)
+  - `lookup_fraud(phone_number)` — adds SIM-swap / call-forwarding signals ($0.05)
+  - `buy_number(country="US", area_code=None)` — provision a US/CA number with a
+    30-day lease bound to your wallet ($5.00). Settlement is held until Twilio
+    confirms the purchase, so failed buys never charge your wallet.
+  - `renew_number(phone_number)` — extend by 30 days ($5.00)
+  - `list_numbers()` — list your active numbers ($0.001)
+  - `release_number(phone_number)` — return a number to the pool (free, still
+    flows through x402 for wallet-identity verification)
+  Use the provisioned number as the `from_` caller ID in `VoiceClient.call()`.
+
+- **`SurfClient` — asksurf.ai crypto-data gateway via x402.** New module
+  `blockrun_llm/surf.py` wraps `/v1/surf/*` and exposes ~83 endpoints covering
+  exchange data, on-chain SQL, prediction markets (Polymarket + Kalshi),
+  wallet/social analytics, and project intelligence. Tiered pricing matches
+  the backend: tier 1 / 2 / 3 → $0.001 / $0.005 / $0.020. API:
+  - `SurfClient.endpoints()` — full discovery catalog
+  - `SurfClient.endpoint_info(path)` / `SurfClient.price(path)` — single-endpoint metadata
+  - `client.get(path, params)` / `client.post(path, body)` — direct callers
+  - `client.call(path, params=…, body=…)` — auto-routes GET vs POST from the catalog
+  Required-param validation runs client-side before the network round trip.
+
+### Changed
+- **`VoiceClient.call()` docs reflect new `from` resolution** on the backend:
+  if `from_` is omitted and your wallet owns exactly one active number, the
+  backend auto-picks it; 0 owned → 403 `no_active_number`; 2+ owned → 400
+  `ambiguous_from` with the candidate list in the error body. No code change
+  was needed — the SDK already forwarded `from_` correctly — but the docstring
+  was stale.
+
 ## 0.25.0 — 2026-05-16
 
 ### Added
