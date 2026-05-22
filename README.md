@@ -879,6 +879,80 @@ The cost log is per-machine. It records calls made by this Python SDK only —
 calls from other clients (TS SDK, MCP, raw curl) are not included. For
 organization-wide billing, query the gateway's authoritative ledger.
 
+## Transaction Log (project-local, on-chain match)
+
+The cost log above lives in `~/.blockrun/` and is hash-keyed JSON. When you'd
+rather have an **eyeballable text log next to your code** that matches the
+chain row-for-row, opt into the per-transaction log:
+
+```python
+from blockrun_llm import LLMClient
+
+# Default: writes ./log/transactions.log
+client = LLMClient(transaction_log=True)
+
+# Or pick a path
+client = LLMClient(transaction_log="./var/blockrun.log")
+
+# Or via env var: BLOCKRUN_TX_LOG=1   (default dir)
+#                  BLOCKRUN_TX_LOG=./var/blockrun.log
+```
+
+Works the same on `AsyncLLMClient`, `SolanaLLMClient`, and `AsyncSolanaLLMClient`.
+
+Every paid call appends one row. Example:
+
+```
+2026-05-21 15:44:46  chat  anthropic/claude-sonnet-4.6    in=    3  out=4  $0.034137  0x6513d128…
+2026-05-20 04:34:17  chat  openai/gpt-5.5                 in=   14  out=18 $0.001000  0x421796a3…
+```
+
+Columns: timestamp · endpoint tag (`chat`/`image`/`video`/`search`/…) · model
+(padded to 30) · `in=` prompt tokens · `out=` completion tokens · `$cost` to
+6 decimals · first 10 chars of the **on-chain settlement hash**.
+
+### Why it matches the chain
+
+The hash comes from the `X-PAYMENT-RESPONSE` header the x402 facilitator
+returns after settlement — Base txs use `transaction`, Solana uses
+`signature`. Both normalise to the truncated `0x…` / signature shown in
+the row, so each line is verifiable in one click:
+
+- Base mainnet → `https://basescan.org/tx/<full hash>`
+- Solana mainnet → `https://solscan.io/tx/<full signature>`
+
+Cached / free responses don't hit the chain, so they show `(no-tx)` instead.
+
+### Scope and trade-offs
+
+- **Independent of the cache layer.** Enabling the log does not change
+  `~/.blockrun/cache/`, `~/.blockrun/data/`, or `~/.blockrun/cost_log.jsonl`.
+- **Best-effort writes.** OSErrors are swallowed; a read-only filesystem can't
+  break a paid call.
+- **Plain text only.** If you need a structured ledger as well, query
+  `~/.blockrun/cost_log.jsonl` via `blockrun_llm.billing`.
+
+### Programmatic access
+
+```python
+from blockrun_llm import TransactionLogger, format_row
+
+# Tail the project log
+logger = TransactionLogger("./log")
+for row in logger.entries()[-5:]:
+    print(row)
+
+# Build your own row (e.g. for tests or custom adapters)
+print(format_row(
+    endpoint="/v1/chat/completions",
+    model="openai/gpt-5.5",
+    in_tokens=14,
+    out_tokens=18,
+    cost_usd=0.001,
+    tx_hash="0x421796a3deadbeef",
+))
+```
+
 ## Environment Variables
 
 | Variable | Description | Required |
