@@ -2,6 +2,34 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.27.0 — 2026-05-22
+
+### Added
+- **Opt-in per-transaction log to a project-local folder.** Pass
+  `transaction_log=True` to `LLMClient`, `AsyncLLMClient`, `SolanaLLMClient`,
+  or `AsyncSolanaLLMClient` (or set `BLOCKRUN_TX_LOG=1`) and every paid call
+  appends one plain-text row to `./log/transactions.log`:
+
+  ```
+  2026-05-21 15:44:46  chat  anthropic/claude-sonnet-4.6    in=    3  out=4  $0.034137  0x6513d128…
+  ```
+
+  Columns: timestamp, endpoint tag, model (left-padded 30), prompt/completion
+  tokens, USD cost (6 decimals), and the first 10 chars of the on-chain
+  settlement hash (Base tx hash or Solana signature). The hash is decoded
+  from the `X-PAYMENT-RESPONSE` header the facilitator returns after
+  settlement, so each row is verifiable against BaseScan / Solscan with one
+  click — the row matches what hit the ledger.
+
+  Pass a string/Path instead of `True` to choose a different directory.
+  Disabled by default; no impact on the existing `~/.blockrun/cache`,
+  `~/.blockrun/data/`, or `~/.blockrun/cost_log.jsonl` layers — this lives
+  in its own folder next to your code.
+
+- **`TransactionLogger`, `decode_settlement_header`, `format_row`** are
+  exported from the package root for callers who want to build their own
+  reconciliation tooling on top of the same primitives.
+
 ## 0.26.0 — 2026-05-18
 
 ### Added

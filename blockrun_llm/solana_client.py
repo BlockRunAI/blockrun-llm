@@ -48,6 +48,7 @@ from .types import (
     XCompareAuthorsResponse,
 )
 from .solana_wallet import get_solana_public_key
+from .tx_log import TransactionLogger, decode_settlement_header, _resolve_log_dir
 from .validation import validate_api_url, sanitize_error_response
 
 try:
@@ -229,6 +230,7 @@ class SolanaLLMClient:
         rpc_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         rpc_headers: Optional[Dict[str, str]] = None,
+        transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
     ) -> None:
         """Initialise the Solana client.
 
@@ -242,6 +244,11 @@ class SolanaLLMClient:
         Triton. Tatum uses header-auth (``x-api-key``), which the upstream
         x402 SDK doesn't pass through — we handle it here via
         :func:`_register_svm_with_headers`.
+
+        ``transaction_log`` mirrors :class:`LLMClient` — opt-in per-call
+        log written to a project folder (default ``./log/``) containing
+        the request, response, USD cost, and the on-chain settlement
+        signature returned by the facilitator.
         """
         if not _HAS_X402:
             raise ImportError(
@@ -269,10 +276,30 @@ class SolanaLLMClient:
         self._last_call_cost: float = 0.0
         self._address: Optional[str] = None
 
+        log_dir = _resolve_log_dir(transaction_log)
+        self._tx_logger: Optional[TransactionLogger] = (
+            TransactionLogger(log_dir) if log_dir is not None else None
+        )
+        self._last_settlement: Optional[Dict[str, Any]] = None
+
         # Initialize x402 SDK client for Solana payment signing.
         self._x402_client = x402ClientSync()
         signer = _create_signer(self._private_key)
         _register_svm_with_headers(self._x402_client, signer, resolved_url, resolved_headers)
+
+    def _capture_settlement(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
+        """Decode the x402 settlement header on a Solana paid response.
+
+        Solana facilitators put the on-chain transaction signature in the
+        same ``X-PAYMENT-RESPONSE`` header EVM does — different chain id,
+        same wire format. ``None`` when no header is returned.
+        """
+        header = response.headers.get("x-payment-response") or response.headers.get(
+            "X-PAYMENT-RESPONSE"
+        )
+        settlement = decode_settlement_header(header)
+        self._last_settlement = settlement
+        return settlement
 
     def get_wallet_address(self) -> str:
         if not self._address:
@@ -298,6 +325,38 @@ class SolanaLLMClient:
             "network": "solana-mainnet" if self.is_solana() else "solana-other",
             "client_kind": type(self).__name__,
         }
+
+    def _log_transaction(
+        self,
+        endpoint: str,
+        body: Dict[str, Any],
+        response: Any,
+        cost_usd: float,
+    ) -> None:
+        """Append one row to the project-local transaction log when the
+        sync Solana client is constructed with ``transaction_log=…``.
+
+        Consumes ``self._last_settlement`` so the on-chain Solana signature
+        captured from the paid retry is written exactly once per call."""
+        logger = self._tx_logger
+        if logger is None:
+            return
+        settlement = self._last_settlement
+        self._last_settlement = None
+        try:
+            logger.log(
+                endpoint=endpoint,
+                request=body,
+                response=response,
+                cost_usd=cost_usd,
+                model=(body.get("model") if isinstance(body, dict) else None),
+                wallet=self.get_wallet_address(),
+                network="solana-mainnet" if self.is_solana() else "solana-other",
+                client_kind=type(self).__name__,
+                settlement=settlement,
+            )
+        except Exception:
+            pass
 
     def chat(
         self,
@@ -520,13 +579,12 @@ class SolanaLLMClient:
                         self._session_calls += 1
                         self._session_total_usd += cost_usd
                         self._last_call_cost = cost_usd
+                        self._capture_settlement(resp2)
                     yield from self._iter_and_archive(resp2, body, cost_usd)
                     return
                 resp2.read()
                 if resp2.status_code == 402:
-                    raise PaymentError(
-                        "Payment rejected. Check your Solana USDC balance."
-                    )
+                    raise PaymentError("Payment rejected. Check your Solana USDC balance.")
                 if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
                     import time
 
@@ -600,6 +658,7 @@ class SolanaLLMClient:
                 )
             except Exception:
                 pass
+            self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
 
     @staticmethod
     def _iter_sse_chunks(response: httpx.Response) -> Iterator[ChatCompletionChunk]:
@@ -735,6 +794,7 @@ class SolanaLLMClient:
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
+        self._capture_settlement(retry_response)
 
         # Save full response locally
         response_data = retry_response.json()
@@ -747,6 +807,7 @@ class SolanaLLMClient:
             cost_usd=cost_usd,
             **self._billing_meta(),
         )
+        self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
 
         return ChatResponse(**response_data)
 
@@ -780,6 +841,7 @@ class SolanaLLMClient:
                 cost_usd=self._last_call_cost,
                 **self._billing_meta(),
             )
+            self._log_transaction(endpoint, body, result, self._last_call_cost)
             return result
 
         if not response.is_success:
@@ -840,6 +902,7 @@ class SolanaLLMClient:
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
+        self._capture_settlement(retry_response)
 
         return retry_response.json()
 
@@ -874,6 +937,7 @@ class SolanaLLMClient:
                 cost_usd=self._last_call_cost,
                 **self._billing_meta(),
             )
+            self._log_transaction(endpoint, cache_key_body, result, self._last_call_cost)
             return result
 
         if not response.is_success:
@@ -931,6 +995,7 @@ class SolanaLLMClient:
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
+        self._capture_settlement(retry_response)
 
         return retry_response.json()
 
@@ -1300,10 +1365,12 @@ class AsyncSolanaLLMClient:
         rpc_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
         rpc_headers: Optional[Dict[str, str]] = None,
+        transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
     ) -> None:
         """Async mirror of :class:`SolanaLLMClient.__init__`. Same env-var
         fallback for ``rpc_url`` / ``rpc_headers`` — see
-        :func:`_resolve_rpc_config`."""
+        :func:`_resolve_rpc_config`. ``transaction_log`` works the same way
+        — opt-in per-call log to a project folder (default ``./log/``)."""
         if not _HAS_X402:
             raise ImportError(
                 "Solana payment requires the x402 SDK. "
@@ -1329,12 +1396,55 @@ class AsyncSolanaLLMClient:
         self._last_call_cost: float = 0.0
         self._address: Optional[str] = None
 
+        log_dir = _resolve_log_dir(transaction_log)
+        self._tx_logger: Optional[TransactionLogger] = (
+            TransactionLogger(log_dir) if log_dir is not None else None
+        )
+        self._last_settlement: Optional[Dict[str, Any]] = None
+
         # Async x402 client + same SVM signer the sync class uses.
         from x402 import x402Client  # local import to keep optional dep clean
 
         self._x402_client = x402Client()
         signer = _create_signer(self._private_key)
         _register_svm_with_headers(self._x402_client, signer, resolved_url, resolved_headers)
+
+    def _capture_settlement(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
+        """Async-Solana twin of :meth:`SolanaLLMClient._capture_settlement`."""
+        header = response.headers.get("x-payment-response") or response.headers.get(
+            "X-PAYMENT-RESPONSE"
+        )
+        settlement = decode_settlement_header(header)
+        self._last_settlement = settlement
+        return settlement
+
+    def _log_transaction(
+        self,
+        endpoint: str,
+        body: Dict[str, Any],
+        response: Any,
+        cost_usd: float,
+    ) -> None:
+        """Async-Solana twin of :meth:`SolanaLLMClient._log_transaction`."""
+        logger = self._tx_logger
+        if logger is None:
+            return
+        settlement = self._last_settlement
+        self._last_settlement = None
+        try:
+            logger.log(
+                endpoint=endpoint,
+                request=body,
+                response=response,
+                cost_usd=cost_usd,
+                model=(body.get("model") if isinstance(body, dict) else None),
+                wallet=self.get_wallet_address(),
+                network="solana-mainnet" if self.is_solana() else "solana-other",
+                client_kind=type(self).__name__,
+                settlement=settlement,
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -1542,14 +1652,13 @@ class AsyncSolanaLLMClient:
                         self._session_calls += 1
                         self._session_total_usd += cost_usd
                         self._last_call_cost = cost_usd
+                        self._capture_settlement(resp2)
                     async for chunk in self._aiter_and_archive(resp2, body, cost_usd):
                         yield chunk
                     return
                 await resp2.aread()
                 if resp2.status_code == 402:
-                    raise PaymentError(
-                        "Payment rejected. Check your Solana USDC balance."
-                    )
+                    raise PaymentError("Payment rejected. Check your Solana USDC balance.")
                 if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
                     import asyncio
 
@@ -1635,6 +1744,7 @@ class AsyncSolanaLLMClient:
                 )
             except Exception:
                 pass
+            self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
 
     # ------------------------------------------------------------------
     # Payment + transport helpers
@@ -1717,6 +1827,7 @@ class AsyncSolanaLLMClient:
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
+        self._capture_settlement(retry_response)
 
         response_data = retry_response.json()
         from .cache import save_to_cache
@@ -1728,6 +1839,7 @@ class AsyncSolanaLLMClient:
             cost_usd=cost_usd,
             **self._billing_meta(),
         )
+        self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
         return ChatResponse(**response_data)
 
 

@@ -151,8 +151,9 @@ from .cache import (
     export_cost_log_json,
     get_cost_log_summary,
 )
+from .tx_log import TransactionLogger, decode_settlement_header, format_row
 
-__version__ = "0.26.0"
+__version__ = "0.27.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -259,4 +260,8 @@ __all__ = [
     "get_cost_log_summary",
     "export_cost_log_csv",
     "export_cost_log_json",
+    # Per-transaction log (opt-in, project-local ./log/)
+    "TransactionLogger",
+    "decode_settlement_header",
+    "format_row",
 ]

@@ -72,6 +72,7 @@ from .types import (
     XCompareAuthorsResponse,
 )
 from .router import route as route_request
+from .tx_log import TransactionLogger, decode_settlement_header, _resolve_log_dir
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
 from .validation import (
     validate_private_key,
@@ -234,6 +235,7 @@ class LLMClient:
         api_url: Optional[str] = None,
         timeout: float = 120.0,
         search_timeout: float = 300.0,
+        transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
     ):
         """
         Initialize the BlockRun LLM client.
@@ -246,6 +248,13 @@ class LLMClient:
             search_timeout: Timeout for xAI Live Search requests (default: 300 = 5 minutes).
                            Live Search can be slow as it searches X, web, and news sources.
                            Auto-detected when search_parameters or search=True is passed.
+            transaction_log: Opt-in per-call log written to a project folder.
+                           ``True`` → ``./log/``; pass a string/Path for a custom dir;
+                           ``None`` (default) honors the ``BLOCKRUN_TX_LOG`` env var
+                           (set to ``1`` or a path). Each paid call appends one row to
+                           ``transactions.jsonl`` (model, input, output, cost_usd,
+                           tx_hash, on-chain amount, payer, payee, network) and
+                           writes a pretty-printed JSON file next to it.
 
         Raises:
             ValueError: If no wallet is configured. For agent use, call setup_agent_wallet() first.
@@ -304,6 +313,31 @@ class LLMClient:
 
         # Model pricing cache for smart routing
         self._model_pricing_cache: Optional[Dict[str, Dict[str, float]]] = None
+
+        # Opt-in transaction log + last on-chain settlement payload. The
+        # settlement is populated from X-PAYMENT-RESPONSE on every paid retry
+        # and cleared right before save_to_cache fires so it can't bleed
+        # across calls when logging is disabled.
+        log_dir = _resolve_log_dir(transaction_log)
+        self._tx_logger: Optional[TransactionLogger] = (
+            TransactionLogger(log_dir) if log_dir is not None else None
+        )
+        self._last_settlement: Optional[Dict[str, Any]] = None
+
+    def _capture_settlement(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
+        """Decode the x402 settlement header on a successful paid response.
+
+        Returns the decoded settlement dict (also stashed on
+        ``self._last_settlement``) so callers can pass it straight into
+        ``save_to_cache``. ``None`` when the facilitator didn't include a
+        settlement header — older facilitators / cached free responses.
+        """
+        header = response.headers.get("x-payment-response") or response.headers.get(
+            "X-PAYMENT-RESPONSE"
+        )
+        settlement = decode_settlement_header(header)
+        self._last_settlement = settlement
+        return settlement
 
     def _get_model_pricing(self) -> Dict[str, Dict[str, float]]:
         """
@@ -786,9 +820,8 @@ class LLMClient:
                         self._session_calls += 1
                         self._session_total_usd += cost_usd
                         self._last_call_cost = cost_usd
-                    yield from self._iter_and_archive(
-                        resp2, body, cost_usd, streaming=True
-                    )
+                        self._capture_settlement(resp2)
+                    yield from self._iter_and_archive(resp2, body, cost_usd, streaming=True)
                     return
                 resp2.read()
                 if resp2.status_code == 402:
@@ -870,6 +903,7 @@ class LLMClient:
             except Exception:
                 # Logging never breaks the call.
                 pass
+            self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
 
     @staticmethod
     def _iter_sse_chunks(response: httpx.Response) -> Iterator[ChatCompletionChunk]:
@@ -1129,6 +1163,7 @@ class LLMClient:
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
+        self._capture_settlement(retry_response)
 
         # Save full response locally (cost log + response archive)
         from .cache import save_to_cache
@@ -1140,6 +1175,7 @@ class LLMClient:
             cost_usd=cost_usd,
             **self._billing_meta(),
         )
+        self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
 
         return chat_response
 
@@ -1180,6 +1216,7 @@ class LLMClient:
                 cost_usd=self._last_call_cost,
                 **self._billing_meta(),
             )
+            self._log_transaction(endpoint, body, result, self._last_call_cost)
             return result
 
         if response.status_code != 200:
@@ -1279,6 +1316,7 @@ class LLMClient:
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
+        self._capture_settlement(retry_response)
 
         return retry_response.json()
 
@@ -1318,6 +1356,7 @@ class LLMClient:
                 cost_usd=self._last_call_cost,
                 **self._billing_meta(),
             )
+            self._log_transaction(endpoint, cache_key_body, result, self._last_call_cost)
             return result
 
         if response.status_code != 200:
@@ -1415,6 +1454,7 @@ class LLMClient:
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
+        self._capture_settlement(retry_response)
 
         return retry_response.json()
 
@@ -2093,6 +2133,40 @@ class LLMClient:
             "client_kind": type(self).__name__,
         }
 
+    def _log_transaction(
+        self,
+        endpoint: str,
+        body: Dict[str, Any],
+        response: Any,
+        cost_usd: float,
+    ) -> None:
+        """Append one row to the project-local transaction log, if enabled.
+
+        Pulls the on-chain settlement out of ``self._last_settlement``
+        (captured from ``X-PAYMENT-RESPONSE`` on the paid retry) and
+        consumes it — so a subsequent free / cached call right after a
+        paid one cannot reuse stale tx fields. No-op when the logger is
+        disabled; never raises (best-effort logging by design)."""
+        logger = self._tx_logger
+        if logger is None:
+            return
+        settlement = self._last_settlement
+        self._last_settlement = None
+        try:
+            logger.log(
+                endpoint=endpoint,
+                request=body,
+                response=response,
+                cost_usd=cost_usd,
+                model=(body.get("model") if isinstance(body, dict) else None),
+                wallet=self.account.address,
+                network=_detect_network(self.api_url),
+                client_kind=type(self).__name__,
+                settlement=settlement,
+            )
+        except Exception:
+            pass
+
     def get_balance(self) -> float:
         """
         Get USDC balance on Base network.
@@ -2188,6 +2262,7 @@ class AsyncLLMClient:
         api_url: Optional[str] = None,
         timeout: float = 120.0,
         search_timeout: float = 300.0,
+        transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
     ):
         """
         Initialize the async BlockRun LLM client.
@@ -2198,6 +2273,10 @@ class AsyncLLMClient:
             timeout: Request timeout in seconds (default: 120). Used for regular chat requests.
             search_timeout: Timeout for xAI Live Search requests (default: 300 = 5 minutes).
                            Auto-detected when search_parameters or search=True is passed.
+            transaction_log: Same opt-in per-call log as ``LLMClient``. ``True`` →
+                           ``./log/``; pass a string/Path for a custom dir; ``None``
+                           honors the ``BLOCKRUN_TX_LOG`` env var. See ``LLMClient``
+                           for the full record schema.
 
         Raises:
             ValueError: If no wallet is configured
@@ -2244,6 +2323,21 @@ class AsyncLLMClient:
             limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
         )
         self._last_call_cost: float = 0.0
+
+        log_dir = _resolve_log_dir(transaction_log)
+        self._tx_logger: Optional[TransactionLogger] = (
+            TransactionLogger(log_dir) if log_dir is not None else None
+        )
+        self._last_settlement: Optional[Dict[str, Any]] = None
+
+    def _capture_settlement(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
+        """Async-client twin of :meth:`LLMClient._capture_settlement`."""
+        header = response.headers.get("x-payment-response") or response.headers.get(
+            "X-PAYMENT-RESPONSE"
+        )
+        settlement = decode_settlement_header(header)
+        self._last_settlement = settlement
+        return settlement
 
     async def chat(
         self,
@@ -2474,6 +2568,7 @@ class AsyncLLMClient:
                     # chat_completion convention).
                     if cost_usd > 0:
                         self._last_call_cost = cost_usd
+                        self._capture_settlement(resp2)
                     async for chunk in self._aiter_and_archive(
                         resp2, body, cost_usd, streaming=True
                     ):
@@ -2555,6 +2650,7 @@ class AsyncLLMClient:
                 )
             except Exception:
                 pass
+            self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
 
     @staticmethod
     async def _aiter_sse_chunks(response: httpx.Response) -> AsyncIterator[ChatCompletionChunk]:
@@ -2706,6 +2802,7 @@ class AsyncLLMClient:
             else float(details.get("amount", 0)) / 1e6
         )
         self._last_call_cost = cost_usd
+        self._capture_settlement(retry_response)
 
         response_data = retry_response.json()
         from .cache import save_to_cache
@@ -2717,6 +2814,7 @@ class AsyncLLMClient:
             cost_usd=cost_usd,
             **self._billing_meta(),
         )
+        self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
 
         return ChatResponse(**response_data)
 
@@ -2752,6 +2850,7 @@ class AsyncLLMClient:
                 cost_usd=self._last_call_cost,
                 **self._billing_meta(),
             )
+            self._log_transaction(endpoint, body, result, self._last_call_cost)
             return result
 
         if response.status_code != 200:
@@ -2842,6 +2941,7 @@ class AsyncLLMClient:
 
         cost_usd = float(details.get("amount", 0)) / 1e6
         self._last_call_cost = cost_usd
+        self._capture_settlement(retry_response)
 
         return retry_response.json()
 
@@ -2876,6 +2976,7 @@ class AsyncLLMClient:
                 cost_usd=self._last_call_cost,
                 **self._billing_meta(),
             )
+            self._log_transaction(endpoint, cache_key_body, result, self._last_call_cost)
             return result
 
         if response.status_code != 200:
@@ -2964,6 +3065,7 @@ class AsyncLLMClient:
 
         cost_usd = float(details.get("amount", 0)) / 1e6
         self._last_call_cost = cost_usd
+        self._capture_settlement(retry_response)
 
         return retry_response.json()
 
@@ -3293,6 +3395,34 @@ class AsyncLLMClient:
             "network": _detect_network(self.api_url),
             "client_kind": type(self).__name__,
         }
+
+    def _log_transaction(
+        self,
+        endpoint: str,
+        body: Dict[str, Any],
+        response: Any,
+        cost_usd: float,
+    ) -> None:
+        """Async-client twin of :meth:`LLMClient._log_transaction`."""
+        logger = self._tx_logger
+        if logger is None:
+            return
+        settlement = self._last_settlement
+        self._last_settlement = None
+        try:
+            logger.log(
+                endpoint=endpoint,
+                request=body,
+                response=response,
+                cost_usd=cost_usd,
+                model=(body.get("model") if isinstance(body, dict) else None),
+                wallet=self.account.address,
+                network=_detect_network(self.api_url),
+                client_kind=type(self).__name__,
+                settlement=settlement,
+            )
+        except Exception:
+            pass
 
     async def get_balance(self) -> float:
         """
