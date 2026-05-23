@@ -2,6 +2,42 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.28.1 — 2026-05-23
+
+### Added
+- **`PortraitClient` — Virtual Portrait enrollment via x402.** Wraps
+  `POST /v1/portrait/enroll` ($0.50 USDC, one-time, no KYC) and the
+  free `GET /v1/wallet/<address>/portraits` listing endpoint. Enroll an
+  AI character image, get back a `ta_xxxxxxxx` asset id, then reuse it
+  as `real_face_asset_id` on `VideoClient.generate()` for Seedance 2.0 /
+  2.0-fast to keep the same character across multiple videos. Settlement
+  is held until upstream registration succeeds, so failed enrollments
+  (content filter, image too large) return 502 with no charge.
+
+  ```python
+  from blockrun_llm import PortraitClient
+  p = PortraitClient().enroll(
+      name="My Spokesperson",
+      image_url="https://example.com/character.jpg",
+  )
+  print(p.asset_id)              # ta_abcdef1234567890
+  print(p.settlement.tx_hash)    # 0x9f3a…
+  ```
+
+- **`PortraitEnrollment`, `PortraitUsage`, `PortraitSettlement`,
+  `PortraitList`, `PortraitListItem`** exported from the package root.
+
+### Changed
+- **`VideoClient` Seedance docs realigned with the dropped RealFace
+  path.** Following the upstream decision to drop real-person video
+  entirely (KYC conflicts with BlockRun's wallet-only stance), the
+  `VideoClient` class docstring, the `real_face_asset_id` parameter
+  docstring, the validator error message, and the README example now
+  describe `real_face_asset_id` exclusively as a Virtual Portrait
+  (`POST /v1/portrait/enroll`, $0.50, no KYC) and explicitly note that
+  real-person likeness is not supported. No behavior change — the wire
+  format (the `ta_` id) is unchanged.
+
 ## 0.28.0 — 2026-05-22
 
 ### Added

@@ -54,6 +54,7 @@ from .solana_client import AsyncSolanaLLMClient, SolanaLLMClient
 from .image import ImageClient
 from .music import MusicClient
 from .video import VideoClient
+from .portrait import PortraitClient
 from .voice import VoiceClient
 from .phone import PhoneClient
 from .surf import SurfClient
@@ -80,6 +81,12 @@ from .types import (
     VideoResponse,
     VideoClip,
     VideoModel,
+    # Virtual Portrait types
+    PortraitEnrollment,
+    PortraitUsage,
+    PortraitSettlement,
+    PortraitList,
+    PortraitListItem,
     # Live Search types
     SearchParameters,
     WebSearchSource,
@@ -153,7 +160,7 @@ from .cache import (
 )
 from .tx_log import TransactionLogger, decode_settlement_header, format_row
 
-__version__ = "0.28.0"
+__version__ = "0.28.1"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -172,6 +179,7 @@ __all__ = [
     "ImageClient",
     "MusicClient",
     "VideoClient",
+    "PortraitClient",
     "VoiceClient",
     "PhoneClient",
     "SurfClient",
@@ -195,6 +203,11 @@ __all__ = [
     "VideoResponse",
     "VideoClip",
     "VideoModel",
+    "PortraitEnrollment",
+    "PortraitUsage",
+    "PortraitSettlement",
+    "PortraitList",
+    "PortraitListItem",
     # Live Search types
     "SearchParameters",
     "WebSearchSource",

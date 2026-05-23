@@ -58,11 +58,13 @@ class VideoClient:
       bytedance/seedance-2.0-fast  $11.20/M text or $6.60/M image  (~$1.19 / $0.70 / 5s)
       bytedance/seedance-2.0       $14.00/M text or $8.60/M image  (~$1.49 / $0.91 / 5s)
 
-    Seedance 2.0 fast/pro additionally accept `real_face_asset_id`
-    (Virtual Portrait or Token360 RealFace, prefixed `ta_`) — mutually
-    exclusive with `image_url`. Resolution and generate_audio can be
-    overridden per call. Returned URLs are permanent (mirrored to
-    BlockRun storage).
+    Seedance 2.0 fast/pro additionally accept `real_face_asset_id` —
+    a Virtual Portrait asset (`ta_xxxxxx`) enrolled via
+    `POST /v1/portrait/enroll` ($0.50 USDC, no KYC) for AI-character
+    consistency across multiple videos. Mutually exclusive with
+    `image_url`. Real-person likeness is not supported. Resolution and
+    generate_audio can be overridden per call. Returned URLs are
+    permanent (mirrored to BlockRun storage).
     """
 
     DEFAULT_API_URL = "https://blockrun.ai/api"
@@ -139,9 +141,11 @@ class VideoClient:
             prompt: Text description of the video.
             model: Model ID (default: xai/grok-imagine-video).
             image_url: Optional seed image URL for image-to-video.
-            real_face_asset_id: Token360 face-reference asset ID
-                (`ta_xxxxxx`) — Virtual Portrait or RealFace. Seedance 2.0
-                fast/pro only. Mutually exclusive with `image_url`.
+            real_face_asset_id: Virtual Portrait asset ID
+                (`ta_xxxxxx`) for AI-character consistency. Enroll via
+                `POST /v1/portrait/enroll` ($0.50 USDC, no KYC).
+                Seedance 2.0 fast/pro only. Mutually exclusive with
+                `image_url`. Real-person likeness is not supported.
             duration_seconds: Billed duration (defaults to model's default).
             resolution: Output resolution — `360p` / `480p` / `720p` /
                 `1080p` / `4K`. Seedance defaults to `720p`; Grok ignores.
@@ -168,7 +172,8 @@ class VideoClient:
         if real_face_asset_id is not None and not real_face_asset_id.startswith("ta_"):
             raise ValueError(
                 "real_face_asset_id must start with 'ta_' "
-                "(Token360 asset id, e.g. 'ta_abc123xyz')"
+                "(Virtual Portrait asset id, e.g. 'ta_abc123xyz' — "
+                "enroll via POST /v1/portrait/enroll)"
             )
 
         body: Dict[str, Any] = {

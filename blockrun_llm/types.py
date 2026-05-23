@@ -704,3 +704,70 @@ class SymbolListResponse(BaseModel):
 
     class Config:
         extra = "allow"
+
+
+# Virtual Portrait enrollment types
+
+
+class PortraitUsage(BaseModel):
+    """How the enrolled portrait can be used."""
+
+    compatible_models: List[str] = []
+    how_to_use: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
+class PortraitSettlement(BaseModel):
+    """On-chain settlement of the enrollment payment."""
+
+    success: bool
+    tx_hash: Optional[str] = None
+    network: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
+class PortraitEnrollment(BaseModel):
+    """Response from POST /v1/portrait/enroll."""
+
+    object: str = "virtual_portrait"
+    asset_id: str  # ta_xxxxxxxx — pass as real_face_asset_id on Seedance
+    group_id: Optional[str] = None
+    name: str
+    image_url: str
+    created_at: Optional[str] = None
+    usage: Optional[PortraitUsage] = None
+    price: Optional[Dict[str, Any]] = None  # {amount, currency}
+    settlement: Optional[PortraitSettlement] = None
+
+    class Config:
+        extra = "allow"
+
+
+class PortraitListItem(BaseModel):
+    """One row in the wallet portrait list (GET /v1/wallet/<addr>/portraits)."""
+
+    # Upstream uses camelCase here, keep matching for transparent ingestion.
+    assetId: str
+    groupId: Optional[str] = None
+    name: Optional[str] = None
+    imageUrl: Optional[str] = None
+    createdAt: Optional[str] = None
+    enrollmentTxHash: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
+class PortraitList(BaseModel):
+    """Response from GET /v1/wallet/<address>/portraits."""
+
+    wallet: str
+    portraits: List[PortraitListItem] = []
+    count: Optional[int] = None
+
+    class Config:
+        extra = "allow"
