@@ -2,6 +2,29 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.28.0 — 2026-05-22
+
+### Added
+- **`VideoClient.generate()` — face-reference, resolution, and audio
+  controls** to align with the documented `/v1/videos/generations` schema:
+  - `real_face_asset_id="ta_xxxxxx"` — condition Seedance 2.0 fast/pro on
+    a Virtual Portrait or Token360 RealFace asset. Validates the `ta_`
+    prefix and is mutually exclusive with `image_url`.
+  - `resolution="360p" | "480p" | "720p" | "1080p" | "4K"` — drop to 480p
+    for ~half the per-clip Seedance cost; bump to 1080p / 4K for higher
+    fidelity. Grok ignores this field.
+  - `generate_audio=True/False` — override Seedance's default (audio on
+    for text-to-video, off for image- or face-conditioned). Grok ignores.
+
+### Changed
+- Refreshed Seedance pricing in the `VideoClient` docstring and README
+  to match the live per-M-token billing (token360 charges by tokens at
+  ~20,256 tok/sec at 720p), replacing the old per-second figures:
+  - `bytedance/seedance-1.5-pro` — $4.32/M (flat) ≈ $0.46 / 5s 720p
+  - `bytedance/seedance-2.0-fast` — $11.20/M text · $6.60/M image
+  - `bytedance/seedance-2.0`       — $14.00/M text · $8.60/M image
+  - `xai/grok-imagine-video` unchanged at $0.050/sec.
+
 ## 0.27.0 — 2026-05-22
 
 ### Added

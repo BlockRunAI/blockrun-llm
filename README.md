@@ -327,12 +327,18 @@ automatically.
 Image editing (`client.edit`): `openai/gpt-image-1` and `openai/gpt-image-2` both support the `/v1/images/image2image` endpoint.
 
 ### Video Generation
-| Model | Price |
-|-------|-------|
-| `xai/grok-imagine-video` | $0.05/sec (8s default → $0.42/clip) |
-| `bytedance/seedance-1.5-pro` | $0.03/sec (5s default, up to 10s, 720p) |
-| `bytedance/seedance-2.0-fast` | $0.15/sec (~60-80s gen, sweet-spot price/quality) |
-| `bytedance/seedance-2.0` | $0.30/sec (720p Pro) |
+| Model | Price | Default 5s 720p |
+|-------|-------|-----------------|
+| `xai/grok-imagine-video` | $0.050/sec | 8s ≈ $0.40 |
+| `bytedance/seedance-1.5-pro` | $4.32 / M tok (flat) | ≈ $0.46 |
+| `bytedance/seedance-2.0-fast` | $11.20 / M text · $6.60 / M image | ≈ $1.19 t2v / $0.70 i2v |
+| `bytedance/seedance-2.0` | $14.00 / M text · $8.60 / M image | ≈ $1.49 t2v / $0.91 i2v |
+
+Seedance is billed by token360 in tokens (~20,256 tok/sec at 720p). Drop
+`resolution="480p"` for ~half the cost, or bump to `1080p` / `4K`.
+Seedance defaults to `720p` with synced audio on text-to-video; image- or
+face-conditioned paths default audio off. Grok ignores `resolution` and
+`generate_audio`.
 
 ```python
 from blockrun_llm import VideoClient
@@ -346,6 +352,17 @@ print(result.data[0].duration_seconds)  # 8
 result = client.generate(
     "the subject turns its head and smiles",
     image_url="https://example.com/portrait.jpg",
+)
+
+# Face-reference video (Seedance 2.0 fast/pro). Enroll a Virtual Portrait
+# via POST /v1/portrait/enroll ($0.50 one-time, no KYC) or use a Token360
+# RealFace asset. Mutually exclusive with image_url.
+result = client.generate(
+    "the subject smiles warmly and waves at the camera",
+    model="bytedance/seedance-2.0",
+    real_face_asset_id="ta_abc123xyz",
+    resolution="1080p",
+    generate_audio=True,
 )
 ```
 
