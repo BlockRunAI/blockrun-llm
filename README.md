@@ -354,9 +354,10 @@ result = client.generate(
     image_url="https://example.com/portrait.jpg",
 )
 
-# Face-reference video (Seedance 2.0 fast/pro). Enroll a Virtual Portrait
-# via POST /v1/portrait/enroll ($0.50 one-time, no KYC) or use a Token360
-# RealFace asset. Mutually exclusive with image_url.
+# Character-consistency video (Seedance 2.0 fast/pro). Enroll a Virtual
+# Portrait via POST /v1/portrait/enroll ($0.50 one-time, no KYC) and
+# reuse the ta_xxxxxx id to keep the same AI character across clips.
+# Real-person likeness is not supported. Mutually exclusive with image_url.
 result = client.generate(
     "the subject smiles warmly and waves at the camera",
     model="bytedance/seedance-2.0",
@@ -365,6 +366,49 @@ result = client.generate(
     generate_audio=True,
 )
 ```
+
+## Virtual Portraits (`PortraitClient`)
+
+`PortraitClient` wraps `POST /v1/portrait/enroll` ($0.50 USDC, one-time,
+no KYC) and the free `GET /v1/wallet/<address>/portraits` listing endpoint.
+Enroll an AI-generated character image, get back a `ta_xxxxxxxx` asset id,
+then reuse it as `real_face_asset_id` on Seedance 2.0 / 2.0-fast to keep
+the same character across as many videos as you want.
+
+> Real-person likeness is **not supported** on BlockRun — the upstream
+> verification flow requires KYC, which conflicts with our wallet-only
+> stance. Virtual Portraits are designed for AI-generated personas,
+> mascots, avatars, and virtual spokespeople.
+
+```python
+from blockrun_llm import PortraitClient, VideoClient
+
+portraits = PortraitClient()
+portrait = portraits.enroll(
+    name="My Spokesperson",
+    image_url="https://example.com/character.jpg",
+)
+print(portrait.asset_id)              # ta_abcdef1234567890
+print(portrait.settlement.tx_hash)    # 0x9f3a… (BaseScan-verifiable)
+
+# Reuse the same ta_ id on any Seedance 2.0 / 2.0-fast call
+video = VideoClient()
+clip = video.generate(
+    "the character smiles warmly and waves at the camera",
+    model="bytedance/seedance-2.0-fast",
+    real_face_asset_id=portrait.asset_id,
+)
+print(clip.data[0].url)
+
+# Browse this wallet's enrolled portraits (free, rate-limited)
+listing = portraits.list_portraits()
+for p in listing.portraits:
+    print(p.assetId, p.name, p.enrollmentTxHash)
+```
+
+Settlement is held until the upstream registration succeeds — if the
+image fails the content filter or exceeds 10 MB, the route returns 502
+and **no payment is taken**, safe to retry with a different image.
 
 ## Voice Calls (`VoiceClient`)
 
