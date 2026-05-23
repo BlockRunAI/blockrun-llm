@@ -52,13 +52,17 @@ class VideoClient:
     Supports xAI Grok Imagine Video and ByteDance Seedance (1.5 Pro /
     2.0 Fast / 2.0 Pro) with automatic x402 micropayments on Base.
 
-    Pricing:
-      xai/grok-imagine-video       $0.05/sec, 8s default
-      bytedance/seedance-1.5-pro   $0.03/sec, 5s default (up to 10s)
-      bytedance/seedance-2.0-fast  $0.15/sec, 5s default (up to 10s)
-      bytedance/seedance-2.0       $0.30/sec, 5s default (up to 10s)
+    Pricing (approx. 5s 720p clip):
+      xai/grok-imagine-video       $0.050/sec  (8s default → ~$0.40)
+      bytedance/seedance-1.5-pro   $4.32/M tok flat   (~$0.46 / 5s)
+      bytedance/seedance-2.0-fast  $11.20/M text or $6.60/M image  (~$1.19 / $0.70 / 5s)
+      bytedance/seedance-2.0       $14.00/M text or $8.60/M image  (~$1.49 / $0.91 / 5s)
 
-    Returned URLs are permanent (mirrored to BlockRun storage).
+    Seedance 2.0 fast/pro additionally accept `real_face_asset_id`
+    (Virtual Portrait or Token360 RealFace, prefixed `ta_`) — mutually
+    exclusive with `image_url`. Resolution and generate_audio can be
+    overridden per call. Returned URLs are permanent (mirrored to
+    BlockRun storage).
     """
 
     DEFAULT_API_URL = "https://blockrun.ai/api"
@@ -118,11 +122,14 @@ class VideoClient:
         *,
         model: Optional[str] = None,
         image_url: Optional[str] = None,
+        real_face_asset_id: Optional[str] = None,
         duration_seconds: Optional[int] = None,
+        resolution: Optional[str] = None,
+        generate_audio: Optional[bool] = None,
         budget_seconds: Optional[float] = None,
     ) -> VideoResponse:
         """
-        Generate a video clip from a text prompt (or text + image).
+        Generate a video clip from a text prompt (or text + image / face asset).
 
         Submits an async job, then polls until the video is ready. Typical
         total wall-time is 60-180s. If upstream takes longer than the budget
@@ -132,7 +139,15 @@ class VideoClient:
             prompt: Text description of the video.
             model: Model ID (default: xai/grok-imagine-video).
             image_url: Optional seed image URL for image-to-video.
+            real_face_asset_id: Token360 face-reference asset ID
+                (`ta_xxxxxx`) — Virtual Portrait or RealFace. Seedance 2.0
+                fast/pro only. Mutually exclusive with `image_url`.
             duration_seconds: Billed duration (defaults to model's default).
+            resolution: Output resolution — `360p` / `480p` / `720p` /
+                `1080p` / `4K`. Seedance defaults to `720p`; Grok ignores.
+            generate_audio: Synced audio in the output. Seedance defaults
+                to `True` for text-to-video and `False` for image- or
+                face-conditioned generation. Grok ignores this field.
             budget_seconds: Overall polling budget (default 300s).
 
         Returns:
@@ -140,20 +155,40 @@ class VideoClient:
             and the settlement tx hash.
 
         Raises:
+            ValueError: If `image_url` and `real_face_asset_id` are both
+                set, or if `real_face_asset_id` is malformed.
             PaymentError: If wallet balance is insufficient.
             APIError: If upstream fails, the job times out, or any transport
                 error occurs.
         """
+        if image_url and real_face_asset_id:
+            raise ValueError(
+                "image_url and real_face_asset_id are mutually exclusive; pass at most one."
+            )
+        if real_face_asset_id is not None and not real_face_asset_id.startswith("ta_"):
+            raise ValueError(
+                "real_face_asset_id must start with 'ta_' "
+                "(Token360 asset id, e.g. 'ta_abc123xyz')"
+            )
+
         body: Dict[str, Any] = {
             "model": model or self.DEFAULT_MODEL,
             "prompt": prompt,
         }
         if image_url:
             body["image_url"] = image_url
+        if real_face_asset_id:
+            body["real_face_asset_id"] = real_face_asset_id
         if duration_seconds is not None:
             body["duration_seconds"] = duration_seconds
+        if resolution is not None:
+            body["resolution"] = resolution
+        if generate_audio is not None:
+            body["generate_audio"] = generate_audio
 
-        budget = budget_seconds if budget_seconds is not None else self.DEFAULT_GENERATE_BUDGET_SECONDS
+        budget = (
+            budget_seconds if budget_seconds is not None else self.DEFAULT_GENERATE_BUDGET_SECONDS
+        )
 
         return self._submit_and_poll(body, budget)
 
@@ -187,7 +222,9 @@ class VideoClient:
             resource_url=resource.get("url", submit_url),
             resource_description=resource.get("description", "BlockRun Video Generation"),
             # Ensure the signed authorization covers the entire polling window.
-            max_timeout_seconds=max(details.get("maxTimeoutSeconds", 0) or 0, self.MAX_TIMEOUT_SECONDS),
+            max_timeout_seconds=max(
+                details.get("maxTimeoutSeconds", 0) or 0, self.MAX_TIMEOUT_SECONDS
+            ),
             extra=details.get("extra"),
             extensions=extensions,
         )
