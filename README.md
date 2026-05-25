@@ -356,7 +356,7 @@ result = client.generate(
 
 # Character-consistency video (Seedance 2.0 fast/pro). Pass a ta_xxxxxx
 # asset to keep the same face across clips — either a Virtual Portrait
-# (AI character, PortraitClient, $0.50) or a RealFace (real person,
+# (AI character, PortraitClient, $0.01) or a RealFace (real person,
 # RealFaceClient, $0.01, no KYC). Mutually exclusive with image_url.
 result = client.generate(
     "the subject smiles warmly and waves at the camera",
@@ -369,7 +369,7 @@ result = client.generate(
 
 ## Virtual Portraits (`PortraitClient`)
 
-`PortraitClient` wraps `POST /v1/portrait/enroll` ($0.50 USDC, one-time,
+`PortraitClient` wraps `POST /v1/portrait/enroll` ($0.01 USDC, one-time,
 no KYC) and the free `GET /v1/wallet/<address>/portraits` listing endpoint.
 Enroll an AI-generated character image, get back a `ta_xxxxxxxx` asset id,
 then reuse it as `real_face_asset_id` on Seedance 2.0 / 2.0-fast to keep

@@ -62,7 +62,7 @@ class VideoClient:
     a `ta_xxxxxx` face/character asset for consistency across multiple
     videos. The asset can be either:
       - a Virtual Portrait (AI-generated character) enrolled via
-        `PortraitClient` / `POST /v1/portrait/enroll` ($0.50 USDC), or
+        `PortraitClient` / `POST /v1/portrait/enroll` ($0.01 USDC), or
       - a RealFace (a real person's likeness) enrolled via
         `RealFaceClient` / `POST /v1/realface/enroll` ($0.01 USDC, no
         KYC — just a brief on-phone liveness check).
@@ -148,7 +148,7 @@ class VideoClient:
             image_url: Optional seed image URL for image-to-video.
             real_face_asset_id: A `ta_xxxxxx` face/character asset for
                 identity consistency — either a Virtual Portrait (AI
-                character, via `PortraitClient`, $0.50) or a RealFace
+                character, via `PortraitClient`, $0.01) or a RealFace
                 (real person, via `RealFaceClient`, $0.01, no KYC).
                 Seedance 2.0 fast/pro only. Mutually exclusive with
                 `image_url`.
