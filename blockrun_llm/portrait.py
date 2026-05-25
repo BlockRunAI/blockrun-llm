@@ -2,7 +2,7 @@
 BlockRun Portrait Client — enroll Virtual Portraits via x402 micropayments.
 
 A Virtual Portrait is an AI-generated character image registered as a
-face/character reference asset. After enrollment ($0.50 USDC, one-time,
+face/character reference asset. After enrollment ($0.01 USDC, one-time,
 no KYC), you get back a `ta_xxxxxxxx` asset id that can be passed as
 `real_face_asset_id` to `VideoClient.generate()` on Seedance 2.0 or 2.0-fast
 to keep the same character across multiple videos.
@@ -71,7 +71,7 @@ class PortraitClient:
     """
     BlockRun Virtual Portrait Client.
 
-    Wraps `POST /v1/portrait/enroll` ($0.50 USDC, one-time) and the free
+    Wraps `POST /v1/portrait/enroll` ($0.01 USDC, one-time) and the free
     `GET /v1/wallet/<address>/portraits` listing endpoint.
 
     The enrollment endpoint settles AFTER the portrait is successfully
@@ -122,12 +122,12 @@ class PortraitClient:
         self._client = httpx.Client(timeout=timeout)
 
     # ------------------------------------------------------------------
-    # Enrollment ($0.50 USDC)
+    # Enrollment ($0.01 USDC)
     # ------------------------------------------------------------------
 
     def enroll(self, name: str, image_url: str) -> PortraitEnrollment:
         """
-        Enroll a Virtual Portrait. Costs $0.50 USDC on Base, one-time.
+        Enroll a Virtual Portrait. Costs $0.01 USDC on Base, one-time.
 
         Args:
             name: Display name (1-64 chars).
