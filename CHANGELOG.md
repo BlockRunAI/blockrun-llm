@@ -2,6 +2,52 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.29.0 — 2026-05-25
+
+### Added
+- **`RealFaceClient` — real-person face enrollment via x402.** RealFace
+  registers a *real person's* likeness (vs. `PortraitClient`, which is for
+  AI-generated characters). The asset works exactly like a Virtual Portrait
+  on Seedance 2.0 / 2.0-fast — both return a `ta_xxxxxxxx` id you pass as
+  `real_face_asset_id` on `VideoClient.generate()` — but enrollment proves
+  the rights-holder is the person in the photo via a brief on-phone liveness
+  check. **No KYC.** Three-step flow:
+  - `init(name)` — *free*, rate-limited. Returns a `group_id` + an `h5_link`
+    the real person scans on their phone.
+  - `status(group_id)` / `wait_for_active(group_id)` — *free*. Poll until the
+    person finishes the liveness check.
+  - `enroll(name, image_url, group_id)` — **$0.01 USDC**, one-time. Settles
+    only after the face matches the live capture, so `425` (group not active),
+    `422` (face mismatch), and `502` (upstream failure) return errors with no
+    charge.
+
+  Plus `list_realfaces()` over the free `GET /v1/wallet/<address>/realfaces`
+  endpoint.
+
+  ```python
+  from blockrun_llm import RealFaceClient
+  faces = RealFaceClient()
+  init = faces.init(name="Jane — spokesperson")  # show init.h5_link as a QR
+  faces.wait_for_active(init.group_id)           # they do the phone check
+  rf = faces.enroll(name="Jane — spokesperson",
+                    image_url="https://example.com/jane.jpg",
+                    group_id=init.group_id)
+  print(rf.asset_id)  # ta_… → pass as real_face_asset_id on Seedance 2.0
+  ```
+
+- **`RealFaceInit`, `RealFaceStatus`, `RealFaceEnrollment`, `RealFaceList`,
+  `RealFaceListItem`** exported from the package root.
+
+### Changed
+- **Reversed the v0.28.1 "real-person video is unsupported" stance.**
+  Real-person likeness is now supported through the no-KYC RealFace liveness
+  flow above (KYC is no longer required). The `VideoClient` class/parameter
+  docstrings, the `real_face_asset_id` validator message, and the README now
+  describe `real_face_asset_id` as accepting **either** a Virtual Portrait
+  (`PortraitClient`, $0.50) **or** a RealFace (`RealFaceClient`, $0.01). No
+  wire-format change — both still pass the same `ta_` id. `seedance-1.5-pro`
+  does not support either asset type.
+
 ## 0.28.1 — 2026-05-23
 
 ### Added

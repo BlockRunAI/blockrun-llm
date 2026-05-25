@@ -59,12 +59,17 @@ class VideoClient:
       bytedance/seedance-2.0       $14.00/M text or $8.60/M image  (~$1.49 / $0.91 / 5s)
 
     Seedance 2.0 fast/pro additionally accept `real_face_asset_id` —
-    a Virtual Portrait asset (`ta_xxxxxx`) enrolled via
-    `POST /v1/portrait/enroll` ($0.50 USDC, no KYC) for AI-character
-    consistency across multiple videos. Mutually exclusive with
-    `image_url`. Real-person likeness is not supported. Resolution and
-    generate_audio can be overridden per call. Returned URLs are
-    permanent (mirrored to BlockRun storage).
+    a `ta_xxxxxx` face/character asset for consistency across multiple
+    videos. The asset can be either:
+      - a Virtual Portrait (AI-generated character) enrolled via
+        `PortraitClient` / `POST /v1/portrait/enroll` ($0.50 USDC), or
+      - a RealFace (a real person's likeness) enrolled via
+        `RealFaceClient` / `POST /v1/realface/enroll` ($0.01 USDC, no
+        KYC — just a brief on-phone liveness check).
+    Both flows return the same `ta_` id. seedance-1.5-pro does NOT
+    support these assets. Mutually exclusive with `image_url`.
+    Resolution and generate_audio can be overridden per call. Returned
+    URLs are permanent (mirrored to BlockRun storage).
     """
 
     DEFAULT_API_URL = "https://blockrun.ai/api"
@@ -141,11 +146,12 @@ class VideoClient:
             prompt: Text description of the video.
             model: Model ID (default: xai/grok-imagine-video).
             image_url: Optional seed image URL for image-to-video.
-            real_face_asset_id: Virtual Portrait asset ID
-                (`ta_xxxxxx`) for AI-character consistency. Enroll via
-                `POST /v1/portrait/enroll` ($0.50 USDC, no KYC).
+            real_face_asset_id: A `ta_xxxxxx` face/character asset for
+                identity consistency — either a Virtual Portrait (AI
+                character, via `PortraitClient`, $0.50) or a RealFace
+                (real person, via `RealFaceClient`, $0.01, no KYC).
                 Seedance 2.0 fast/pro only. Mutually exclusive with
-                `image_url`. Real-person likeness is not supported.
+                `image_url`.
             duration_seconds: Billed duration (defaults to model's default).
             resolution: Output resolution — `360p` / `480p` / `720p` /
                 `1080p` / `4K`. Seedance defaults to `720p`; Grok ignores.
@@ -172,8 +178,9 @@ class VideoClient:
         if real_face_asset_id is not None and not real_face_asset_id.startswith("ta_"):
             raise ValueError(
                 "real_face_asset_id must start with 'ta_' "
-                "(Virtual Portrait asset id, e.g. 'ta_abc123xyz' — "
-                "enroll via POST /v1/portrait/enroll)"
+                "(a Virtual Portrait or RealFace asset id, e.g. 'ta_abc123xyz' — "
+                "enroll via PortraitClient / POST /v1/portrait/enroll or "
+                "RealFaceClient / POST /v1/realface/enroll)"
             )
 
         body: Dict[str, Any] = {

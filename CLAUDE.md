@@ -30,6 +30,8 @@ blockrun_llm/
 ├── image.py                 # Image generation (+ image-to-image)
 ├── music.py                 # Music generation
 ├── video.py                 # Video generation
+├── portrait.py              # Virtual Portrait enrollment (AI characters)
+├── realface.py              # RealFace enrollment (real-person likeness)
 ├── search.py                # Standalone Grok Live Search
 ├── x_client.py              # X/Twitter (AttentionVC) endpoints
 ├── price.py                 # Pyth market data (crypto/fx/commodity/stocks)

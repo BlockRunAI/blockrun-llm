@@ -354,10 +354,10 @@ result = client.generate(
     image_url="https://example.com/portrait.jpg",
 )
 
-# Character-consistency video (Seedance 2.0 fast/pro). Enroll a Virtual
-# Portrait via POST /v1/portrait/enroll ($0.50 one-time, no KYC) and
-# reuse the ta_xxxxxx id to keep the same AI character across clips.
-# Real-person likeness is not supported. Mutually exclusive with image_url.
+# Character-consistency video (Seedance 2.0 fast/pro). Pass a ta_xxxxxx
+# asset to keep the same face across clips — either a Virtual Portrait
+# (AI character, PortraitClient, $0.50) or a RealFace (real person,
+# RealFaceClient, $0.01, no KYC). Mutually exclusive with image_url.
 result = client.generate(
     "the subject smiles warmly and waves at the camera",
     model="bytedance/seedance-2.0",
@@ -375,10 +375,13 @@ Enroll an AI-generated character image, get back a `ta_xxxxxxxx` asset id,
 then reuse it as `real_face_asset_id` on Seedance 2.0 / 2.0-fast to keep
 the same character across as many videos as you want.
 
-> Real-person likeness is **not supported** on BlockRun — the upstream
-> verification flow requires KYC, which conflicts with our wallet-only
-> stance. Virtual Portraits are designed for AI-generated personas,
-> mascots, avatars, and virtual spokespeople.
+> Need a **real person's** likeness instead? Use
+> [`RealFaceClient`](#real-person-faces-realfaceclient) below — it
+> enrolls a real face for **$0.01** via a quick on-phone liveness check,
+> **no KYC**. Virtual Portraits are for AI-generated personas, mascots,
+> avatars, and virtual spokespeople; RealFace is for real people. Both
+> return a `ta_xxxxxx` id usable as `real_face_asset_id` on Seedance
+> 2.0 / 2.0-fast.
 
 ```python
 from blockrun_llm import PortraitClient, VideoClient
@@ -409,6 +412,68 @@ for p in listing.portraits:
 Settlement is held until the upstream registration succeeds — if the
 image fails the content filter or exceeds 10 MB, the route returns 502
 and **no payment is taken**, safe to retry with a different image.
+
+## Real-Person Faces (`RealFaceClient`)
+
+`RealFaceClient` enrolls a **real person's** likeness so you can keep the
+same human face across multiple Seedance 2.0 / 2.0-fast videos. Unlike a
+Virtual Portrait (an AI-generated character), RealFace proves the enroller
+is the person in the photo via a brief **on-phone liveness check** (nod +
+blink, ~1 minute) — **no KYC**, no government ID, no account login.
+
+Enrollment is a three-step flow:
+
+1. **`init(name)`** — *free*. Returns a `group_id` and an `h5_link` the
+   real person opens on their phone (render it as a QR code).
+2. **phone liveness** — the rights-holder opens the link, allows camera
+   access, nods + blinks (~60s). Nothing is sent to BlockRun in this step.
+3. **`enroll(name, image_url, group_id)`** — **$0.01 USDC**, one-time.
+   Uploads the face photo, matches it against the live capture, and
+   returns a `ta_xxxxxxxx` asset id.
+
+```python
+from blockrun_llm import RealFaceClient, VideoClient
+
+faces = RealFaceClient()
+
+# 1. Start enrollment (free). Show init.h5_link as a QR for the person.
+init = faces.init(name="Jane — Q3 spokesperson")
+print(init.h5_link)            # they scan + do the liveness check
+
+# 2. Block until they finish the phone liveness check.
+faces.wait_for_active(init.group_id)
+
+# 3. Finalize ($0.01) with the person's face photo.
+rf = faces.enroll(
+    name="Jane — Q3 spokesperson",
+    image_url="https://example.com/jane.jpg",
+    group_id=init.group_id,
+)
+print(rf.asset_id)             # ta_abcdef1234567890
+print(rf.settlement.tx_hash)   # 0x9f3a… (BaseScan-verifiable)
+
+# Reuse the ta_ id on any Seedance 2.0 / 2.0-fast call
+video = VideoClient()
+clip = video.generate(
+    "she smiles warmly and waves at the camera",
+    model="bytedance/seedance-2.0-fast",
+    real_face_asset_id=rf.asset_id,
+)
+print(clip.data[0].url)
+
+# Browse this wallet's enrolled RealFaces (free, rate-limited)
+listing = faces.list_realfaces()
+for r in listing.realfaces:
+    print(r.assetId, r.name, r.enrollmentTxHash)
+```
+
+Settlement happens only *after* the face is successfully matched and
+registered, so failed enrollments return an error with **no charge**:
+`425` = group not active yet (finish the phone check first), `422` = the
+photo did not match the live capture (use a clearer front-facing photo),
+`502` = upstream upload failure (safe to retry). The H5 session expires
+~120s after each `init`; call `init(group_id=…)` to refresh an expired
+link.
 
 ## Voice Calls (`VoiceClient`)
 

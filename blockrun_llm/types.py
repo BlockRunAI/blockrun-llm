@@ -771,3 +771,86 @@ class PortraitList(BaseModel):
 
     class Config:
         extra = "allow"
+
+
+# RealFace enrollment types
+#
+# RealFace registers a *real person's* face (vs. Virtual Portrait, which is an
+# AI-generated character). Enrollment is a three-step flow: init (free) →
+# the person completes a phone liveness check → enroll ($0.01 USDC). The
+# resulting ta_xxxxxxxx asset id is interchangeable with a Virtual Portrait's
+# on Seedance 2.0 / 2.0-fast, so RealFaceEnrollment reuses PortraitUsage and
+# PortraitSettlement (identical shapes) rather than duplicating them.
+
+
+class RealFaceInit(BaseModel):
+    """Response from POST /v1/realface/init (free, rate-limited)."""
+
+    object: str = "realface.init"
+    group_id: str  # legacy_rf_xxxx — pass to status()/enroll()
+    h5_link: str  # URL the real person scans on their phone for liveness
+    status: Optional[str] = None  # pending_validation | active
+    expires_in_seconds: Optional[int] = None  # H5 session validity (~120s)
+    next_steps: Optional[Dict[str, Any]] = None
+    refreshed: Optional[bool] = None  # True when re-issued for an existing group
+
+    class Config:
+        extra = "allow"
+
+
+class RealFaceStatus(BaseModel):
+    """Response from GET /v1/realface/status?groupId=… (free, rate-limited)."""
+
+    object: str = "realface.status"
+    group_id: str
+    status: str  # pending_validation | active | …
+    asset_count: Optional[int] = None
+    ready_to_finalize: bool = False  # True once status == "active"
+
+    class Config:
+        extra = "allow"
+
+
+class RealFaceEnrollment(BaseModel):
+    """Response from POST /v1/realface/enroll ($0.01 USDC)."""
+
+    object: str = "realface"
+    asset_id: str  # ta_xxxxxxxx — pass as real_face_asset_id on Seedance
+    group_id: Optional[str] = None
+    byteplus_asset_id: Optional[str] = None
+    name: str
+    image_url: str
+    created_at: Optional[str] = None
+    usage: Optional[PortraitUsage] = None
+    price: Optional[Dict[str, Any]] = None  # {amount, currency}
+    settlement: Optional[PortraitSettlement] = None
+
+    class Config:
+        extra = "allow"
+
+
+class RealFaceListItem(BaseModel):
+    """One row in the wallet RealFace list (GET /v1/wallet/<addr>/realfaces)."""
+
+    # Upstream uses camelCase here, keep matching for transparent ingestion.
+    assetId: str
+    groupId: Optional[str] = None
+    name: Optional[str] = None
+    imageUrl: Optional[str] = None
+    createdAt: Optional[str] = None
+    enrollmentTxHash: Optional[str] = None
+    byteplusAssetId: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
+class RealFaceList(BaseModel):
+    """Response from GET /v1/wallet/<address>/realfaces."""
+
+    wallet: str
+    realfaces: List[RealFaceListItem] = []
+    count: Optional[int] = None
+
+    class Config:
+        extra = "allow"
