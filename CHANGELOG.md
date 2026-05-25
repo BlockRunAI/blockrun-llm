@@ -74,15 +74,14 @@ All notable changes to blockrun-llm will be documented in this file.
   `PortraitList`, `PortraitListItem`** exported from the package root.
 
 ### Changed
-- **`VideoClient` Seedance docs realigned with the dropped RealFace
-  path.** Following the upstream decision to drop real-person video
-  entirely (KYC conflicts with BlockRun's wallet-only stance), the
+- **`VideoClient` Seedance docs realigned with the (then-)dropped
+  RealFace path.** _(Reversed in 0.29.0 — real-person video is now
+  supported via the no-KYC RealFace liveness flow.)_ At the time, the
   `VideoClient` class docstring, the `real_face_asset_id` parameter
-  docstring, the validator error message, and the README example now
-  describe `real_face_asset_id` exclusively as a Virtual Portrait
-  (`POST /v1/portrait/enroll`, $0.01, no KYC) and explicitly note that
-  real-person likeness is not supported. No behavior change — the wire
-  format (the `ta_` id) is unchanged.
+  docstring, the validator error message, and the README example were
+  changed to describe `real_face_asset_id` exclusively as a Virtual
+  Portrait (`POST /v1/portrait/enroll`, $0.01, no KYC). No behavior
+  change — the wire format (the `ta_` id) is unchanged.
 
 ## 0.28.0 — 2026-05-22
 
