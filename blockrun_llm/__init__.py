@@ -55,6 +55,7 @@ from .image import ImageClient
 from .music import MusicClient
 from .video import VideoClient
 from .portrait import PortraitClient
+from .realface import RealFaceClient
 from .voice import VoiceClient
 from .phone import PhoneClient
 from .surf import SurfClient
@@ -87,6 +88,12 @@ from .types import (
     PortraitSettlement,
     PortraitList,
     PortraitListItem,
+    # RealFace types
+    RealFaceInit,
+    RealFaceStatus,
+    RealFaceEnrollment,
+    RealFaceList,
+    RealFaceListItem,
     # Live Search types
     SearchParameters,
     WebSearchSource,
@@ -160,7 +167,7 @@ from .cache import (
 )
 from .tx_log import TransactionLogger, decode_settlement_header, format_row
 
-__version__ = "0.28.1"
+__version__ = "0.29.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -180,6 +187,7 @@ __all__ = [
     "MusicClient",
     "VideoClient",
     "PortraitClient",
+    "RealFaceClient",
     "VoiceClient",
     "PhoneClient",
     "SurfClient",
@@ -208,6 +216,11 @@ __all__ = [
     "PortraitSettlement",
     "PortraitList",
     "PortraitListItem",
+    "RealFaceInit",
+    "RealFaceStatus",
+    "RealFaceEnrollment",
+    "RealFaceList",
+    "RealFaceListItem",
     # Live Search types
     "SearchParameters",
     "WebSearchSource",

@@ -7,8 +7,10 @@ no KYC), you get back a `ta_xxxxxxxx` asset id that can be passed as
 `real_face_asset_id` to `VideoClient.generate()` on Seedance 2.0 or 2.0-fast
 to keep the same character across multiple videos.
 
-Real-person likeness is NOT supported — the upstream verification flow
-requires KYC, which conflicts with BlockRun's wallet-only stance.
+For a *real* person's likeness, use `RealFaceClient` instead — it enrolls
+a real face for $0.01 via a brief on-phone liveness check (no KYC) and
+yields a `ta_` id usable the same way. Virtual Portraits are for
+AI-generated personas, mascots, avatars, and virtual spokespeople.
 
 SECURITY NOTE - Private Key Handling:
 =====================================
