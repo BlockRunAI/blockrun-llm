@@ -71,6 +71,17 @@ def test_edit_single_image_passes_string_through():
     assert result.data[0].url == "https://blockrun.ai/img/out.png"
 
 
+def test_edit_defaults_to_gpt_image_2():
+    calls: List[httpx.Request] = []
+    client = _make_client(calls)
+
+    client.edit("Make the sky purple", image=DATA_URI)
+
+    body = json.loads(calls[1].content)
+    # Default edit model matches the production schema default.
+    assert body["model"] == "openai/gpt-image-2"
+
+
 def test_edit_multi_image_passes_list_through():
     calls: List[httpx.Request] = []
     client = _make_client(calls)

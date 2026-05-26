@@ -2,6 +2,15 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.30.1 — 2026-05-26
+
+### Changed
+- **Default image-edit model is now `openai/gpt-image-2`** (was `openai/gpt-image-1`)
+  across `ImageClient.edit()`, `LLMClient.image_edit()` (sync + async), and
+  `SolanaLLMClient.image_edit()`. Matches the production `/v1/images/image2image`
+  schema default and aligns Python, TypeScript, and Go SDKs. Pass `model=` explicitly
+  to keep using the cheaper `gpt-image-1`.
+
 ## 0.30.0 — 2026-05-26
 
 ### Added

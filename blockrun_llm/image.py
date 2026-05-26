@@ -169,7 +169,7 @@ class ImageClient:
                    list of 1-4 such data URIs to fuse multiple sources (e.g. a
                    reference photo + a brand logo). Plain URLs are not accepted —
                    the source must be a data URI.
-            model: Model ID (default: "openai/gpt-image-1")
+            model: Model ID (default: "openai/gpt-image-2")
                    Edit-supported: "openai/gpt-image-1", "openai/gpt-image-2",
                                    "google/nano-banana", "google/nano-banana-pro"
                    Multi-image caps: openai/* up to 4, google/* up to 3.
@@ -197,7 +197,7 @@ class ImageClient:
             print(result.data[0].url)
         """
         body: Dict[str, Any] = {
-            "model": model or "openai/gpt-image-1",
+            "model": model or "openai/gpt-image-2",
             "prompt": prompt,
             "image": image,
             "size": size or self.DEFAULT_SIZE,

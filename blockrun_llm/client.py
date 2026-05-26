@@ -1463,7 +1463,7 @@ class LLMClient:
         prompt: str,
         image: Union[str, List[str]],
         *,
-        model: str = "openai/gpt-image-1",
+        model: str = "openai/gpt-image-2",
         mask: Optional[str] = None,
         size: str = "1024x1024",
         n: int = 1,
@@ -1476,7 +1476,7 @@ class LLMClient:
             image: A single base64 "data:image/...;base64,..." data URI, or a
                    list of 1-4 such data URIs to fuse multiple sources. Plain
                    URLs are not accepted — the source must be a data URI.
-            model: Model ID (default: "openai/gpt-image-1")
+            model: Model ID (default: "openai/gpt-image-2")
                    Edit-supported: "openai/gpt-image-1", "openai/gpt-image-2",
                                    "google/nano-banana", "google/nano-banana-pro".
                    Multi-image caps: openai/* up to 4, google/* up to 3.
@@ -3080,7 +3080,7 @@ class AsyncLLMClient:
         prompt: str,
         image: Union[str, List[str]],
         *,
-        model: str = "openai/gpt-image-1",
+        model: str = "openai/gpt-image-2",
         mask: Optional[str] = None,
         size: str = "1024x1024",
         n: int = 1,

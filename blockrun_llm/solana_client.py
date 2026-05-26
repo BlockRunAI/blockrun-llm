@@ -1004,7 +1004,7 @@ class SolanaLLMClient:
         prompt: str,
         image: Union[str, List[str]],
         *,
-        model: str = "openai/gpt-image-1",
+        model: str = "openai/gpt-image-2",
         mask: Optional[str] = None,
         size: str = "1024x1024",
         n: int = 1,
