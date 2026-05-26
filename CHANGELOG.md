@@ -2,6 +2,26 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.30.0 — 2026-05-26
+
+### Added
+- **Multi-image fusion across all edit entry points.** The `image` parameter
+  now accepts `Union[str, List[str]]` on `ImageClient.edit()`,
+  `LLMClient.image_edit()` (sync + async), and `SolanaLLMClient.image_edit()`
+  — pass a single base64 `data:image/...` data URI to edit one image, or a list
+  of 2–4 URIs to fuse them (e.g. a subject photo + a brand logo). Matches the
+  now-live `/v1/images/image2image` contract, which previously rejected arrays
+  with `400 "expected string, received array"`. Single-string calls are
+  unchanged and fully backward compatible. Fusion caps mirror the server:
+  `openai/*` up to 4 source images, `google/*` (Nano Banana) up to 3; a `mask`
+  cannot be combined with multiple source images.
+
+### Fixed
+- Documented the full set of edit-capable models (`openai/gpt-image-1`,
+  `openai/gpt-image-2`, `google/nano-banana`, `google/nano-banana-pro`) and
+  corrected the `edit()`/`image_edit()` docs, which incorrectly claimed a plain
+  URL was accepted — the route requires a base64 `data:image/...` data URI.
+
 ## 0.29.0 — 2026-05-25
 
 ### Added

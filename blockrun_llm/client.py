@@ -1461,7 +1461,7 @@ class LLMClient:
     def image_edit(
         self,
         prompt: str,
-        image: str,
+        image: Union[str, List[str]],
         *,
         model: str = "openai/gpt-image-1",
         mask: Optional[str] = None,
@@ -1469,13 +1469,19 @@ class LLMClient:
         n: int = 1,
     ) -> ImageResponse:
         """
-        Edit an image using img2img.
+        Edit an image using img2img, or fuse multiple source images.
 
         Args:
             prompt: Text description of the desired edit
-            image: Base64-encoded image or URL of the source image
+            image: A single base64 "data:image/...;base64,..." data URI, or a
+                   list of 1-4 such data URIs to fuse multiple sources. Plain
+                   URLs are not accepted — the source must be a data URI.
             model: Model ID (default: "openai/gpt-image-1")
-            mask: Optional base64-encoded mask image
+                   Edit-supported: "openai/gpt-image-1", "openai/gpt-image-2",
+                                   "google/nano-banana", "google/nano-banana-pro".
+                   Multi-image caps: openai/* up to 4, google/* up to 3.
+            mask: Optional base64-encoded mask image (OpenAI gpt-image-* only;
+                  cannot be combined with multiple source images).
             size: Output image size (default: "1024x1024")
             n: Number of images to generate (default: 1)
 
@@ -3072,14 +3078,16 @@ class AsyncLLMClient:
     async def image_edit(
         self,
         prompt: str,
-        image: str,
+        image: Union[str, List[str]],
         *,
         model: str = "openai/gpt-image-1",
         mask: Optional[str] = None,
         size: str = "1024x1024",
         n: int = 1,
     ) -> ImageResponse:
-        """Async image editing (img2img)."""
+        """Async image editing (img2img). ``image`` may be a single data URI or
+        a list of 1-4 data URIs for multi-image fusion (openai/* up to 4,
+        google/* up to 3)."""
         body: Dict[str, Any] = {
             "model": model,
             "prompt": prompt,

@@ -1002,14 +1002,16 @@ class SolanaLLMClient:
     def image_edit(
         self,
         prompt: str,
-        image: str,
+        image: Union[str, List[str]],
         *,
         model: str = "openai/gpt-image-1",
         mask: Optional[str] = None,
         size: str = "1024x1024",
         n: int = 1,
     ) -> ImageResponse:
-        """Edit an image using img2img (Solana payment)."""
+        """Edit an image using img2img (Solana payment). ``image`` may be a
+        single data URI or a list of 1-4 data URIs for multi-image fusion
+        (openai/* up to 4, google/* up to 3)."""
         body: Dict[str, Any] = {
             "model": model,
             "prompt": prompt,

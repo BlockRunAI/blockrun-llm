@@ -324,7 +324,7 @@ automatically.
 | `xai/grok-imagine-image-pro` | $0.07/image |
 | `zai/cogview-4` | $0.015/image |
 
-Image editing (`client.edit`): `openai/gpt-image-1` and `openai/gpt-image-2` both support the `/v1/images/image2image` endpoint.
+Image editing (`client.edit` / `client.image_edit`) hits the `/v1/images/image2image` endpoint and supports `openai/gpt-image-1`, `openai/gpt-image-2`, `google/nano-banana`, and `google/nano-banana-pro`. Pass a list of source images to fuse multiple inputs (openai/* up to 4, google/* up to 3).
 
 ### Video Generation
 | Model | Price | Default 5s 720p |
@@ -745,7 +745,8 @@ result = client.search(
 
 ## Image Editing (img2img)
 
-Edit existing images with text prompts:
+Edit existing images with text prompts. The source `image` must be a
+`data:image/...;base64,...` data URI (plain URLs are not accepted):
 
 ```python
 from blockrun_llm import LLMClient, ImageClient
@@ -754,14 +755,23 @@ from blockrun_llm import LLMClient, ImageClient
 client = LLMClient()
 result = client.image_edit(
     prompt="Make the sky purple and add northern lights",
-    image="data:image/png;base64,...",  # base64 or URL
+    image="data:image/png;base64,...",  # base64 data URI
     model="openai/gpt-image-1",
 )
 print(result.data[0].url)
 
 # Via ImageClient
 img_client = ImageClient()
-result = img_client.edit("Add a rainbow", image="https://example.com/photo.jpg")
+result = img_client.edit("Add a rainbow", image="data:image/png;base64,...")
+
+# Multi-image fusion — pass a list of data URIs (e.g. a reference + a logo).
+# openai/* accepts up to 4 source images, google/* up to 3.
+result = img_client.edit(
+    "Place the logo on the model's t-shirt",
+    image=["data:image/png;base64,...", "data:image/png;base64,..."],
+    model="google/nano-banana",
+)
+print(result.data[0].url)
 ```
 
 ## Usage Examples
