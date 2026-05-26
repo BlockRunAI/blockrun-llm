@@ -27,7 +27,7 @@ Usage:
 """
 
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Union
 import httpx
 from eth_account import Account
 from dotenv import load_dotenv
@@ -153,7 +153,7 @@ class ImageClient:
     def edit(
         self,
         prompt: str,
-        image: str,
+        image: Union[str, List[str]],
         *,
         model: Optional[str] = None,
         mask: Optional[str] = None,
@@ -161,14 +161,20 @@ class ImageClient:
         n: int = 1,
     ) -> ImageResponse:
         """
-        Edit an image using img2img.
+        Edit an image using img2img, or fuse multiple source images.
 
         Args:
             prompt: Text description of the desired edit
-            image: Base64-encoded image or URL of the source image
+            image: A single base64 "data:image/...;base64,..." data URI, or a
+                   list of 1-4 such data URIs to fuse multiple sources (e.g. a
+                   reference photo + a brand logo). Plain URLs are not accepted —
+                   the source must be a data URI.
             model: Model ID (default: "openai/gpt-image-1")
-                   Edit-supported: "openai/gpt-image-1", "openai/gpt-image-2"
-            mask: Optional base64-encoded mask image
+                   Edit-supported: "openai/gpt-image-1", "openai/gpt-image-2",
+                                   "google/nano-banana", "google/nano-banana-pro"
+                   Multi-image caps: openai/* up to 4, google/* up to 3.
+            mask: Optional base64-encoded mask image (OpenAI gpt-image-* only;
+                  cannot be combined with multiple source images).
             size: Image size (default: "1024x1024")
             n: Number of images to generate (default: 1)
 
@@ -176,9 +182,17 @@ class ImageClient:
             ImageResponse with edited image URLs
 
         Example:
+            # Single-image edit
             result = client.edit(
                 "Make the sky purple",
                 image="data:image/png;base64,..."
+            )
+
+            # Multi-image fusion (Nano Banana)
+            result = client.edit(
+                "Place the logo on the t-shirt",
+                image=["data:image/png;base64,...", "data:image/png;base64,..."],
+                model="google/nano-banana",
             )
             print(result.data[0].url)
         """
