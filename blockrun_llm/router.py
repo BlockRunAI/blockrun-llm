@@ -249,6 +249,7 @@ AUTO_TIERS: Dict[Tier, TierConfig] = {
     "COMPLEX": {
         "primary": "google/gemini-3.1-pro",
         "fallback": [
+            "google/gemini-3.5-flash",
             "google/gemini-3-flash-preview",
             "google/gemini-2.5-pro",
             "deepseek/deepseek-chat",

@@ -2,6 +2,15 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.31.0 — 2026-05-27
+
+### Added
+- **`google/gemini-3.5-flash`** — Google's newest-generation Flash with built-in
+  thinking mode: frontier-class quality at Flash speed and pricing ($0.50/M in,
+  $3.00/M out, 1M context). Now live in production. Added to the README model
+  pricing table and wired into the smart router's COMPLEX tier as the leading
+  fallback (ahead of `google/gemini-3-flash-preview`, which remains available).
+
 ## 0.30.1 — 2026-05-26
 
 ### Changed
