@@ -999,6 +999,31 @@ class SolanaLLMClient:
 
         return retry_response.json()
 
+    def image(
+        self,
+        prompt: str,
+        *,
+        model: str = "google/nano-banana",
+        size: str = "1024x1024",
+        n: int = 1,
+    ) -> ImageResponse:
+        """Generate an image from a text prompt (Solana payment).
+
+        Supports the same model catalog as ``ImageClient.generate`` on Base:
+        ``google/nano-banana``, ``google/nano-banana-pro``,
+        ``openai/dall-e-3``, ``openai/gpt-image-1``, ``openai/gpt-image-2``,
+        ``zai/cogview-4``, ``xai/grok-imagine-image``,
+        ``xai/grok-imagine-image-pro``, ``black-forest/flux-1.1-pro``.
+        """
+        body: Dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "size": size,
+            "n": n,
+        }
+        data = self._request_with_payment_raw("/v1/images/generations", body)
+        return ImageResponse(**data)
+
     def image_edit(
         self,
         prompt: str,
