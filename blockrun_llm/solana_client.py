@@ -86,7 +86,62 @@ def _create_signer(private_key: str) -> KeypairSigner:
 
 
 DEFAULT_MAX_TOKENS = 1024
-DEFAULT_TIMEOUT = 60.0
+
+# Per-use-case HTTP timeouts (seconds). The Base SDK splits these across
+# multiple clients (LLMClient=120s, ImageClient=200s, MusicClient=210s,
+# VideoClient=360s, ...); the Solana mega-class needs the same separation
+# so a long chat or slow image generation does not silently die at 60s
+# (the historical single-value default).
+#
+# Public callers can also override per-call via ``timeout=`` on
+# ``chat_completion`` / ``image`` / ``image_edit`` / ``search``.
+DEFAULT_CHAT_TIMEOUT = 120.0
+DEFAULT_IMAGE_TIMEOUT = 200.0
+DEFAULT_SEARCH_TIMEOUT = 300.0
+DEFAULT_FAST_TIMEOUT = 30.0  # pyth / x_user_info / quick lookups
+
+# Kept as a single fallback so old callers that pass a flat ``timeout=``
+# to ``SolanaLLMClient(...)`` continue to work — but the value now matches
+# the chat client's budget so a 120s chat doesn't die under the old 60s.
+DEFAULT_TIMEOUT = DEFAULT_CHAT_TIMEOUT
+
+
+# ---------------------------------------------------------------------------
+# Permanent payment errors — don't retry, don't fall back
+# ---------------------------------------------------------------------------
+#
+# Mirrors the gateway-side classification at
+# blockrun-sol/src/lib/x402-solana.ts PERMANENT_ERRORS. These reasons are
+# deterministic on the SIGNED AUTHORIZATION level — re-signing without
+# fixing the root cause produces the same failure within seconds. Surfacing
+# the first failure immediately drops worst-case wall-clock from ~5min
+# (3 generation attempts) to one attempt's worth.
+_PERMANENT_PAYMENT_PATTERNS = (
+    "insufficient",                   # insufficient_funds, "insufficient balance"
+    "invalid signature",              # bad signing key / malformed payload
+    "invalid_payload",                # gateway rejected payload shape
+    "expired",                        # payment_expired
+    "authorization is used",          # replay-nonce hit
+    "transaction_simulation_failed",  # CDP svm sim rejected (often blockhash window)
+    "blockhash not found",            # blockhash already aged out — same class
+    "block height exceeded",          # past slot lifetime — same class
+)
+
+
+def _is_permanent_payment_error(reason: str) -> bool:
+    """True iff the payment reason matches a permanent-failure pattern.
+
+    Used by both the streaming fallback decision and the raw retry
+    classifier so the same policy applies to every Solana code path.
+    Case-insensitive substring match — patterns above are the BlockRun
+    gateway's own enums, and CDP returns the long form
+    (``invalid_exact_svm_payload_transaction_simulation_failed``) which
+    still contains the short form as a substring.
+    """
+    if not reason:
+        return False
+    low = reason.lower()
+    return any(p in low for p in _PERMANENT_PAYMENT_PATTERNS)
 
 
 def _get_user_agent() -> str:
@@ -208,7 +263,19 @@ def _should_fallback_solana(exc: Exception) -> bool:
     - Timeouts and network errors → fall back
     - APIError with 5xx-ish status → fall back
     - 4xx and PaymentError → propagate
+
+    Defensive guard for issue #6: even when the exception is a transient
+    type (Timeout/Network), if the underlying reason is a permanent
+    payment classification (``transaction_simulation_failed``, etc.) we
+    do NOT fall back — re-signing a fresh request hits the same wall in
+    seconds. The first failure surfaces immediately.
     """
+    # PaymentError always carries the gateway reason now (v0.32.0+).
+    if isinstance(exc, PaymentError):
+        return False
+    # Even for "transient" types, sniff the message for a permanent reason.
+    if _is_permanent_payment_error(str(exc)):
+        return False
     if isinstance(exc, httpx.TimeoutException):
         return True
     if isinstance(exc, httpx.NetworkError):

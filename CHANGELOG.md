@@ -2,6 +2,61 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.34.0 — 2026-05-29
+
+### Fixed
+
+- **`SolanaLLMClient` no longer truncates long chats and slow images at 60s.**
+  The historical flat `DEFAULT_TIMEOUT = 60.0` applied to every method
+  on the mega-class — chat, image, music, search, X, exa, pyth — while
+  the Base SDK splits the same surface across per-use-case clients
+  (`LLMClient=120s`, `ImageClient=200s`, `MusicClient=210s`,
+  `VideoClient=360s`). Long chats with high `max_tokens`, slow image
+  generations, and deep search queries were silently dying inside the
+  SDK at 60s. Raises the flat `DEFAULT_TIMEOUT` to `120.0` (matches
+  Base chat) and introduces per-use-case constants
+  (`DEFAULT_CHAT_TIMEOUT`, `DEFAULT_IMAGE_TIMEOUT`,
+  `DEFAULT_SEARCH_TIMEOUT`, `DEFAULT_FAST_TIMEOUT`) for fine-grained
+  tuning. Closes #7.
+- **`transaction_simulation_failed` no longer wastes 5+ minutes on
+  pointless retries.** Adds a `_PERMANENT_PAYMENT_PATTERNS` table
+  mirroring the gateway-side `blockrun-sol/src/lib/x402-solana.ts`
+  `PERMANENT_ERRORS` classification. `_should_fallback_solana` now
+  short-circuits when the exception's reason matches a permanent
+  pattern — even when the exception type itself is "transient"
+  (`httpx.Timeout`, `httpx.NetworkError`). Worst-case wall-clock for
+  a deterministic Solana settlement failure drops from ~5min
+  (3 generation attempts) to one attempt's worth. Closes #6.
+
+### Added
+
+- New module-level helpers:
+  - `_is_permanent_payment_error(reason: str) -> bool` — case-insensitive
+    substring match against the permanent classification, used by both
+    the streaming fallback decision and any future retry classifier so
+    one policy applies everywhere.
+  - `DEFAULT_CHAT_TIMEOUT`, `DEFAULT_IMAGE_TIMEOUT`,
+    `DEFAULT_SEARCH_TIMEOUT`, `DEFAULT_FAST_TIMEOUT` constants
+    (importable from `blockrun_llm.solana_client`) so callers can use
+    the same numbers as the SDK does.
+
+### Changed
+
+- **`SolanaLLMClient(..., timeout=<float>)` still works**, but the
+  default value of the constructor parameter is now
+  `DEFAULT_CHAT_TIMEOUT` (120s) instead of the old 60s. Callers passing
+  an explicit value are unaffected.
+
+### Notes
+
+- This is a focused timeout-and-retry policy fix. The follow-up
+  per-method `timeout=` kwarg on public methods (level 2 of #7) lands
+  in a separate change to keep this PR review-friendly. Today's defaults
+  already eliminate the 60s ceiling that was the immediate footgun.
+- 18 Base SDK clients still emit the generic
+  `PaymentError("Payment was rejected. Check your wallet balance.")` —
+  see the v0.32.0 follow-up note. Tracked separately.
+
 ## 0.33.0 — 2026-05-29
 
 ### Added
