@@ -85,9 +85,12 @@ def solana_key_to_bytes(private_key: str) -> bytes:
             return bytes(kp)
 
         raise ValueError(f"Expected 32 or 64 bytes, got {len(decoded)}")
-    except ValueError:
-        raise
     except Exception as e:
+        # Wrap every failure — including the ``ValueError`` modern ``base58``
+        # raises on invalid characters — in the documented message. A bare
+        # ``except ValueError: raise`` here used to leak base58's raw
+        # "Invalid character" error past the wrapper, breaking callers (and
+        # the test) that match on "Invalid Solana private key".
         raise ValueError(f"Invalid Solana private key: {e}") from e
 
 

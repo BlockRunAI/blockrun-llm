@@ -16,8 +16,17 @@ All notable changes to blockrun-llm will be documented in this file.
   SDK at 60s. Raises the flat `DEFAULT_TIMEOUT` to `120.0` (matches
   Base chat) and introduces per-use-case constants
   (`DEFAULT_CHAT_TIMEOUT`, `DEFAULT_IMAGE_TIMEOUT`,
-  `DEFAULT_SEARCH_TIMEOUT`, `DEFAULT_FAST_TIMEOUT`) for fine-grained
-  tuning. Closes #7.
+  `DEFAULT_SEARCH_TIMEOUT`, `DEFAULT_FAST_TIMEOUT`). Each request now
+  carries the timeout for its *workload* rather than the single client
+  default: `image()` / `image_edit()` use `DEFAULT_IMAGE_TIMEOUT` (200s),
+  `search()` and the `exa_*` methods use `DEFAULT_SEARCH_TIMEOUT` (300s),
+  and chat uses the 120s baseline — sync **and** async. Closes #7.
+- **`solana_key_to_bytes()` now wraps every failure in the documented
+  `ValueError("Invalid Solana private key: …")`.** A bare
+  `except ValueError: raise` used to let modern `base58`'s raw
+  "Invalid character" error escape past the wrapper, so callers (and the
+  `test_invalid_key_raises` test) matching on the documented message
+  broke. All decode failures are now wrapped consistently.
 - **`transaction_simulation_failed` no longer wastes 5+ minutes on
   pointless retries.** Adds a `_PERMANENT_PAYMENT_PATTERNS` table
   mirroring the gateway-side `blockrun-sol/src/lib/x402-solana.ts`
@@ -40,19 +49,36 @@ All notable changes to blockrun-llm will be documented in this file.
     (importable from `blockrun_llm.solana_client`) so callers can use
     the same numbers as the SDK does.
 
+### Added
+
+- **Per-call `timeout=` override on every long-running public method**
+  (level 2 of #7) — `chat`, `chat_completion`, `chat_completion_stream`,
+  `image`, `image_edit`, `search`, sync and async. The kwarg wins over
+  the per-use-case default and the constructor value, so a single
+  oversized request can raise (or tighten) its own budget without
+  reconfiguring the client:
+
+  ```python
+  client.chat_completion(model, messages, max_tokens=8192, timeout=240)
+  client.image("...", model="openai/gpt-image-2", timeout=300)
+  ```
+- **`image_timeout` / `search_timeout` constructor parameters** on both
+  `SolanaLLMClient` and `AsyncSolanaLLMClient` (defaulting to
+  `DEFAULT_IMAGE_TIMEOUT` / `DEFAULT_SEARCH_TIMEOUT`) — mirrors the
+  per-client tuning the Base SDK gets from separate `ImageClient` /
+  search-aware `LLMClient` classes.
+
 ### Changed
 
 - **`SolanaLLMClient(..., timeout=<float>)` still works**, but the
   default value of the constructor parameter is now
-  `DEFAULT_CHAT_TIMEOUT` (120s) instead of the old 60s. Callers passing
-  an explicit value are unaffected.
+  `DEFAULT_CHAT_TIMEOUT` (120s) instead of the old 60s, and it governs
+  the **chat** baseline specifically; image and search read from their
+  own constructor parameters / constants. Callers passing an explicit
+  value are unaffected.
 
 ### Notes
 
-- This is a focused timeout-and-retry policy fix. The follow-up
-  per-method `timeout=` kwarg on public methods (level 2 of #7) lands
-  in a separate change to keep this PR review-friendly. Today's defaults
-  already eliminate the 60s ceiling that was the immediate footgun.
 - 18 Base SDK clients still emit the generic
   `PaymentError("Payment was rejected. Check your wallet balance.")` —
   see the v0.32.0 follow-up note. Tracked separately.

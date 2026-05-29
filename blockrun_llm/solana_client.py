@@ -117,14 +117,14 @@ DEFAULT_TIMEOUT = DEFAULT_CHAT_TIMEOUT
 # the first failure immediately drops worst-case wall-clock from ~5min
 # (3 generation attempts) to one attempt's worth.
 _PERMANENT_PAYMENT_PATTERNS = (
-    "insufficient",                   # insufficient_funds, "insufficient balance"
-    "invalid signature",              # bad signing key / malformed payload
-    "invalid_payload",                # gateway rejected payload shape
-    "expired",                        # payment_expired
-    "authorization is used",          # replay-nonce hit
+    "insufficient",  # insufficient_funds, "insufficient balance"
+    "invalid signature",  # bad signing key / malformed payload
+    "invalid_payload",  # gateway rejected payload shape
+    "expired",  # payment_expired
+    "authorization is used",  # replay-nonce hit
     "transaction_simulation_failed",  # CDP svm sim rejected (often blockhash window)
-    "blockhash not found",            # blockhash already aged out — same class
-    "block height exceeded",          # past slot lifetime — same class
+    "blockhash not found",  # blockhash already aged out — same class
+    "block height exceeded",  # past slot lifetime — same class
 )
 
 
@@ -309,10 +309,20 @@ class SolanaLLMClient:
         api_url: str = SOLANA_API_URL,
         rpc_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
+        image_timeout: float = DEFAULT_IMAGE_TIMEOUT,
+        search_timeout: float = DEFAULT_SEARCH_TIMEOUT,
         rpc_headers: Optional[Dict[str, str]] = None,
         transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
     ) -> None:
         """Initialise the Solana client.
+
+        ``timeout`` is the baseline (chat) HTTP timeout; ``image_timeout``
+        and ``search_timeout`` tune the slower workloads independently —
+        mirroring the per-client tuning the Base SDK gets from having
+        separate ``LLMClient`` / ``ImageClient`` classes. Every public
+        method also takes a per-call ``timeout=`` override that wins over
+        all three. The historical single ``timeout=`` keyword still works
+        and now governs chat.
 
         ``rpc_url`` / ``rpc_headers`` fall back to the env vars
         ``SOLANA_RPC_URL`` / ``SOLANA_RPC_HEADERS`` / ``SOLANA_RPC_API_KEY``
@@ -350,6 +360,10 @@ class SolanaLLMClient:
         self._rpc_headers = resolved_headers
 
         self._timeout = timeout
+        self._image_timeout = image_timeout
+        self._search_timeout = search_timeout
+        # httpx.Client carries the chat baseline as its default; image /
+        # search / per-call overrides are applied per request below.
         self._client = httpx.Client(timeout=timeout)
         self._session_total_usd = 0.0
         self._session_calls = 0
@@ -446,6 +460,7 @@ class SolanaLLMClient:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: Optional[float] = None,
         search: bool = False,
+        timeout: Optional[float] = None,
     ) -> str:
         """Simple 1-line chat."""
         messages: List[Dict[str, str]] = []
@@ -458,6 +473,7 @@ class SolanaLLMClient:
             max_tokens=max_tokens,
             temperature=temperature,
             search=search,
+            timeout=timeout,
         )
         return result.choices[0].message.content or ""
 
@@ -472,6 +488,7 @@ class SolanaLLMClient:
         search_parameters: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
+        timeout: Optional[float] = None,
     ) -> ChatResponse:
         """Full chat completion (OpenAI-compatible).
 
@@ -479,6 +496,10 @@ class SolanaLLMClient:
         ``tool_choice`` — the BlockRun gateway forwards them to the
         upstream model unchanged (Base and Solana use the same backend
         schema; the only chain difference is the payment leg).
+
+        ``timeout`` overrides the per-call HTTP timeout (defaults to the
+        client's chat baseline, ``DEFAULT_CHAT_TIMEOUT``). Raise it for
+        large ``max_tokens`` runs against slow models.
         """
         body: Dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
@@ -493,7 +514,7 @@ class SolanaLLMClient:
             body["tools"] = tools
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
-        return self._request_with_payment("/v1/chat/completions", body)
+        return self._request_with_payment("/v1/chat/completions", body, timeout=timeout)
 
     def close(self) -> None:
         """Close the HTTP client."""
@@ -542,6 +563,7 @@ class SolanaLLMClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
         fallback_models: Optional[List[str]] = None,
+        timeout: Optional[float] = None,
     ) -> Iterator[ChatCompletionChunk]:
         """
         Stream a chat completion via Server-Sent Events, paid in Solana USDC
@@ -588,7 +610,7 @@ class SolanaLLMClient:
 
         for i, attempt_model in enumerate(attempts):
             body["model"] = attempt_model
-            inner = self._stream_with_payment("/v1/chat/completions", body)
+            inner = self._stream_with_payment("/v1/chat/completions", body, timeout=timeout)
             chunks_yielded = 0
             try:
                 for chunk in inner:
@@ -614,12 +636,14 @@ class SolanaLLMClient:
         self,
         endpoint: str,
         body: Dict[str, Any],
+        timeout: Optional[float] = None,
     ) -> Iterator[ChatCompletionChunk]:
         """402 → sign (SVM) → retry → SSE iter. Same shape as the Base
         :meth:`LLMClient._stream_with_payment`; differs only in the
         signing path (we go through the x402 SDK's SVM client)."""
         url = f"{self._api_url}{endpoint}"
         req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
+        eff_timeout = timeout if timeout is not None else self._timeout
 
         backoffs = self._STREAM_5XX_BACKOFFS
 
@@ -629,7 +653,7 @@ class SolanaLLMClient:
 
         for attempt in range(len(backoffs) + 1):
             with self._client.stream(
-                "POST", url, json=body, headers=req_headers, timeout=self._timeout
+                "POST", url, json=body, headers=req_headers, timeout=eff_timeout
             ) as resp1:
                 if resp1.status_code == 200:
                     # Free model — stream directly.
@@ -652,7 +676,7 @@ class SolanaLLMClient:
         assert payment_headers is not None
         for attempt in range(len(backoffs) + 1):
             with self._client.stream(
-                "POST", url, json=body, headers=payment_headers, timeout=self._timeout
+                "POST", url, json=body, headers=payment_headers, timeout=eff_timeout
             ) as resp2:
                 if resp2.status_code == 200:
                     if cost_usd > 0:
@@ -801,21 +825,24 @@ class SolanaLLMClient:
             sanitize_error_response(error_body),
         )
 
-    def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ChatResponse:
+    def _request_with_payment(
+        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
+    ) -> ChatResponse:
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
+        eff_timeout = timeout if timeout is not None else self._timeout
 
-        response = self._client.post(url, json=body, headers=headers)
+        response = self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         # Auto-retry on transient server errors
         if response.status_code in (502, 503):
             import time
 
             time.sleep(1)
-            response = self._client.post(url, json=body, headers=headers)
+            response = self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
-            return self._handle_payment_and_retry(url, body, response)
+            return self._handle_payment_and_retry(url, body, response, timeout=eff_timeout)
 
         if not response.is_success:
             try:
@@ -831,8 +858,13 @@ class SolanaLLMClient:
         return ChatResponse(**response.json())
 
     def _handle_payment_and_retry(
-        self, url: str, body: Dict[str, Any], response: httpx.Response
+        self,
+        url: str,
+        body: Dict[str, Any],
+        response: httpx.Response,
+        timeout: Optional[float] = None,
     ) -> ChatResponse:
+        eff_timeout = timeout if timeout is not None else self._timeout
         payment_header = self._extract_payment_header(response)
         if not payment_header:
             raise PaymentError("402 response but no payment requirements found")
@@ -849,12 +881,16 @@ class SolanaLLMClient:
         }
 
         # Retry with payment, with one automatic retry on 502/503
-        retry_response = self._client.post(url, json=body, headers=payment_headers)
+        retry_response = self._client.post(
+            url, json=body, headers=payment_headers, timeout=eff_timeout
+        )
         if retry_response.status_code in (502, 503):
             import time
 
             time.sleep(1)
-            retry_response = self._client.post(url, json=body, headers=payment_headers)
+            retry_response = self._client.post(
+                url, json=body, headers=payment_headers, timeout=eff_timeout
+            )
 
         if retry_response.status_code == 402:
             raise build_payment_rejected_error(retry_response)
@@ -891,7 +927,9 @@ class SolanaLLMClient:
 
         return ChatResponse(**response_data)
 
-    def _request_with_payment_raw(self, endpoint: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    def _request_with_payment_raw(
+        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
+    ) -> Dict[str, Any]:
         """Make a request with Solana x402 payment, returning raw JSON."""
         from .cache import get_cached, save_to_cache
 
@@ -902,18 +940,19 @@ class SolanaLLMClient:
 
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
+        eff_timeout = timeout if timeout is not None else self._timeout
 
-        response = self._client.post(url, json=body, headers=headers)
+        response = self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         # Auto-retry on transient server errors
         if response.status_code in (502, 503):
             import time
 
             time.sleep(1)
-            response = self._client.post(url, json=body, headers=headers)
+            response = self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
-            result = self._handle_payment_and_retry_raw(url, body, response)
+            result = self._handle_payment_and_retry_raw(url, body, response, timeout=eff_timeout)
             save_to_cache(
                 endpoint,
                 body,
@@ -938,9 +977,14 @@ class SolanaLLMClient:
         return response.json()
 
     def _handle_payment_and_retry_raw(
-        self, url: str, body: Dict[str, Any], response: httpx.Response
+        self,
+        url: str,
+        body: Dict[str, Any],
+        response: httpx.Response,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Handle 402 for raw endpoints with Solana payment."""
+        eff_timeout = timeout if timeout is not None else self._timeout
         payment_header = self._extract_payment_header(response)
         if not payment_header:
             raise PaymentError("402 response but no payment requirements found")
@@ -957,12 +1001,16 @@ class SolanaLLMClient:
         }
 
         # Retry with payment, with one automatic retry on 502/503
-        retry_response = self._client.post(url, json=body, headers=payment_headers)
+        retry_response = self._client.post(
+            url, json=body, headers=payment_headers, timeout=eff_timeout
+        )
         if retry_response.status_code in (502, 503):
             import time
 
             time.sleep(1)
-            retry_response = self._client.post(url, json=body, headers=payment_headers)
+            retry_response = self._client.post(
+                url, json=body, headers=payment_headers, timeout=eff_timeout
+            )
 
         if retry_response.status_code == 402:
             raise build_payment_rejected_error(retry_response)
@@ -987,7 +1035,10 @@ class SolanaLLMClient:
         return retry_response.json()
 
     def _get_with_payment_raw(
-        self, endpoint: str, params: Optional[Dict[str, Any]] = None
+        self,
+        endpoint: str,
+        params: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """GET with Solana x402 payment, returning raw JSON."""
         from .cache import get_cached, save_to_cache
@@ -999,17 +1050,18 @@ class SolanaLLMClient:
 
         url = f"{self._api_url}{endpoint}"
         headers = {"User-Agent": _get_user_agent()}
+        eff_timeout = timeout if timeout is not None else self._timeout
 
-        response = self._client.get(url, params=params, headers=headers)
+        response = self._client.get(url, params=params, headers=headers, timeout=eff_timeout)
 
         if response.status_code in (502, 503):
             import time
 
             time.sleep(1)
-            response = self._client.get(url, params=params, headers=headers)
+            response = self._client.get(url, params=params, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
-            result = self._handle_get_payment_and_retry(url, params, response)
+            result = self._handle_get_payment_and_retry(url, params, response, timeout=eff_timeout)
             save_to_cache(
                 endpoint,
                 cache_key_body,
@@ -1034,9 +1086,14 @@ class SolanaLLMClient:
         return response.json()
 
     def _handle_get_payment_and_retry(
-        self, url: str, params: Optional[Dict[str, Any]], response: httpx.Response
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]],
+        response: httpx.Response,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Handle 402 for GET endpoints with Solana payment."""
+        eff_timeout = timeout if timeout is not None else self._timeout
         payment_header = self._extract_payment_header(response)
         if not payment_header:
             raise PaymentError("402 response but no payment requirements found")
@@ -1050,12 +1107,16 @@ class SolanaLLMClient:
             "PAYMENT-SIGNATURE": encoded_payment,
         }
 
-        retry_response = self._client.get(url, params=params, headers=payment_headers)
+        retry_response = self._client.get(
+            url, params=params, headers=payment_headers, timeout=eff_timeout
+        )
         if retry_response.status_code in (502, 503):
             import time
 
             time.sleep(1)
-            retry_response = self._client.get(url, params=params, headers=payment_headers)
+            retry_response = self._client.get(
+                url, params=params, headers=payment_headers, timeout=eff_timeout
+            )
 
         if retry_response.status_code == 402:
             raise build_payment_rejected_error(retry_response)
@@ -1091,7 +1152,9 @@ class SolanaLLMClient:
         base = self._api_url[: -len("/api")] if self._api_url.endswith("/api") else self._api_url
         return f"{base}{url}"
 
-    def _request_image_with_payment(self, endpoint: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    def _request_image_with_payment(
+        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
+    ) -> Dict[str, Any]:
         """Sign + submit + poll wrapper specific to image generation.
 
         Why this exists instead of reusing ``_request_with_payment_raw``:
@@ -1124,12 +1187,13 @@ class SolanaLLMClient:
 
         url = f"{self._api_url}{endpoint}"
         probe_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
+        eff_timeout = timeout if timeout is not None else self._image_timeout
 
         # Step 1: probe — expect 402 unless the model is free or cached upstream.
-        probe = self._client.post(url, json=body, headers=probe_headers)
+        probe = self._client.post(url, json=body, headers=probe_headers, timeout=eff_timeout)
         if probe.status_code in (502, 503):
             _time.sleep(1)
-            probe = self._client.post(url, json=body, headers=probe_headers)
+            probe = self._client.post(url, json=body, headers=probe_headers, timeout=eff_timeout)
 
         if probe.status_code != 402:
             if not probe.is_success:
@@ -1162,10 +1226,12 @@ class SolanaLLMClient:
         }
 
         # Step 3: submit with signature.
-        submit_resp = self._client.post(url, json=body, headers=paid_headers)
+        submit_resp = self._client.post(url, json=body, headers=paid_headers, timeout=eff_timeout)
         if submit_resp.status_code in (502, 503):
             _time.sleep(1)
-            submit_resp = self._client.post(url, json=body, headers=paid_headers)
+            submit_resp = self._client.post(
+                url, json=body, headers=paid_headers, timeout=eff_timeout
+            )
 
         if submit_resp.status_code == 402:
             raise build_payment_rejected_error(submit_resp)
@@ -1218,7 +1284,7 @@ class SolanaLLMClient:
         while _time.monotonic() < deadline:
             _time.sleep(self.IMAGE_POLL_INTERVAL_SECONDS)
 
-            poll_resp = self._client.get(poll_url, headers=poll_headers)
+            poll_resp = self._client.get(poll_url, headers=poll_headers, timeout=eff_timeout)
             try:
                 poll_data = poll_resp.json()
             except Exception:
@@ -1279,6 +1345,7 @@ class SolanaLLMClient:
         model: str = "google/nano-banana",
         size: str = "1024x1024",
         n: int = 1,
+        timeout: Optional[float] = None,
     ) -> ImageResponse:
         """Generate an image from a text prompt (Solana payment).
 
@@ -1300,7 +1367,7 @@ class SolanaLLMClient:
             "size": size,
             "n": n,
         }
-        data = self._request_image_with_payment("/v1/images/generations", body)
+        data = self._request_image_with_payment("/v1/images/generations", body, timeout=timeout)
         return ImageResponse(**data)
 
     def image_edit(
@@ -1312,6 +1379,7 @@ class SolanaLLMClient:
         mask: Optional[str] = None,
         size: str = "1024x1024",
         n: int = 1,
+        timeout: Optional[float] = None,
     ) -> ImageResponse:
         """Edit an image using img2img (Solana payment). ``image`` may be a
         single data URI or a list of 1-4 data URIs for multi-image fusion
@@ -1330,7 +1398,7 @@ class SolanaLLMClient:
         if mask is not None:
             body["mask"] = mask
 
-        data = self._request_image_with_payment("/v1/images/image2image", body)
+        data = self._request_image_with_payment("/v1/images/image2image", body, timeout=timeout)
         return ImageResponse(**data)
 
     def search(
@@ -1341,8 +1409,13 @@ class SolanaLLMClient:
         max_results: int = 10,
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> SearchResult:
-        """Standalone search (Solana payment)."""
+        """Standalone search (Solana payment).
+
+        ``timeout`` overrides the per-call HTTP timeout (defaults to
+        ``DEFAULT_SEARCH_TIMEOUT`` — deep web/X tool-use can run minutes).
+        """
         body: Dict[str, Any] = {
             "query": query,
             "max_results": max_results,
@@ -1354,7 +1427,8 @@ class SolanaLLMClient:
         if to_date is not None:
             body["to_date"] = to_date
 
-        data = self._request_with_payment_raw("/v1/search", body)
+        eff_timeout = timeout if timeout is not None else self._search_timeout
+        data = self._request_with_payment_raw("/v1/search", body, timeout=eff_timeout)
         return SearchResult(**data)
 
     def x_user_lookup(self, usernames: Union[List[str], str]) -> XUserLookupResponse:
@@ -1582,7 +1656,7 @@ class SolanaLLMClient:
 
             result = client.exa("search", {"query": "latest AI research", "numResults": 5})
         """
-        return self._request_with_payment_raw(f"/v1/exa/{path}", body)
+        return self._request_with_payment_raw(f"/v1/exa/{path}", body, timeout=self._search_timeout)
 
     def exa_search(self, query: str, **kwargs: Any) -> Dict[str, Any]:
         """Neural and keyword web search via Exa (Solana payment, $0.01/request).
@@ -1595,7 +1669,9 @@ class SolanaLLMClient:
 
             results = client.exa_search("latest AI papers", numResults=5)
         """
-        return self._request_with_payment_raw("/v1/exa/search", {"query": query, **kwargs})
+        return self._request_with_payment_raw(
+            "/v1/exa/search", {"query": query, **kwargs}, timeout=self._search_timeout
+        )
 
     def exa_find_similar(self, url: str, **kwargs: Any) -> Dict[str, Any]:
         """Find pages semantically similar to a given URL via Exa (Solana payment, $0.01/request).
@@ -1608,7 +1684,9 @@ class SolanaLLMClient:
 
             results = client.exa_find_similar("https://openai.com/research/gpt-4", numResults=5)
         """
-        return self._request_with_payment_raw("/v1/exa/find-similar", {"url": url, **kwargs})
+        return self._request_with_payment_raw(
+            "/v1/exa/find-similar", {"url": url, **kwargs}, timeout=self._search_timeout
+        )
 
     def exa_contents(self, urls: List[str], **kwargs: Any) -> Dict[str, Any]:
         """Extract full text content from URLs via Exa (Solana payment, $0.002/URL).
@@ -1621,7 +1699,9 @@ class SolanaLLMClient:
 
             data = client.exa_contents(["https://arxiv.org/abs/2303.08774"])
         """
-        return self._request_with_payment_raw("/v1/exa/contents", {"urls": urls, **kwargs})
+        return self._request_with_payment_raw(
+            "/v1/exa/contents", {"urls": urls, **kwargs}, timeout=self._search_timeout
+        )
 
     def exa_answer(self, query: str, **kwargs: Any) -> Dict[str, Any]:
         """AI-generated answer grounded in live web search via Exa (Solana payment, $0.01/request).
@@ -1634,7 +1714,9 @@ class SolanaLLMClient:
 
             answer = client.exa_answer("What is the current state of AI safety research?")
         """
-        return self._request_with_payment_raw("/v1/exa/answer", {"query": query, **kwargs})
+        return self._request_with_payment_raw(
+            "/v1/exa/answer", {"query": query, **kwargs}, timeout=self._search_timeout
+        )
 
 
 # ===========================================================================
@@ -1674,6 +1756,8 @@ class AsyncSolanaLLMClient:
         api_url: str = SOLANA_API_URL,
         rpc_url: Optional[str] = None,
         timeout: float = DEFAULT_TIMEOUT,
+        image_timeout: float = DEFAULT_IMAGE_TIMEOUT,
+        search_timeout: float = DEFAULT_SEARCH_TIMEOUT,
         rpc_headers: Optional[Dict[str, str]] = None,
         transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
     ) -> None:
@@ -1700,6 +1784,8 @@ class AsyncSolanaLLMClient:
         self._rpc_headers = resolved_headers
 
         self._timeout = timeout
+        self._image_timeout = image_timeout
+        self._search_timeout = search_timeout
         self._client = httpx.AsyncClient(timeout=timeout)
         self._session_total_usd = 0.0
         self._session_calls = 0
@@ -1803,6 +1889,7 @@ class AsyncSolanaLLMClient:
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: Optional[float] = None,
         search: bool = False,
+        timeout: Optional[float] = None,
     ) -> str:
         messages: List[Dict[str, str]] = []
         if system:
@@ -1814,6 +1901,7 @@ class AsyncSolanaLLMClient:
             max_tokens=max_tokens,
             temperature=temperature,
             search=search,
+            timeout=timeout,
         )
         return result.choices[0].message.content or ""
 
@@ -1828,6 +1916,7 @@ class AsyncSolanaLLMClient:
         search_parameters: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
+        timeout: Optional[float] = None,
     ) -> ChatResponse:
         body: Dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
@@ -1842,7 +1931,7 @@ class AsyncSolanaLLMClient:
             body["tools"] = tools
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
-        return await self._request_with_payment("/v1/chat/completions", body)
+        return await self._request_with_payment("/v1/chat/completions", body, timeout=timeout)
 
     async def list_models(self) -> List[Dict[str, Any]]:
         resp = await self._client.get(f"{self._api_url}/v1/models")
@@ -1866,6 +1955,7 @@ class AsyncSolanaLLMClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
         fallback_models: Optional[List[str]] = None,
+        timeout: Optional[float] = None,
     ) -> "AsyncSolanaIterator":
         """Async streaming. Same protocol semantics as the sync
         :meth:`SolanaLLMClient.chat_completion_stream`; only the iteration
@@ -1894,7 +1984,7 @@ class AsyncSolanaLLMClient:
 
         for i, attempt_model in enumerate(attempts):
             body["model"] = attempt_model
-            inner = self._stream_with_payment("/v1/chat/completions", body)
+            inner = self._stream_with_payment("/v1/chat/completions", body, timeout=timeout)
             chunks_yielded = 0
             try:
                 async for chunk in inner:
@@ -1920,10 +2010,12 @@ class AsyncSolanaLLMClient:
         self,
         endpoint: str,
         body: Dict[str, Any],
+        timeout: Optional[float] = None,
     ):
         """Async version of :meth:`SolanaLLMClient._stream_with_payment`."""
         url = f"{self._api_url}{endpoint}"
         req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
+        eff_timeout = timeout if timeout is not None else self._timeout
         backoffs = self._STREAM_5XX_BACKOFFS
 
         # ----- Phase 1: probe (no payment header) -----
@@ -1932,7 +2024,7 @@ class AsyncSolanaLLMClient:
 
         for attempt in range(len(backoffs) + 1):
             async with self._client.stream(
-                "POST", url, json=body, headers=req_headers, timeout=self._timeout
+                "POST", url, json=body, headers=req_headers, timeout=eff_timeout
             ) as resp1:
                 if resp1.status_code == 200:
                     async for chunk in self._aiter_sse_chunks(resp1):
@@ -1955,7 +2047,7 @@ class AsyncSolanaLLMClient:
         assert payment_headers is not None
         for attempt in range(len(backoffs) + 1):
             async with self._client.stream(
-                "POST", url, json=body, headers=payment_headers, timeout=self._timeout
+                "POST", url, json=body, headers=payment_headers, timeout=eff_timeout
             ) as resp2:
                 if resp2.status_code == 200:
                     if cost_usd > 0:
@@ -2083,19 +2175,22 @@ class AsyncSolanaLLMClient:
     # Reuse the sync class's pure helper — it doesn't touch async state.
     _raise_stream_error = SolanaLLMClient._raise_stream_error
 
-    async def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ChatResponse:
+    async def _request_with_payment(
+        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
+    ) -> ChatResponse:
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
+        eff_timeout = timeout if timeout is not None else self._timeout
 
-        response = await self._client.post(url, json=body, headers=headers)
+        response = await self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
         if response.status_code in (502, 503):
             import asyncio
 
             await asyncio.sleep(1)
-            response = await self._client.post(url, json=body, headers=headers)
+            response = await self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
-            return await self._handle_payment_and_retry(url, body, response)
+            return await self._handle_payment_and_retry(url, body, response, timeout=eff_timeout)
 
         if not response.is_success:
             try:
@@ -2110,16 +2205,25 @@ class AsyncSolanaLLMClient:
         return ChatResponse(**response.json())
 
     async def _handle_payment_and_retry(
-        self, url: str, body: Dict[str, Any], response: httpx.Response
+        self,
+        url: str,
+        body: Dict[str, Any],
+        response: httpx.Response,
+        timeout: Optional[float] = None,
     ) -> ChatResponse:
+        eff_timeout = timeout if timeout is not None else self._timeout
         payment_headers, cost_usd = await self._sign_payment_from_response(response)
 
-        retry_response = await self._client.post(url, json=body, headers=payment_headers)
+        retry_response = await self._client.post(
+            url, json=body, headers=payment_headers, timeout=eff_timeout
+        )
         if retry_response.status_code in (502, 503):
             import asyncio
 
             await asyncio.sleep(1)
-            retry_response = await self._client.post(url, json=body, headers=payment_headers)
+            retry_response = await self._client.post(
+                url, json=body, headers=payment_headers, timeout=eff_timeout
+            )
 
         if retry_response.status_code == 402:
             raise build_payment_rejected_error(retry_response)
