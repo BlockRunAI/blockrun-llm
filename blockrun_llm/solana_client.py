@@ -49,7 +49,11 @@ from .types import (
 )
 from .solana_wallet import get_solana_public_key
 from .tx_log import TransactionLogger, decode_settlement_header, _resolve_log_dir
-from .validation import validate_api_url, sanitize_error_response
+from .validation import (
+    build_payment_rejected_error,
+    sanitize_error_response,
+    validate_api_url,
+)
 
 try:
     from x402 import x402ClientSync
@@ -222,6 +226,15 @@ class SolanaLLMClient:
     """
 
     SOLANA_API_URL = SOLANA_API_URL
+
+    # Image generation slow-path polling. Models like ``openai/gpt-image-2``
+    # or ``openai/dall-e-3`` routinely exceed the gateway's 30s inline window
+    # and come back as 202 + ``poll_url`` instead of the finished image. The
+    # SDK replays the same PAYMENT-SIGNATURE on every poll; settlement only
+    # happens on the first completed poll, so a poll-loop timeout = zero
+    # spend. Budget is conservative — most upstreams finish in 1-3 min.
+    IMAGE_POLL_INTERVAL_SECONDS = 5.0
+    IMAGE_POLL_BUDGET_SECONDS = 300.0
 
     def __init__(
         self,
@@ -584,7 +597,7 @@ class SolanaLLMClient:
                     return
                 resp2.read()
                 if resp2.status_code == 402:
-                    raise PaymentError("Payment rejected. Check your Solana USDC balance.")
+                    raise build_payment_rejected_error(resp2)
                 if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
                     import time
 
@@ -777,7 +790,7 @@ class SolanaLLMClient:
             retry_response = self._client.post(url, json=body, headers=payment_headers)
 
         if retry_response.status_code == 402:
-            raise PaymentError("Payment rejected. Check your Solana USDC balance.")
+            raise build_payment_rejected_error(retry_response)
 
         if not retry_response.is_success:
             try:
@@ -885,7 +898,7 @@ class SolanaLLMClient:
             retry_response = self._client.post(url, json=body, headers=payment_headers)
 
         if retry_response.status_code == 402:
-            raise PaymentError("Payment rejected. Check your Solana USDC balance.")
+            raise build_payment_rejected_error(retry_response)
 
         if not retry_response.is_success:
             try:
@@ -978,7 +991,7 @@ class SolanaLLMClient:
             retry_response = self._client.get(url, params=params, headers=payment_headers)
 
         if retry_response.status_code == 402:
-            raise PaymentError("Payment rejected. Check your Solana USDC balance.")
+            raise build_payment_rejected_error(retry_response)
 
         if not retry_response.is_success:
             try:
@@ -999,6 +1012,205 @@ class SolanaLLMClient:
 
         return retry_response.json()
 
+    def _absolute_url(self, url: str) -> str:
+        """Resolve a server-supplied relative ``poll_url`` against the API host.
+
+        Poll URLs come back as ``/api/v1/images/generations/<id>``; our
+        configured ``api_url`` already includes the trailing ``/api`` so
+        we strip it once to avoid ``/api/api/...``.
+        """
+        if url.startswith("http://") or url.startswith("https://"):
+            return url
+        base = self._api_url[: -len("/api")] if self._api_url.endswith("/api") else self._api_url
+        return f"{base}{url}"
+
+    def _request_image_with_payment(
+        self, endpoint: str, body: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Sign + submit + poll wrapper specific to image generation.
+
+        Why this exists instead of reusing ``_request_with_payment_raw``:
+        the gateway falls back to an async ``202 + poll_url`` flow when a
+        model exceeds the 30s inline window (gpt-image-2, dall-e-3, slow
+        nano-banana-pro 4K, etc.). The raw helper treats 202 as success and
+        feeds the job-stub JSON to ``ImageResponse(**data)``, which then
+        raises a Pydantic validation error because the ``data`` field
+        isn't populated until the upstream finishes.
+
+        Flow:
+
+        1. Probe POST → expect 402 (payment required) from the gateway.
+        2. Sign the x402 SVM payload locally; resubmit with PAYMENT-SIGNATURE.
+        3. Fast path: 200 with the finished image → settle inline.
+        4. Slow path: 202 with ``{id, poll_url, status: queued}`` → loop
+           GET poll_url with the *same* PAYMENT-SIGNATURE until status =
+           ``completed``. Settlement happens on the first completed poll;
+           giving up before then costs the caller nothing.
+
+        Returns the raw response JSON from the final completed response.
+        """
+        import time as _time
+
+        from .cache import get_cached, save_to_cache
+
+        cached = get_cached(endpoint, body)
+        if cached is not None:
+            return cached
+
+        url = f"{self._api_url}{endpoint}"
+        probe_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
+
+        # Step 1: probe — expect 402 unless the model is free or cached upstream.
+        probe = self._client.post(url, json=body, headers=probe_headers)
+        if probe.status_code in (502, 503):
+            _time.sleep(1)
+            probe = self._client.post(url, json=body, headers=probe_headers)
+
+        if probe.status_code != 402:
+            if not probe.is_success:
+                try:
+                    error_body = probe.json()
+                except Exception:
+                    error_body = {"error": "Request failed"}
+                raise APIError(
+                    f"Image request: HTTP {probe.status_code}",
+                    probe.status_code,
+                    sanitize_error_response(error_body),
+                )
+            # Free / cached upstream — return whatever the gateway gave us.
+            return probe.json()
+
+        # Step 2: sign x402 SVM payload.
+        payment_header_str = self._extract_payment_header(probe)
+        if not payment_header_str:
+            raise PaymentError("402 response but no payment requirements found")
+
+        payment_required = decode_payment_required_header(payment_header_str)
+        payment_payload_obj = self._x402_client.create_payment_payload(payment_required)
+        encoded_payment = encode_payment_signature_header(payment_payload_obj)
+        cost_usd = float(payment_payload_obj.accepted.amount) / 1e6
+
+        paid_headers = {
+            "Content-Type": "application/json",
+            "User-Agent": _get_user_agent(),
+            "PAYMENT-SIGNATURE": encoded_payment,
+        }
+
+        # Step 3: submit with signature.
+        submit_resp = self._client.post(url, json=body, headers=paid_headers)
+        if submit_resp.status_code in (502, 503):
+            _time.sleep(1)
+            submit_resp = self._client.post(url, json=body, headers=paid_headers)
+
+        if submit_resp.status_code == 402:
+            raise build_payment_rejected_error(submit_resp)
+
+        if submit_resp.status_code == 200:
+            # Fast path — image was produced inline.
+            self._session_calls += 1
+            self._session_total_usd += cost_usd
+            self._last_call_cost = cost_usd
+            self._capture_settlement(submit_resp)
+            data = submit_resp.json()
+            save_to_cache(
+                endpoint, body, data, cost_usd=cost_usd, **self._billing_meta()
+            )
+            self._log_transaction(endpoint, body, data, cost_usd)
+            return data
+
+        if submit_resp.status_code != 202:
+            try:
+                error_body = submit_resp.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"Image request after payment: HTTP {submit_resp.status_code}",
+                submit_resp.status_code,
+                sanitize_error_response(error_body),
+            )
+
+        # Step 4: slow path — poll until completed (or budget exhausted).
+        try:
+            submit_data = submit_resp.json()
+        except Exception:
+            submit_data = {}
+
+        poll_url_rel = submit_data.get("poll_url")
+        job_id = submit_data.get("id")
+        if not poll_url_rel:
+            raise APIError(
+                "Slow-path 202 missing poll_url",
+                202,
+                {"response": submit_data},
+            )
+        poll_url = self._absolute_url(poll_url_rel)
+        poll_headers = {
+            "User-Agent": _get_user_agent(),
+            "PAYMENT-SIGNATURE": encoded_payment,
+        }
+
+        deadline = _time.monotonic() + self.IMAGE_POLL_BUDGET_SECONDS
+        last_status = submit_data.get("status", "queued")
+
+        while _time.monotonic() < deadline:
+            _time.sleep(self.IMAGE_POLL_INTERVAL_SECONDS)
+
+            poll_resp = self._client.get(poll_url, headers=poll_headers)
+            try:
+                poll_data = poll_resp.json()
+            except Exception:
+                poll_data = {}
+            last_status = poll_data.get("status", last_status)
+
+            if poll_resp.status_code == 402:
+                # Settlement failed on this poll — surface the gateway reason.
+                raise build_payment_rejected_error(poll_resp)
+
+            if last_status == "failed":
+                raise APIError(
+                    f"Image generation failed upstream: {poll_data.get('error', 'unknown')}",
+                    poll_resp.status_code,
+                    sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
+                )
+
+            if poll_resp.status_code == 200 and last_status == "completed":
+                self._session_calls += 1
+                self._session_total_usd += cost_usd
+                self._last_call_cost = cost_usd
+                self._capture_settlement(poll_resp)
+                save_to_cache(
+                    endpoint, body, poll_data, cost_usd=cost_usd, **self._billing_meta()
+                )
+                self._log_transaction(endpoint, body, poll_data, cost_usd)
+                return poll_data
+
+            if poll_resp.status_code in (202, 504):
+                # 202 = still queued/in_progress; 504 = transient upstream
+                # hiccup. Both are retriable inside the budget.
+                continue
+
+            if poll_resp.status_code != 200:
+                try:
+                    error_body = poll_resp.json()
+                except Exception:
+                    error_body = {"error": "Request failed"}
+                raise APIError(
+                    f"Image poll failed: HTTP {poll_resp.status_code}",
+                    poll_resp.status_code,
+                    sanitize_error_response(error_body),
+                )
+
+        raise APIError(
+            (
+                f"Image generation did not complete within "
+                f"{self.IMAGE_POLL_BUDGET_SECONDS:.0f}s "
+                f"(last status: {last_status}). Settlement only happens on "
+                "completion, so no payment was taken."
+            ),
+            504,
+            {"id": job_id, "last_status": last_status},
+        )
+
     def image(
         self,
         prompt: str,
@@ -1014,6 +1226,12 @@ class SolanaLLMClient:
         ``openai/dall-e-3``, ``openai/gpt-image-1``, ``openai/gpt-image-2``,
         ``zai/cogview-4``, ``xai/grok-imagine-image``,
         ``xai/grok-imagine-image-pro``, ``black-forest/flux-1.1-pro``.
+
+        Slow models (gpt-image-2, dall-e-3) trigger the gateway's async
+        202 + poll flow; the client polls transparently until completion
+        and only settles on the final completed poll. If the poll budget
+        (``IMAGE_POLL_BUDGET_SECONDS``, 5 min) is exhausted, an
+        :class:`APIError` 504 is raised and **no payment is taken**.
         """
         body: Dict[str, Any] = {
             "model": model,
@@ -1021,7 +1239,7 @@ class SolanaLLMClient:
             "size": size,
             "n": n,
         }
-        data = self._request_with_payment_raw("/v1/images/generations", body)
+        data = self._request_image_with_payment("/v1/images/generations", body)
         return ImageResponse(**data)
 
     def image_edit(
@@ -1036,7 +1254,11 @@ class SolanaLLMClient:
     ) -> ImageResponse:
         """Edit an image using img2img (Solana payment). ``image`` may be a
         single data URI or a list of 1-4 data URIs for multi-image fusion
-        (openai/* up to 4, google/* up to 3)."""
+        (openai/* up to 4, google/* up to 3).
+
+        Like :meth:`image`, this handles the gateway's async 202 + poll
+        slow path transparently — settlement only happens on completion.
+        """
         body: Dict[str, Any] = {
             "model": model,
             "prompt": prompt,
@@ -1047,7 +1269,7 @@ class SolanaLLMClient:
         if mask is not None:
             body["mask"] = mask
 
-        data = self._request_with_payment_raw("/v1/images/image2image", body)
+        data = self._request_image_with_payment("/v1/images/image2image", body)
         return ImageResponse(**data)
 
     def search(
@@ -1685,7 +1907,7 @@ class AsyncSolanaLLMClient:
                     return
                 await resp2.aread()
                 if resp2.status_code == 402:
-                    raise PaymentError("Payment rejected. Check your Solana USDC balance.")
+                    raise build_payment_rejected_error(resp2)
                 if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
                     import asyncio
 
@@ -1839,7 +2061,7 @@ class AsyncSolanaLLMClient:
             retry_response = await self._client.post(url, json=body, headers=payment_headers)
 
         if retry_response.status_code == 402:
-            raise PaymentError("Payment rejected. Check your Solana USDC balance.")
+            raise build_payment_rejected_error(retry_response)
         if not retry_response.is_success:
             try:
                 error_body = retry_response.json()

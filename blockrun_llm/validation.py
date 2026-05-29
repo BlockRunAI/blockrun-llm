@@ -194,6 +194,50 @@ def validate_api_url(url: str) -> None:
         )
 
 
+def build_payment_rejected_error(response: Any) -> "PaymentError":
+    """Translate a 402 retry response into a :class:`PaymentError` that
+    preserves the gateway's original failure reason.
+
+    Without this helper, clients used to throw a generic
+    ``"Payment rejected. Check your wallet balance."`` and the real
+    facilitator reason (e.g. ``transaction_simulation_failed``,
+    ``insufficient_funds``) was lost.
+
+    The gateway's ``details`` field on a 402 settlement-failed response
+    is the x402 facilitator's well-defined error enum — safe to surface
+    verbatim. We bound the length defensively in case a future server
+    bug widens the field.
+
+    Args:
+        response: An ``httpx.Response`` with status 402 from a paid
+            retry. Anything with a ``.json()`` method works for tests.
+
+    Returns:
+        A :class:`PaymentError` carrying ``status_code=402`` and a
+        ``response`` dict that includes the gateway's ``details``.
+    """
+    # Local import to avoid a circular module dependency at import time.
+    from .types import PaymentError
+
+    try:
+        body = response.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    sanitized = dict(sanitize_error_response(body))
+    raw_details = body.get("details")
+    if isinstance(raw_details, str) and 0 < len(raw_details) < 256:
+        sanitized["details"] = raw_details
+    detail_part = sanitized.get("details") or sanitized.get("message") or ""
+    msg = (
+        f"Payment rejected by gateway: {detail_part}"
+        if detail_part
+        else "Payment rejected by gateway"
+    )
+    return PaymentError(msg, status_code=402, response=sanitized)
+
+
 def sanitize_error_response(error_body: Any) -> Dict[str, Any]:
     """
     Sanitize API error responses to prevent information leakage.
