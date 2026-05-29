@@ -1024,9 +1024,7 @@ class SolanaLLMClient:
         base = self._api_url[: -len("/api")] if self._api_url.endswith("/api") else self._api_url
         return f"{base}{url}"
 
-    def _request_image_with_payment(
-        self, endpoint: str, body: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _request_image_with_payment(self, endpoint: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """Sign + submit + poll wrapper specific to image generation.
 
         Why this exists instead of reusing ``_request_with_payment_raw``:
@@ -1112,9 +1110,7 @@ class SolanaLLMClient:
             self._last_call_cost = cost_usd
             self._capture_settlement(submit_resp)
             data = submit_resp.json()
-            save_to_cache(
-                endpoint, body, data, cost_usd=cost_usd, **self._billing_meta()
-            )
+            save_to_cache(endpoint, body, data, cost_usd=cost_usd, **self._billing_meta())
             self._log_transaction(endpoint, body, data, cost_usd)
             return data
 
@@ -1178,9 +1174,7 @@ class SolanaLLMClient:
                 self._session_total_usd += cost_usd
                 self._last_call_cost = cost_usd
                 self._capture_settlement(poll_resp)
-                save_to_cache(
-                    endpoint, body, poll_data, cost_usd=cost_usd, **self._billing_meta()
-                )
+                save_to_cache(endpoint, body, poll_data, cost_usd=cost_usd, **self._billing_meta())
                 self._log_transaction(endpoint, body, poll_data, cost_usd)
                 return poll_data
 

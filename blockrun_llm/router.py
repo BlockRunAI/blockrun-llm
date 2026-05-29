@@ -309,11 +309,12 @@ PREMIUM_TIERS: Dict[Tier, TierConfig] = {
         "fallback": ["openai/gpt-5.4", "google/gemini-2.5-pro", "anthropic/claude-sonnet-4.6"],
     },
     "COMPLEX": {
-        # claude-opus-4.7 (1M context, agentic coding + adaptive thinking) is
-        # Anthropic's strongest current Claude. opus-4.5 retained as fallback
-        # for clients pricing-pinned to it.
-        "primary": "anthropic/claude-opus-4.7",
+        # claude-opus-4.8 (1M context, agentic coding + adaptive thinking) is
+        # Anthropic's strongest current Claude. opus-4.7/4.5 retained as
+        # fallbacks for clients pricing-pinned to them.
+        "primary": "anthropic/claude-opus-4.8",
         "fallback": [
+            "anthropic/claude-opus-4.7",
             "anthropic/claude-opus-4.5",
             "openai/gpt-5.2-pro",
             "google/gemini-3.1-pro",
@@ -322,7 +323,7 @@ PREMIUM_TIERS: Dict[Tier, TierConfig] = {
     },
     "REASONING": {
         "primary": "openai/o3",
-        "fallback": ["openai/o1", "anthropic/claude-opus-4.7"],
+        "fallback": ["openai/o1", "anthropic/claude-opus-4.8"],
     },
 }
 

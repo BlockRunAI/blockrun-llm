@@ -2,6 +2,16 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.33.0 — 2026-05-29
+
+### Added
+- **`anthropic/claude-opus-4.8`** ($5/$25 per M, 1M context, 128K output,
+  agentic coding + adaptive thinking) — Anthropic's most capable Claude.
+  Promoted to `PREMIUM_TIERS["COMPLEX"]` primary; opus-4.7 and opus-4.5
+  retained as fallbacks. Also replaces opus-4.7 in the
+  `PREMIUM_TIERS["REASONING"]` fallback chain. Added to the README pricing
+  table and `examples/sweep_all_chat_models.py`.
+
 ## 0.32.0 — 2026-05-28
 
 ### Fixed
