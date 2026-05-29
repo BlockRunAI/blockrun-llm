@@ -2,6 +2,87 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.34.0 — 2026-05-29
+
+### Fixed
+
+- **`SolanaLLMClient` no longer truncates long chats and slow images at 60s.**
+  The historical flat `DEFAULT_TIMEOUT = 60.0` applied to every method
+  on the mega-class — chat, image, music, search, X, exa, pyth — while
+  the Base SDK splits the same surface across per-use-case clients
+  (`LLMClient=120s`, `ImageClient=200s`, `MusicClient=210s`,
+  `VideoClient=360s`). Long chats with high `max_tokens`, slow image
+  generations, and deep search queries were silently dying inside the
+  SDK at 60s. Raises the flat `DEFAULT_TIMEOUT` to `120.0` (matches
+  Base chat) and introduces per-use-case constants
+  (`DEFAULT_CHAT_TIMEOUT`, `DEFAULT_IMAGE_TIMEOUT`,
+  `DEFAULT_SEARCH_TIMEOUT`, `DEFAULT_FAST_TIMEOUT`). Each request now
+  carries the timeout for its *workload* rather than the single client
+  default: `image()` / `image_edit()` use `DEFAULT_IMAGE_TIMEOUT` (200s),
+  `search()` and the `exa_*` methods use `DEFAULT_SEARCH_TIMEOUT` (300s),
+  and chat uses the 120s baseline — sync **and** async. Closes #7.
+- **`solana_key_to_bytes()` now wraps every failure in the documented
+  `ValueError("Invalid Solana private key: …")`.** A bare
+  `except ValueError: raise` used to let modern `base58`'s raw
+  "Invalid character" error escape past the wrapper, so callers (and the
+  `test_invalid_key_raises` test) matching on the documented message
+  broke. All decode failures are now wrapped consistently.
+- **`transaction_simulation_failed` no longer wastes 5+ minutes on
+  pointless retries.** Adds a `_PERMANENT_PAYMENT_PATTERNS` table
+  mirroring the gateway-side `blockrun-sol/src/lib/x402-solana.ts`
+  `PERMANENT_ERRORS` classification. `_should_fallback_solana` now
+  short-circuits when the exception's reason matches a permanent
+  pattern — even when the exception type itself is "transient"
+  (`httpx.Timeout`, `httpx.NetworkError`). Worst-case wall-clock for
+  a deterministic Solana settlement failure drops from ~5min
+  (3 generation attempts) to one attempt's worth. Closes #6.
+
+### Added
+
+- New module-level helpers:
+  - `_is_permanent_payment_error(reason: str) -> bool` — case-insensitive
+    substring match against the permanent classification, used by both
+    the streaming fallback decision and any future retry classifier so
+    one policy applies everywhere.
+  - `DEFAULT_CHAT_TIMEOUT`, `DEFAULT_IMAGE_TIMEOUT`,
+    `DEFAULT_SEARCH_TIMEOUT`, `DEFAULT_FAST_TIMEOUT` constants
+    (importable from `blockrun_llm.solana_client`) so callers can use
+    the same numbers as the SDK does.
+
+### Added
+
+- **Per-call `timeout=` override on every long-running public method**
+  (level 2 of #7) — `chat`, `chat_completion`, `chat_completion_stream`,
+  `image`, `image_edit`, `search`, sync and async. The kwarg wins over
+  the per-use-case default and the constructor value, so a single
+  oversized request can raise (or tighten) its own budget without
+  reconfiguring the client:
+
+  ```python
+  client.chat_completion(model, messages, max_tokens=8192, timeout=240)
+  client.image("...", model="openai/gpt-image-2", timeout=300)
+  ```
+- **`image_timeout` / `search_timeout` constructor parameters** on both
+  `SolanaLLMClient` and `AsyncSolanaLLMClient` (defaulting to
+  `DEFAULT_IMAGE_TIMEOUT` / `DEFAULT_SEARCH_TIMEOUT`) — mirrors the
+  per-client tuning the Base SDK gets from separate `ImageClient` /
+  search-aware `LLMClient` classes.
+
+### Changed
+
+- **`SolanaLLMClient(..., timeout=<float>)` still works**, but the
+  default value of the constructor parameter is now
+  `DEFAULT_CHAT_TIMEOUT` (120s) instead of the old 60s, and it governs
+  the **chat** baseline specifically; image and search read from their
+  own constructor parameters / constants. Callers passing an explicit
+  value are unaffected.
+
+### Notes
+
+- 18 Base SDK clients still emit the generic
+  `PaymentError("Payment was rejected. Check your wallet balance.")` —
+  see the v0.32.0 follow-up note. Tracked separately.
+
 ## 0.33.0 — 2026-05-29
 
 ### Added
