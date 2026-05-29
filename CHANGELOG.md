@@ -2,6 +2,49 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.32.0 — 2026-05-28
+
+### Fixed
+- **Image generation 202 + poll slow path** now handled transparently in both
+  `ImageClient.generate()` / `.edit()` (Base) and `SolanaLLMClient.image()` /
+  `.image_edit()` (Solana). Slow models (`openai/gpt-image-2`,
+  `openai/dall-e-3`, `google/nano-banana-pro` at 4K, etc.) routinely exceed the
+  gateway's 30s inline window and come back as `202` + `poll_url` instead of
+  the finished image. The Solana path used to pass the job stub straight to
+  `ImageResponse(**data)` and crash with a Pydantic ValidationError ("missing
+  field `data`"); the Base path raised a confusing `APIError 202`. Both now
+  poll the same `poll_url` with the same PAYMENT-SIGNATURE on `IMAGE_POLL_INTERVAL_SECONDS`
+  (5s default) until `status: completed`, then return the parsed `ImageResponse`.
+  Settlement only happens on the completed poll, so timing out the budget
+  (`IMAGE_POLL_BUDGET_SECONDS`, 300s default) raises `APIError 504` and **no
+  payment is taken**.
+- **PaymentError now preserves the gateway's real failure reason.** On a 402
+  retry response, the SDK used to raise a generic
+  `"Payment rejected. Check your Solana USDC balance."` — losing the
+  facilitator's actual reason (`transaction_simulation_failed`,
+  `insufficient_funds`, `payment_expired`, etc.). The new
+  `PaymentError(message, *, status_code=..., response=...)` keyword args
+  carry the gateway body so callers and upstream proxies can surface the
+  real reason. All four `SolanaLLMClient` retry paths (sync raw, sync get,
+  sync stream, async post, async stream) and the Base `ImageClient` retry
+  use the shared `validation.build_payment_rejected_error` helper.
+
+### Changed
+- **`PaymentError` constructor is now keyword-extended.** Existing
+  `PaymentError("...")` calls are unchanged. The two new optional kwargs are
+  `status_code: Optional[int]` and `response: Optional[dict]`.
+
+### Notes for sidecar / proxy authors
+- `blockrun-litellm >= 0.3.9` surfaces `PaymentError.response.details` on
+  the 402 HTTP body. If you wrap `PaymentError` yourself, pull
+  `exc.response.get("details")` for the structured facilitator reason.
+- Follow-up: 18 other Base SDK clients (`client.py`, `phone.py`,
+  `realface.py`, `surf.py`, `voice.py`, etc.) still inline the legacy
+  `raise PaymentError("Payment was rejected. Check your wallet balance.")`
+  pattern. They should migrate to `build_payment_rejected_error` in a
+  follow-up PR — not blocking, but customers debugging settlement
+  failures on those endpoints still lose context until then.
+
 ## 0.31.0 — 2026-05-27
 
 ### Added

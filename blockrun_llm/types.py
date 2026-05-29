@@ -182,9 +182,24 @@ class BlockrunError(Exception):
 
 
 class PaymentError(BlockrunError):
-    """Payment-related error."""
+    """Payment-related error.
 
-    pass
+    Optionally carries ``status_code`` and ``response`` so callers and
+    upstream proxies can surface the gateway's real failure reason
+    (e.g. a Solana facilitator ``transaction_simulation_failed``)
+    instead of seeing only a generic SDK message.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        response: Optional[dict] = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.response = response
 
 
 class APIError(BlockrunError):

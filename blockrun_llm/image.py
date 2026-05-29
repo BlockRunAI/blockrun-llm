@@ -35,9 +35,10 @@ from dotenv import load_dotenv
 from .types import ImageResponse, APIError, PaymentError
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
 from .validation import (
-    validate_private_key,
-    validate_api_url,
+    build_payment_rejected_error,
     sanitize_error_response,
+    validate_api_url,
+    validate_private_key,
     validate_resource_url,
 )
 
@@ -58,6 +59,15 @@ class ImageClient:
     DEFAULT_API_URL = "https://blockrun.ai/api"
     DEFAULT_MODEL = "google/nano-banana"
     DEFAULT_SIZE = "1024x1024"
+
+    # Image generation slow-path polling. Models like ``openai/gpt-image-2``
+    # and ``openai/dall-e-3`` routinely exceed the gateway's 30s inline
+    # window and come back as ``202 + poll_url`` instead of the finished
+    # image. The client replays the same PAYMENT-SIGNATURE on every poll;
+    # settlement only happens on the first completed poll, so giving up
+    # before then costs the caller nothing.
+    IMAGE_POLL_INTERVAL_SECONDS = 5.0
+    IMAGE_POLL_BUDGET_SECONDS = 300.0
 
     def __init__(
         self,
@@ -305,20 +315,121 @@ class ImageClient:
 
         # Check for errors
         if retry_response.status_code == 402:
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise build_payment_rejected_error(retry_response)
 
-        if retry_response.status_code != 200:
-            try:
-                error_body = retry_response.json()
-            except Exception:
-                error_body = {"error": "Request failed"}
+        if retry_response.status_code == 200:
+            return ImageResponse(**retry_response.json())
+
+        if retry_response.status_code == 202:
+            # Slow-path async flow — gateway returned a job stub with a
+            # poll_url. Replay the same signature on each poll until the
+            # upstream finishes; settlement happens on the completed poll.
+            return self._poll_until_completed(retry_response, payment_payload)
+
+        try:
+            error_body = retry_response.json()
+        except Exception:
+            error_body = {"error": "Request failed"}
+        raise APIError(
+            f"API error after payment: {retry_response.status_code}",
+            retry_response.status_code,
+            sanitize_error_response(error_body),
+        )
+
+    def _absolute_url(self, url: str) -> str:
+        """Resolve a relative ``poll_url`` against the configured API host.
+
+        Server-returned poll URLs look like ``/api/v1/images/generations/<id>``;
+        our ``self.api_url`` already ends with ``/api`` so we strip it once
+        to avoid double-prefixing.
+        """
+        if url.startswith("http://") or url.startswith("https://"):
+            return url
+        base = self.api_url[: -len("/api")] if self.api_url.endswith("/api") else self.api_url
+        return f"{base}{url}"
+
+    def _poll_until_completed(
+        self,
+        submit_resp: httpx.Response,
+        payment_payload: str,
+    ) -> ImageResponse:
+        """Poll the gateway's ``poll_url`` with the same PAYMENT-SIGNATURE
+        until the upstream returns the finished image.
+
+        Settlement happens on the first ``status=completed`` poll, so
+        timeout = no spend. Returns the parsed :class:`ImageResponse`.
+        """
+        import time as _time
+
+        try:
+            submit_data = submit_resp.json()
+        except Exception:
+            submit_data = {}
+
+        poll_url_rel = submit_data.get("poll_url")
+        job_id = submit_data.get("id")
+        if not poll_url_rel:
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
-                retry_response.status_code,
-                sanitize_error_response(error_body),
+                "Slow-path 202 missing poll_url",
+                202,
+                {"response": submit_data},
             )
 
-        return ImageResponse(**retry_response.json())
+        poll_url = self._absolute_url(poll_url_rel)
+        poll_headers = {"PAYMENT-SIGNATURE": payment_payload}
+        deadline = _time.monotonic() + self.IMAGE_POLL_BUDGET_SECONDS
+        last_status = submit_data.get("status", "queued")
+
+        while _time.monotonic() < deadline:
+            _time.sleep(self.IMAGE_POLL_INTERVAL_SECONDS)
+
+            poll_resp = self._client.get(poll_url, headers=poll_headers)
+            try:
+                poll_data = poll_resp.json()
+            except Exception:
+                poll_data = {}
+            last_status = poll_data.get("status", last_status)
+
+            if poll_resp.status_code == 402:
+                # Settlement failed on this poll — surface the gateway reason.
+                raise build_payment_rejected_error(poll_resp)
+
+            if last_status == "failed":
+                raise APIError(
+                    f"Image generation failed upstream: {poll_data.get('error', 'unknown')}",
+                    poll_resp.status_code,
+                    sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
+                )
+
+            if poll_resp.status_code == 200 and last_status == "completed":
+                return ImageResponse(**poll_data)
+
+            if poll_resp.status_code in (202, 504):
+                # 202 = still queued/in_progress; 504 = transient upstream
+                # hiccup. Both retriable inside the budget.
+                continue
+
+            if poll_resp.status_code != 200:
+                try:
+                    error_body = poll_resp.json()
+                except Exception:
+                    error_body = {"error": "Request failed"}
+                raise APIError(
+                    f"Image poll failed: HTTP {poll_resp.status_code}",
+                    poll_resp.status_code,
+                    sanitize_error_response(error_body),
+                )
+
+        raise APIError(
+            (
+                f"Image generation did not complete within "
+                f"{self.IMAGE_POLL_BUDGET_SECONDS:.0f}s "
+                f"(last status: {last_status}). Settlement only happens on "
+                "completion, so no payment was taken."
+            ),
+            504,
+            {"id": job_id, "last_status": last_status},
+        )
 
     def get_wallet_address(self) -> str:
         """Get the wallet address being used for payments."""
