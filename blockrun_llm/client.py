@@ -471,6 +471,8 @@ class LLMClient:
         temperature: Optional[float] = None,
         search: Optional[bool] = None,
         search_parameters: Optional[Dict[str, Any]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
     ) -> str:
         """
@@ -517,6 +519,8 @@ class LLMClient:
             temperature=temperature,
             search=search,
             search_parameters=search_parameters,
+            response_format=response_format,
+            stop=stop,
             fallback_models=fallback_models,
         )
 
@@ -534,6 +538,8 @@ class LLMClient:
         search_parameters: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
     ) -> ChatResponse:
         """
@@ -549,6 +555,12 @@ class LLMClient:
             search_parameters: Full xAI Live Search configuration (for search-enabled models)
             tools: List of tool definitions for function calling
             tool_choice: Tool selection strategy ("none", "auto", "required", or specific tool)
+            response_format: OpenAI response format, e.g. {"type": "json_object"} for JSON mode.
+                Works across all providers — the gateway natively forwards it to OpenAI/Azure
+                and injects a raw-JSON system instruction (stripping any code fence) for
+                Anthropic/Bedrock models.
+            stop: Up to 4 stop sequences (str or list of str). The gateway forwards these
+                natively to OpenAI and maps them to stop_sequences for Anthropic/Bedrock.
 
         Returns:
             ChatResponse object with choices, usage, and citations (if search enabled)
@@ -622,6 +634,12 @@ class LLMClient:
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
 
+        # OpenAI-compatible response shaping (honored by the gateway across providers)
+        if response_format is not None:
+            body["response_format"] = response_format
+        if stop is not None:
+            body["stop"] = stop
+
         # Walk [model, *fallback_models] on retriable errors (timeouts, 5xx,
         # network errors). Default behavior — single attempt — is preserved
         # when fallback_models is None or empty.
@@ -661,6 +679,8 @@ class LLMClient:
         tool_choice: Optional[Any] = None,
         search: Optional[bool] = None,
         search_parameters: Optional[Dict[str, Any]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
     ) -> Iterator[ChatCompletionChunk]:
         """
@@ -724,6 +744,10 @@ class LLMClient:
             body["search_parameters"] = search_parameters
         elif search is True:
             body["search_parameters"] = {"mode": "on"}
+        if response_format is not None:
+            body["response_format"] = response_format
+        if stop is not None:
+            body["stop"] = stop
 
         attempts = [model, *(fallback_models or [])]
         last_exc: Optional[Exception] = None
@@ -2355,6 +2379,8 @@ class AsyncLLMClient:
         temperature: Optional[float] = None,
         search: Optional[bool] = None,
         search_parameters: Optional[Dict[str, Any]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
     ) -> str:
         """Async 1-line chat interface with optional xAI Live Search."""
@@ -2372,6 +2398,8 @@ class AsyncLLMClient:
             temperature=temperature,
             search=search,
             search_parameters=search_parameters,
+            response_format=response_format,
+            stop=stop,
             fallback_models=fallback_models,
         )
 
@@ -2389,6 +2417,8 @@ class AsyncLLMClient:
         search_parameters: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
     ) -> ChatResponse:
         """Async full chat completion interface with optional xAI Live Search and tool calling."""
@@ -2421,6 +2451,12 @@ class AsyncLLMClient:
             body["tools"] = tools
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
+
+        # OpenAI-compatible response shaping (honored by the gateway across providers)
+        if response_format is not None:
+            body["response_format"] = response_format
+        if stop is not None:
+            body["stop"] = stop
 
         # Walk [model, *fallback_models] on retriable errors. See sync
         # chat_completion() above for the rationale.
@@ -2459,6 +2495,8 @@ class AsyncLLMClient:
         tool_choice: Optional[Any] = None,
         search: Optional[bool] = None,
         search_parameters: Optional[Dict[str, Any]] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
     ) -> AsyncIterator[ChatCompletionChunk]:
         """
@@ -2489,6 +2527,10 @@ class AsyncLLMClient:
             body["search_parameters"] = search_parameters
         elif search is True:
             body["search_parameters"] = {"mode": "on"}
+        if response_format is not None:
+            body["response_format"] = response_format
+        if stop is not None:
+            body["stop"] = stop
 
         attempts = [model, *(fallback_models or [])]
         last_exc: Optional[Exception] = None

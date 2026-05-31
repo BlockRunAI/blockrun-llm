@@ -200,6 +200,12 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 | `openai/gpt-5.2-pro` | $21.00/M | $168.00/M | 400K |
 | `openai/gpt-5.3-codex` | $1.75/M | $14.00/M | 400K |
 
+### OpenAI GPT-4o Family
+| Model | Input Price | Output Price | Context |
+|-------|-------------|--------------|---------|
+| `openai/gpt-4o` | $2.50/M | $10.00/M | 128K |
+| `openai/gpt-4o-mini` | $0.15/M | $0.60/M | 128K |
+
 ### OpenAI O-Series (Reasoning)
 | Model | Input Price | Output Price | Context |
 |-------|-------------|--------------|---------|
@@ -794,6 +800,35 @@ response = client.chat(
     "Write a haiku",
     system="You are a creative poet."
 )
+```
+
+### JSON Mode & Stop Sequences
+
+`response_format` and `stop` are OpenAI-compatible and honored across **all** providers by
+the gateway — native for OpenAI/Azure, and emulated for Anthropic/Bedrock (a raw-JSON system
+instruction with code-fence stripping for JSON mode, `stop` mapped to `stop_sequences`).
+
+```python
+import json
+from blockrun_llm import LLMClient
+
+client = LLMClient()
+
+# JSON mode — guaranteed parseable JSON, no markdown fences
+response = client.chat(
+    "openai/gpt-4o",
+    "List 3 primary colors as a JSON array under key 'colors'.",
+    response_format={"type": "json_object"},
+)
+print(json.loads(response))  # {'colors': ['red', 'green', 'blue']}
+
+# Stop sequences (str or list, up to 4)
+result = client.chat_completion(
+    "openai/gpt-5.2",
+    [{"role": "user", "content": "Count: Alpha Beta Gamma"}],
+    stop=["Beta"],
+)
+print(result.choices[0].message.content)  # "Count: Alpha "
 ```
 
 ### Real-time Search (Live Search)

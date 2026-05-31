@@ -2,6 +2,21 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.35.0 — 2026-05-31
+
+### Added
+
+- **`response_format` (JSON mode) and `stop` sequences on chat.** The gateway
+  now honors both OpenAI params on `/v1/chat/completions` — natively for
+  OpenAI/Azure, and emulated for Anthropic/Bedrock (a raw-JSON system
+  instruction with code-fence stripping for `{"type": "json_object"}`; `stop`
+  mapped to `stop_sequences`). Threaded through `chat`, `chat_completion`, and
+  `chat_completion_stream` on both `LLMClient` and `SolanaLLMClient` (sync and
+  async). Example: `client.chat("openai/gpt-4o", "...", response_format={"type": "json_object"})`.
+- **Genuine `openai/gpt-4o` and `openai/gpt-4o-mini`** documented in the README
+  pricing table (gpt-4o $2.50/$10.00 · 128K; gpt-4o-mini $0.15/$0.60 · 128K).
+  The gateway no longer substitutes gpt-5.x for these IDs.
+
 ## 0.34.0 — 2026-05-29
 
 ### Fixed
