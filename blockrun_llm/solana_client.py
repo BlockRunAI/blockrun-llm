@@ -461,6 +461,8 @@ class SolanaLLMClient:
         temperature: Optional[float] = None,
         search: bool = False,
         timeout: Optional[float] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        stop: Optional[Union[str, List[str]]] = None,
     ) -> str:
         """Simple 1-line chat."""
         messages: List[Dict[str, str]] = []
@@ -474,6 +476,8 @@ class SolanaLLMClient:
             temperature=temperature,
             search=search,
             timeout=timeout,
+            response_format=response_format,
+            stop=stop,
         )
         return result.choices[0].message.content or ""
 
@@ -489,6 +493,8 @@ class SolanaLLMClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
         timeout: Optional[float] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        stop: Optional[Union[str, List[str]]] = None,
     ) -> ChatResponse:
         """Full chat completion (OpenAI-compatible).
 
@@ -514,6 +520,10 @@ class SolanaLLMClient:
             body["tools"] = tools
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
+        if response_format is not None:
+            body["response_format"] = response_format
+        if stop is not None:
+            body["stop"] = stop
         return self._request_with_payment("/v1/chat/completions", body, timeout=timeout)
 
     def close(self) -> None:
@@ -562,6 +572,8 @@ class SolanaLLMClient:
         search_parameters: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
         timeout: Optional[float] = None,
     ) -> Iterator[ChatCompletionChunk]:
@@ -604,6 +616,10 @@ class SolanaLLMClient:
             body["tools"] = tools
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
+        if response_format is not None:
+            body["response_format"] = response_format
+        if stop is not None:
+            body["stop"] = stop
 
         attempts = [model, *(fallback_models or [])]
         last_exc: Optional[Exception] = None
@@ -1890,6 +1906,8 @@ class AsyncSolanaLLMClient:
         temperature: Optional[float] = None,
         search: bool = False,
         timeout: Optional[float] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        stop: Optional[Union[str, List[str]]] = None,
     ) -> str:
         messages: List[Dict[str, str]] = []
         if system:
@@ -1902,6 +1920,8 @@ class AsyncSolanaLLMClient:
             temperature=temperature,
             search=search,
             timeout=timeout,
+            response_format=response_format,
+            stop=stop,
         )
         return result.choices[0].message.content or ""
 
@@ -1917,6 +1937,8 @@ class AsyncSolanaLLMClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
         timeout: Optional[float] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        stop: Optional[Union[str, List[str]]] = None,
     ) -> ChatResponse:
         body: Dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
@@ -1931,6 +1953,10 @@ class AsyncSolanaLLMClient:
             body["tools"] = tools
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
+        if response_format is not None:
+            body["response_format"] = response_format
+        if stop is not None:
+            body["stop"] = stop
         return await self._request_with_payment("/v1/chat/completions", body, timeout=timeout)
 
     async def list_models(self) -> List[Dict[str, Any]]:
@@ -1954,6 +1980,8 @@ class AsyncSolanaLLMClient:
         search_parameters: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+        stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
         timeout: Optional[float] = None,
     ) -> "AsyncSolanaIterator":
@@ -1978,6 +2006,10 @@ class AsyncSolanaLLMClient:
             body["tools"] = tools
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
+        if response_format is not None:
+            body["response_format"] = response_format
+        if stop is not None:
+            body["stop"] = stop
 
         attempts = [model, *(fallback_models or [])]
         last_exc: Optional[Exception] = None
