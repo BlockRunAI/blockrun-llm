@@ -474,6 +474,7 @@ class LLMClient:
         response_format: Optional[Dict[str, Any]] = None,
         stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
+        **extra: Any,
     ) -> str:
         """
         Simple 1-line chat interface.
@@ -522,6 +523,7 @@ class LLMClient:
             response_format=response_format,
             stop=stop,
             fallback_models=fallback_models,
+            **extra,
         )
 
         return result.choices[0].message.content
@@ -541,6 +543,7 @@ class LLMClient:
         response_format: Optional[Dict[str, Any]] = None,
         stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
+        **extra: Any,
     ) -> ChatResponse:
         """
         Full chat completion interface (OpenAI-compatible).
@@ -640,6 +643,12 @@ class LLMClient:
         if stop is not None:
             body["stop"] = stop
 
+        # Passthrough: forward any other caller-supplied params verbatim. Named
+        # params above take precedence; `extra` only fills keys not already set.
+        for k, v in extra.items():
+            if v is not None:
+                body.setdefault(k, v)
+
         # Walk [model, *fallback_models] on retriable errors (timeouts, 5xx,
         # network errors). Default behavior — single attempt — is preserved
         # when fallback_models is None or empty.
@@ -682,6 +691,7 @@ class LLMClient:
         response_format: Optional[Dict[str, Any]] = None,
         stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
+        **extra: Any,
     ) -> Iterator[ChatCompletionChunk]:
         """
         Stream a chat completion via Server-Sent Events.
@@ -748,6 +758,11 @@ class LLMClient:
             body["response_format"] = response_format
         if stop is not None:
             body["stop"] = stop
+
+        # Passthrough: forward any other caller-supplied params verbatim.
+        for k, v in extra.items():
+            if v is not None:
+                body.setdefault(k, v)
 
         attempts = [model, *(fallback_models or [])]
         last_exc: Optional[Exception] = None
@@ -2382,6 +2397,7 @@ class AsyncLLMClient:
         response_format: Optional[Dict[str, Any]] = None,
         stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
+        **extra: Any,
     ) -> str:
         """Async 1-line chat interface with optional xAI Live Search."""
         messages: List[Dict[str, str]] = []
@@ -2401,6 +2417,7 @@ class AsyncLLMClient:
             response_format=response_format,
             stop=stop,
             fallback_models=fallback_models,
+            **extra,
         )
 
         return result.choices[0].message.content
@@ -2420,6 +2437,7 @@ class AsyncLLMClient:
         response_format: Optional[Dict[str, Any]] = None,
         stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
+        **extra: Any,
     ) -> ChatResponse:
         """Async full chat completion interface with optional xAI Live Search and tool calling."""
         # Validate inputs
@@ -2457,6 +2475,11 @@ class AsyncLLMClient:
             body["response_format"] = response_format
         if stop is not None:
             body["stop"] = stop
+
+        # Passthrough: forward any other caller-supplied params verbatim.
+        for k, v in extra.items():
+            if v is not None:
+                body.setdefault(k, v)
 
         # Walk [model, *fallback_models] on retriable errors. See sync
         # chat_completion() above for the rationale.
@@ -2498,6 +2521,7 @@ class AsyncLLMClient:
         response_format: Optional[Dict[str, Any]] = None,
         stop: Optional[Union[str, List[str]]] = None,
         fallback_models: Optional[List[str]] = None,
+        **extra: Any,
     ) -> AsyncIterator[ChatCompletionChunk]:
         """
         Async streaming chat completion. See :meth:`LLMClient.chat_completion_stream`
@@ -2531,6 +2555,11 @@ class AsyncLLMClient:
             body["response_format"] = response_format
         if stop is not None:
             body["stop"] = stop
+
+        # Passthrough: forward any other caller-supplied params verbatim.
+        for k, v in extra.items():
+            if v is not None:
+                body.setdefault(k, v)
 
         attempts = [model, *(fallback_models or [])]
         last_exc: Optional[Exception] = None

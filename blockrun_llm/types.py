@@ -42,7 +42,12 @@ ToolChoice = Union[Literal["none", "auto", "required"], ToolChoiceFunction]
 
 
 class ChatMessage(BaseModel):
-    """A single chat message."""
+    """A single chat message.
+
+    Passthrough: the named fields below are conveniences; any other field the
+    gateway forwards (e.g. ``annotations``, ``audio``, future OpenAI additions)
+    is preserved via ``extra = "allow"`` rather than silently dropped.
+    """
 
     role: Literal["system", "user", "assistant", "tool"]
     content: Optional[str] = None
@@ -56,13 +61,19 @@ class ChatMessage(BaseModel):
     reasoning_content: Optional[str] = None
     thinking: Optional[str] = None
 
+    class Config:
+        extra = "allow"
+
 
 class ChatChoice(BaseModel):
     """A single completion choice."""
 
     index: int
     message: ChatMessage
-    finish_reason: Optional[Literal["stop", "length", "content_filter", "tool_calls"]] = None
+    finish_reason: Optional[str] = None  # OpenAI-compatible; upstreams may add new values
+
+    class Config:
+        extra = "allow"
 
 
 class ChatUsage(BaseModel):
@@ -77,9 +88,17 @@ class ChatUsage(BaseModel):
     cache_read_input_tokens: Optional[int] = None
     cache_creation_input_tokens: Optional[int] = None
 
+    class Config:
+        extra = "allow"
+
 
 class ChatResponse(BaseModel):
-    """Response from chat completion."""
+    """Response from chat completion.
+
+    Passthrough: unknown top-level fields the gateway returns (e.g.
+    ``system_fingerprint``, ``service_tier``, ``prompt_logprobs``) are kept via
+    ``extra = "allow"`` so the SDK never strips what the API sends.
+    """
 
     id: str
     object: str = "chat.completion"
@@ -88,6 +107,9 @@ class ChatResponse(BaseModel):
     choices: List[ChatChoice]
     usage: Optional[ChatUsage] = None
     citations: Optional[List[str]] = None  # xAI Live Search citation URLs
+
+    class Config:
+        extra = "allow"
 
 
 # ---------------------------------------------------------------------------
@@ -114,13 +136,19 @@ class ChatChunkDelta(BaseModel):
     reasoning_content: Optional[str] = None
     thinking: Optional[str] = None
 
+    class Config:
+        extra = "allow"
+
 
 class ChatChunkChoice(BaseModel):
     """One choice within a streaming chunk."""
 
     index: int
     delta: ChatChunkDelta
-    finish_reason: Optional[Literal["stop", "length", "content_filter", "tool_calls"]] = None
+    finish_reason: Optional[str] = None  # OpenAI-compatible; upstreams may add new values
+
+    class Config:
+        extra = "allow"
 
 
 class ChatCompletionChunk(BaseModel):
@@ -135,6 +163,9 @@ class ChatCompletionChunk(BaseModel):
     # (some upstreams omit it entirely — callers must tolerate ``None``).
     usage: Optional[ChatUsage] = None
     citations: Optional[List[str]] = None  # xAI Live Search citation URLs (final chunk only)
+
+    class Config:
+        extra = "allow"
 
 
 class Model(BaseModel):

@@ -265,13 +265,38 @@ def sanitize_error_response(error_body: Any) -> Dict[str, Any]:
     if not isinstance(error_body, dict):
         return {"message": "API request failed", "code": None}
 
-    # Only expose safe fields
+    # The gateway returns OpenAI-compatible *nested* errors:
+    #   {"error": {"message", "type", "code", "param"}, "message", "code", "debug"}
+    # while older endpoints (and the SDK's own fallbacks) still use the *flat* shape:
+    #   {"error": "Request failed", "code": "..."}
+    # Pass the real message/code through for either shape. Never surface `debug`
+    # (raw upstream error text — may leak internal paths/keys).
+    nested = error_body.get("error")
+
+    if isinstance(nested, dict):
+        message = nested.get("message")
+        code = nested.get("code") or error_body.get("code")
+        result: Dict[str, Any] = {
+            "message": message if isinstance(message, str) else "API request failed",
+            "code": code if isinstance(code, str) else None,
+        }
+        # Pass through OpenAI error metadata when present.
+        if isinstance(nested.get("type"), str):
+            result["type"] = nested["type"]
+        if isinstance(nested.get("param"), str):
+            result["param"] = nested["param"]
+        return result
+
+    # Flat shape: `error` is the human-readable title; fall back to top-level `message`.
+    if isinstance(nested, str):
+        message = nested
+    elif isinstance(error_body.get("message"), str):
+        message = error_body["message"]
+    else:
+        message = "API request failed"
+
     return {
-        "message": (
-            error_body.get("error")
-            if isinstance(error_body.get("error"), str)
-            else "API request failed"
-        ),
+        "message": message,
         "code": (error_body.get("code") if isinstance(error_body.get("code"), str) else None),
     }
 

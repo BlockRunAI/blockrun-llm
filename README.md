@@ -250,9 +250,10 @@ thinking modes. V4 Pro is the new flagship paid SKU — 1.6T MoE / 49B active,
 | `deepseek/deepseek-reasoner` | $0.20/M | $0.40/M | 1M | V4 Flash thinking (same upstream as `deepseek-chat`, thinking enabled by default) |
 
 ### MiniMax
-| Model | Input Price | Output Price | Context |
-|-------|-------------|--------------|---------|
-| `minimax/minimax-m2.7` | $0.30/M | $1.20/M | 200K |
+| Model | Input Price | Output Price | Context | Notes |
+|-------|-------------|--------------|---------|-------|
+| `minimax/minimax-m3` | $0.30/M | $1.20/M | 1M | M3 flagship — strong reasoning + coding, 1M context |
+| `minimax/minimax-m2.7` | $0.30/M | $1.20/M | 200K | |
 
 ### ZAI
 

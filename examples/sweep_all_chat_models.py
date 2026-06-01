@@ -75,6 +75,7 @@ SWEEP_TARGETS: List[str] = [
     "deepseek/deepseek-chat",
     "deepseek/deepseek-reasoner",
     # MiniMax
+    "minimax/minimax-m3",
     "minimax/minimax-m2.7",
     # ZAI
     "zai/glm-5.1",
