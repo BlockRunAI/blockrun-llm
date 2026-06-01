@@ -234,6 +234,63 @@ class TestSanitizeErrorResponse:
         result = sanitize_error_response({"something": "else"})
         assert result == {"message": "API request failed", "code": None}
 
+    def test_nested_openai_error_shape(self):
+        """Should pass through the gateway's OpenAI-compatible nested error."""
+        result = sanitize_error_response(
+            {
+                "error": {
+                    "message": "Conversation too long — Message @bc1max on Telegram",
+                    "type": "invalid_request_error",
+                    "code": "CONTEXT_LENGTH_EXCEEDED",
+                    "param": None,
+                },
+                "message": "Message @bc1max on Telegram",
+                "code": "CONTEXT_LENGTH_EXCEEDED",
+                "debug": "/var/app/handler.py:123 SECRET_KEY=xyz",
+            }
+        )
+        assert result["message"] == "Conversation too long — Message @bc1max on Telegram"
+        assert result["code"] == "CONTEXT_LENGTH_EXCEEDED"
+        assert result["type"] == "invalid_request_error"
+        # Raw upstream debug text must never be surfaced.
+        assert "debug" not in result
+
+    def test_nested_error_falls_back_to_top_level_code(self):
+        """Should use top-level code when the nested object omits it."""
+        result = sanitize_error_response(
+            {
+                "error": {"message": "Rate limited", "type": "rate_limit_error"},
+                "code": "RATE_LIMITED",
+            }
+        )
+        assert result == {
+            "message": "Rate limited",
+            "code": "RATE_LIMITED",
+            "type": "rate_limit_error",
+        }
+
+    def test_nested_error_passes_param(self):
+        """Should pass through the OpenAI `param` field when present."""
+        result = sanitize_error_response(
+            {
+                "error": {
+                    "message": "Set stream: false",
+                    "type": "invalid_request_error",
+                    "code": "STREAM_UNSUPPORTED",
+                    "param": "stream",
+                }
+            }
+        )
+        assert result["param"] == "stream"
+
+    def test_flat_string_error_still_supported(self):
+        """Should keep supporting the legacy flat string `error` shape."""
+        result = sanitize_error_response({"error": "Unknown model: foo. Available models: gpt-5.2"})
+        assert result == {
+            "message": "Unknown model: foo. Available models: gpt-5.2",
+            "code": None,
+        }
+
 
 class TestValidateResourceUrl:
     def test_allow_matching_domain(self):
