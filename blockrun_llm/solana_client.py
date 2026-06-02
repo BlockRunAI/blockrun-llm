@@ -20,6 +20,7 @@ from __future__ import annotations
 import json as _json
 import os
 import sys
+import threading
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import httpx
@@ -380,6 +381,25 @@ class SolanaLLMClient:
         self._x402_client = x402ClientSync()
         signer = _create_signer(self._private_key)
         _register_svm_with_headers(self._x402_client, signer, resolved_url, resolved_headers)
+        # x402ClientSync is NOT thread-safe: concurrent payment signing on one
+        # shared client races on nonce/authorization state. This lock serializes
+        # just the (fast) signing step so a single client can be shared across
+        # threads — see _sign_payment.
+        self._payment_lock = threading.Lock()
+
+    def _sign_payment(self, payment_required: Any) -> Any:
+        """Thread-safe wrapper around ``x402_client.create_payment_payload``.
+
+        Without this, sharing one ``SolanaLLMClient`` across threads (e.g. a
+        ThreadPoolExecutor issuing many concurrent paid requests from one wallet)
+        produces gateway rejections under load — ``authorization already used``
+        (duplicate replay nonce) and ``invalid_exact_svm_payload_amount_mismatch``
+        — because the underlying x402 client's nonce/auth state is mutated
+        concurrently. Serializing only this brief signing critical section fixes
+        it while the upstream streaming continues to run fully concurrently.
+        """
+        with self._payment_lock:
+            return self._x402_client.create_payment_payload(payment_required)
 
     def _capture_settlement(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
         """Decode the x402 settlement header on a Solana paid response.
@@ -814,7 +834,7 @@ class SolanaLLMClient:
             raise PaymentError("402 response but no payment requirements found")
 
         payment_required = decode_payment_required_header(payment_header)
-        payment_payload = self._x402_client.create_payment_payload(payment_required)
+        payment_payload = self._sign_payment(payment_required)
         encoded_payment = encode_payment_signature_header(payment_payload)
 
         cost_usd = float(payment_payload.accepted.amount) / 1e6
@@ -887,7 +907,7 @@ class SolanaLLMClient:
 
         # Use x402 SDK to decode 402 response and create signed payment
         payment_required = decode_payment_required_header(payment_header)
-        payment_payload = self._x402_client.create_payment_payload(payment_required)
+        payment_payload = self._sign_payment(payment_required)
         encoded_payment = encode_payment_signature_header(payment_payload)
 
         payment_headers = {
@@ -1007,7 +1027,7 @@ class SolanaLLMClient:
 
         # Use x402 SDK to decode 402 response and create signed payment
         payment_required = decode_payment_required_header(payment_header)
-        payment_payload = self._x402_client.create_payment_payload(payment_required)
+        payment_payload = self._sign_payment(payment_required)
         encoded_payment = encode_payment_signature_header(payment_payload)
 
         payment_headers = {
@@ -1115,7 +1135,7 @@ class SolanaLLMClient:
             raise PaymentError("402 response but no payment requirements found")
 
         payment_required = decode_payment_required_header(payment_header)
-        payment_payload = self._x402_client.create_payment_payload(payment_required)
+        payment_payload = self._sign_payment(payment_required)
         encoded_payment = encode_payment_signature_header(payment_payload)
 
         payment_headers = {
@@ -1231,7 +1251,7 @@ class SolanaLLMClient:
             raise PaymentError("402 response but no payment requirements found")
 
         payment_required = decode_payment_required_header(payment_header_str)
-        payment_payload_obj = self._x402_client.create_payment_payload(payment_required)
+        payment_payload_obj = self._sign_payment(payment_required)
         encoded_payment = encode_payment_signature_header(payment_payload_obj)
         cost_usd = float(payment_payload_obj.accepted.amount) / 1e6
 
