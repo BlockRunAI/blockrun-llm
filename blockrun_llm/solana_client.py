@@ -17,6 +17,7 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import json as _json
 import os
 import sys
@@ -143,6 +144,35 @@ def _is_permanent_payment_error(reason: str) -> bool:
         return False
     low = reason.lower()
     return any(p in low for p in _PERMANENT_PAYMENT_PATTERNS)
+
+
+# Payment failures a FRESH payment genuinely can't fix — re-running the whole
+# request (new nonce, new 402 probe, new blockhash) won't help, so fail fast.
+# Deliberately NARROWER than _PERMANENT_PAYMENT_PATTERNS: replay
+# ("authorization is used"), amount mismatch, expired, blockhash/simulation
+# errors ARE recoverable with a fresh signature and so are OMITTED here — they
+# are exactly the concurrent-load failures the whole-request retry exists to fix.
+_UNRECOVERABLE_PAYMENT_PATTERNS = (
+    "insufficient",       # wallet has no USDC
+    "invalid signature",  # bad signing key
+    "invalid_payload",    # structurally malformed payload
+    "denied",             # payer denylisted
+)
+
+
+def _is_unrecoverable_payment_error(reason: str) -> bool:
+    """True iff retrying with a brand-new payment cannot possibly succeed.
+
+    Used by the whole-request payment retry to decide fail-fast vs retry. Unlike
+    :func:`_is_permanent_payment_error` (which classifies re-signing the SAME
+    authorization), a fresh nonce/probe/blockhash recovers replay, amount-
+    mismatch, expiry and blockhash-window failures, so only truly terminal
+    conditions (no funds, bad key, denylisted) short-circuit the retry.
+    """
+    if not reason:
+        return False
+    low = reason.lower()
+    return any(p in low for p in _UNRECOVERABLE_PAYMENT_PATTERNS)
 
 
 def _get_user_agent() -> str:
@@ -580,6 +610,15 @@ class SolanaLLMClient:
     _STREAM_5XX_STATUSES = (500, 502, 503, 504)
     _STREAM_5XX_BACKOFFS = (1.0, 2.0, 4.0)
 
+    # Whole-request payment retry: on a NON-permanent payment rejection (concurrent
+    # single-wallet replay-nonce / amount mismatch, transient facilitator flake),
+    # re-run the ENTIRE paid request — fresh 402 probe + fresh signature (new nonce,
+    # correct amount) — but only before the first chunk is yielded. This is what
+    # gets concurrent load to ~100% success; the per-call signing lock alone can't
+    # recover a transient/amount failure once it has happened.
+    _MAX_PAYMENT_RETRIES = 4
+    _PAYMENT_RETRY_BACKOFFS = (0.25, 0.5, 1.0, 2.0)
+
     def chat_completion_stream(
         self,
         model: str,
@@ -669,6 +708,41 @@ class SolanaLLMClient:
         raise last_exc
 
     def _stream_with_payment(
+        self,
+        endpoint: str,
+        body: Dict[str, Any],
+        timeout: Optional[float] = None,
+    ) -> Iterator[ChatCompletionChunk]:
+        """Whole-request payment-retry wrapper around :meth:`_stream_once`.
+
+        Re-runs the entire paid request (fresh 402 probe + fresh signature) on a
+        non-permanent payment rejection, but only before the first chunk is
+        yielded — once the 200 stream starts, :meth:`_stream_once` returns
+        without raising, so output is never replayed. See _MAX_PAYMENT_RETRIES.
+        """
+        import time
+
+        for payment_attempt in range(self._MAX_PAYMENT_RETRIES + 1):
+            yielded = 0
+            try:
+                for chunk in self._stream_once(endpoint, body, timeout=timeout):
+                    yielded += 1
+                    yield chunk
+                return
+            except PaymentError as exc:
+                if (
+                    yielded > 0
+                    or _is_unrecoverable_payment_error(str(exc))
+                    or payment_attempt >= self._MAX_PAYMENT_RETRIES
+                ):
+                    raise
+                time.sleep(
+                    self._PAYMENT_RETRY_BACKOFFS[
+                        min(payment_attempt, len(self._PAYMENT_RETRY_BACKOFFS) - 1)
+                    ]
+                )
+
+    def _stream_once(
         self,
         endpoint: str,
         body: Dict[str, Any],
@@ -862,6 +936,33 @@ class SolanaLLMClient:
         )
 
     def _request_with_payment(
+        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
+    ) -> ChatResponse:
+        """Whole-request payment-retry wrapper around :meth:`_request_once`.
+
+        Re-runs the entire paid request (fresh 402 probe + fresh signature) on a
+        recoverable payment rejection — concurrent replay-nonce / amount mismatch
+        / transient facilitator flake — so a shared client under concurrent load
+        reaches ~100%. See _MAX_PAYMENT_RETRIES.
+        """
+        import time
+
+        for payment_attempt in range(self._MAX_PAYMENT_RETRIES + 1):
+            try:
+                return self._request_once(endpoint, body, timeout=timeout)
+            except PaymentError as exc:
+                if (
+                    _is_unrecoverable_payment_error(str(exc))
+                    or payment_attempt >= self._MAX_PAYMENT_RETRIES
+                ):
+                    raise
+                time.sleep(
+                    self._PAYMENT_RETRY_BACKOFFS[
+                        min(payment_attempt, len(self._PAYMENT_RETRY_BACKOFFS) - 1)
+                    ]
+                )
+
+    def _request_once(
         self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
     ) -> ChatResponse:
         url = f"{self._api_url}{endpoint}"
@@ -1785,6 +1886,8 @@ class AsyncSolanaLLMClient:
     SOLANA_API_URL = SOLANA_API_URL
     _STREAM_5XX_STATUSES = SolanaLLMClient._STREAM_5XX_STATUSES
     _STREAM_5XX_BACKOFFS = SolanaLLMClient._STREAM_5XX_BACKOFFS
+    _MAX_PAYMENT_RETRIES = SolanaLLMClient._MAX_PAYMENT_RETRIES
+    _PAYMENT_RETRY_BACKOFFS = SolanaLLMClient._PAYMENT_RETRY_BACKOFFS
 
     def __init__(
         self,
@@ -1840,6 +1943,22 @@ class AsyncSolanaLLMClient:
         self._x402_client = x402Client()
         signer = _create_signer(self._private_key)
         _register_svm_with_headers(self._x402_client, signer, resolved_url, resolved_headers)
+        # Lazily created on first sign (avoids binding asyncio.Lock to a loop at
+        # construction time). Serializes the async signing critical section so a
+        # shared client is safe across concurrent coroutines — see _sign_payment.
+        self._payment_lock: Optional[asyncio.Lock] = None
+
+    async def _sign_payment(self, payment_required: Any) -> Any:
+        """Task-safe async wrapper around ``x402_client.create_payment_payload``.
+
+        Mirrors the sync :meth:`SolanaLLMClient._sign_payment`: concurrent
+        coroutines sharing one client would otherwise race on the x402 client's
+        nonce/auth state and trip replay / amount-mismatch rejections under load.
+        """
+        if self._payment_lock is None:
+            self._payment_lock = asyncio.Lock()
+        async with self._payment_lock:
+            return await self._x402_client.create_payment_payload(payment_required)
 
     def _capture_settlement(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
         """Async-Solana twin of :meth:`SolanaLLMClient._capture_settlement`."""
@@ -2064,7 +2183,36 @@ class AsyncSolanaLLMClient:
         body: Dict[str, Any],
         timeout: Optional[float] = None,
     ):
-        """Async version of :meth:`SolanaLLMClient._stream_with_payment`."""
+        """Whole-request payment-retry wrapper around :meth:`_stream_once`
+        (async). Re-runs the paid request on a recoverable payment rejection,
+        only before the first chunk is yielded. See _MAX_PAYMENT_RETRIES."""
+        for payment_attempt in range(self._MAX_PAYMENT_RETRIES + 1):
+            yielded = 0
+            try:
+                async for chunk in self._stream_once(endpoint, body, timeout=timeout):
+                    yielded += 1
+                    yield chunk
+                return
+            except PaymentError as exc:
+                if (
+                    yielded > 0
+                    or _is_unrecoverable_payment_error(str(exc))
+                    or payment_attempt >= self._MAX_PAYMENT_RETRIES
+                ):
+                    raise
+                await asyncio.sleep(
+                    self._PAYMENT_RETRY_BACKOFFS[
+                        min(payment_attempt, len(self._PAYMENT_RETRY_BACKOFFS) - 1)
+                    ]
+                )
+
+    async def _stream_once(
+        self,
+        endpoint: str,
+        body: Dict[str, Any],
+        timeout: Optional[float] = None,
+    ):
+        """Async version of :meth:`SolanaLLMClient._stream_once`."""
         url = f"{self._api_url}{endpoint}"
         req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
         eff_timeout = timeout if timeout is not None else self._timeout
@@ -2212,7 +2360,7 @@ class AsyncSolanaLLMClient:
         if not payment_header:
             raise PaymentError("402 response but no payment requirements found")
         payment_required = decode_payment_required_header(payment_header)
-        payment_payload = await self._x402_client.create_payment_payload(payment_required)
+        payment_payload = await self._sign_payment(payment_required)
         encoded_payment = encode_payment_signature_header(payment_payload)
         cost_usd = float(payment_payload.accepted.amount) / 1e6
         return (
@@ -2228,6 +2376,27 @@ class AsyncSolanaLLMClient:
     _raise_stream_error = SolanaLLMClient._raise_stream_error
 
     async def _request_with_payment(
+        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
+    ) -> ChatResponse:
+        """Whole-request payment-retry wrapper around :meth:`_request_once`
+        (async). Same policy as the sync path — recoverable payment rejections
+        re-run the entire request with a fresh signature. See _MAX_PAYMENT_RETRIES."""
+        for payment_attempt in range(self._MAX_PAYMENT_RETRIES + 1):
+            try:
+                return await self._request_once(endpoint, body, timeout=timeout)
+            except PaymentError as exc:
+                if (
+                    _is_unrecoverable_payment_error(str(exc))
+                    or payment_attempt >= self._MAX_PAYMENT_RETRIES
+                ):
+                    raise
+                await asyncio.sleep(
+                    self._PAYMENT_RETRY_BACKOFFS[
+                        min(payment_attempt, len(self._PAYMENT_RETRY_BACKOFFS) - 1)
+                    ]
+                )
+
+    async def _request_once(
         self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
     ) -> ChatResponse:
         url = f"{self._api_url}{endpoint}"
