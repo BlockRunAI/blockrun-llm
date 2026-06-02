@@ -2,6 +2,26 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.37.0 — 2026-06-01
+
+### Fixed
+- **Concurrent Solana payments now reach ~100% success.** Sharing one
+  `SolanaLLMClient` / `AsyncSolanaLLMClient` across concurrent paid requests from
+  a single wallet previously hit `invalid_exact_svm_payload_amount_mismatch` and
+  `authorization already used` (replay) rejections under load (~3-10% failures),
+  because the underlying x402 client is not concurrency-safe and a rejected
+  payment couldn't recover. Two fixes:
+  - A per-client signing lock (`threading.Lock` for sync, lazy `asyncio.Lock` for
+    async) serialises the fast nonce/signature critical section.
+  - A **whole-request payment retry**: a non-permanent payment rejection re-runs
+    the entire request with a fresh 402 probe + fresh signature (new nonce,
+    correct amount, current blockhash), for sync/async and streaming/non-stream
+    (streaming only before the first chunk, so output is never replayed). New
+    `_is_unrecoverable_payment_error` narrows the no-retry set to genuinely
+    terminal cases (no funds / bad key / denylisted).
+  - Verified at concurrency 10 on a shared client: opus-4.7, gemini-3.1-pro and
+    gpt-5.5 all went from ~69-99% to **100/100**.
+
 ## 0.35.0 — 2026-05-31
 
 ### Added
