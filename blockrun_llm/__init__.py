@@ -44,7 +44,6 @@ Text-to-speech (BlockRun Voice / ElevenLabs):
     print(result.data[0].url)  # audio URL
 
 Other Chains:
-    - XRPL (RLUSD): Use blockrun-llm-xrpl (pip install blockrun-llm-xrpl)
     - Solana (USDC): Use SolanaLLMClient (pip install blockrun-llm[solana])
 """
 

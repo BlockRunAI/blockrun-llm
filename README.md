@@ -17,7 +17,6 @@
 | **Base Testnet** | Base Sepolia (Chain ID: 84532) | Testnet USDC | ✅ Development |
 | **Solana** | Solana Mainnet | USDC (SPL) | ✅ New |
 
-> **XRPL (RLUSD):** Use [blockrun-llm-xrpl](https://pypi.org/project/blockrun-llm-xrpl/) for XRPL payments
 
 **Protocol:** x402 v2
 
@@ -72,7 +71,7 @@ print(result.response)  # '4'
 | `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models` (so SmartChat won't auto-pick it) but direct calls still work |
 | `nvidia/gpt-oss-20b` | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models` but direct calls still work |
 
-> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.50/$1.00 with the 75% promo through 2026-05-31) — `nvidia/deepseek-v4-pro` is hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash.
+> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.435/$0.87 — the 75% launch promo became the permanent list price after 2026-05-31) — `nvidia/deepseek-v4-pro` is hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash.
 
 > **Privacy note for `gpt-oss-120b/20b`**: NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement. The models are hidden from `/v1/models` so SmartChat won't auto-route to them, but direct calls still work — use them only when prompts contain no sensitive data.
 
