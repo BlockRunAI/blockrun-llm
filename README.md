@@ -245,7 +245,7 @@ thinking modes. V4 Pro is the new flagship paid SKU — 1.6T MoE / 49B active,
 
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `deepseek/deepseek-v4-pro` | $0.50/M | $1.00/M | 1M | V4 flagship — strongest open-weight reasoner. **75% off until 2026-05-31** (list $2.00/$4.00) |
+| `deepseek/deepseek-v4-pro` | $0.435/M | $0.87/M | 1M | V4 flagship — strongest open-weight reasoner. The 75% launch promo became the permanent list price after 2026-05-31 |
 | `deepseek/deepseek-chat` | $0.20/M | $0.40/M | 1M | V4 Flash non-thinking (paid endpoint with 5MB request bodies; same upstream as `nvidia/deepseek-v4-flash`) |
 | `deepseek/deepseek-reasoner` | $0.20/M | $0.40/M | 1M | V4 Flash thinking (same upstream as `deepseek-chat`, thinking enabled by default) |
 
@@ -255,13 +255,28 @@ thinking modes. V4 Pro is the new flagship paid SKU — 1.6T MoE / 49B active,
 | `minimax/minimax-m3` | $0.30/M | $1.20/M | 1M | M3 flagship — strong reasoning + coding, 1M context |
 | `minimax/minimax-m2.7` | $0.30/M | $1.20/M | 200K | |
 
+### xAI Grok
+
+Grok 4.3 and Grok Build are resold through BlockRun's OpenRouter credit pool
+(same pattern as `deepseek/deepseek-v4-pro` and `minimax/minimax-m3`). Older
+Grok chat SKUs (grok-3/4/4.1-fast families) are hidden from `/v1/models` but
+direct calls by full ID still work.
+
+| Model | Input Price | Output Price | Context | Notes |
+|-------|-------------|--------------|---------|-------|
+| `xai/grok-4.3` | $1.50/M | $4.00/M | 1M | Reasoning model, vision-capable, tuned for agentic workflows |
+| `xai/grok-build-0.1` | $1.50/M | $3.00/M | 256K | Fast agentic coding model — interactive software-engineering workflows |
+
 ### ZAI
 
-The GLM-5 family bills as **flat $0.001/call** (no token counting) — `/v1/models` reports them under `billing_mode: "flat"`. Per-call pricing makes them cheapest-of-class for short prompts.
+`zai/glm-5` and `zai/glm-5-turbo` bill as **flat $0.001/call** (no token
+counting) — `/v1/models` reports them under `billing_mode: "flat"`, making
+them cheapest-of-class for short prompts. `zai/glm-5.1`'s launch promo ended
+2026-06-05; it now bills per-token.
 
 | Model | Price | Context | Notes |
 |-------|-------|---------|-------|
-| `zai/glm-5.1` | $0.001/call | 200K | Z.AI's latest flagship — #1 open-source on SWE-Bench Pro, 8-hour autonomous execution |
+| `zai/glm-5.1` | $1.40/M in · $4.40/M out | 200K | Z.AI's latest flagship — #1 open-source on SWE-Bench Pro, 8-hour autonomous execution. Per-token since 2026-06-05 |
 | `zai/glm-5` | $0.001/call | 200K | |
 | `zai/glm-5-turbo` | $0.001/call | 200K | |
 
@@ -374,6 +389,45 @@ result = client.generate(
     resolution="1080p",
     generate_audio=True,
 )
+```
+
+### Text-to-Speech & Sound Effects (`SpeechClient`)
+
+BlockRun Voice (ElevenLabs) — OpenAI-compatible TTS plus cinematic sound
+effects. TTS price scales with character count: `(chars / 1000) × model
+rate`, minimum $0.001/request. Synthesis is synchronous (<1s for Flash).
+
+| Model | Price | Max Input | Notes |
+|-------|-------|-----------|-------|
+| `elevenlabs/flash-v2.5` | $0.05/1k chars | 40k chars | ~75ms latency, 32 languages (default) |
+| `elevenlabs/turbo-v2.5` | $0.05/1k chars | 40k chars | ~250ms latency, balanced quality |
+| `elevenlabs/multilingual-v2` | $0.10/1k chars | 10k chars | Long-form narration, audiobooks |
+| `elevenlabs/v3` | $0.10/1k chars | 5k chars | Max expressiveness, 70+ languages |
+| `elevenlabs/sound-effects` | $0.05/generation | 1k chars | Sound effects up to 22s |
+
+```python
+from blockrun_llm import SpeechClient
+
+client = SpeechClient()
+
+# Text-to-speech (voice aliases: sarah, george, laura, charlie,
+# river, roger, callum, harry — or any raw ElevenLabs voice_id)
+result = client.generate("Welcome to BlockRun.", voice="george")
+print(result.data[0].url)  # audio URL (mp3 by default)
+
+# Other formats / speed
+result = client.generate(
+    "Breaking news from the world of micropayments.",
+    model="elevenlabs/v3",
+    response_format="wav",
+    speed=1.1,
+)
+
+# Sound effects (flat $0.05/generation)
+result = client.sound_effect("rain on a tin roof, distant thunder")
+
+# List voices (free, rate-limited)
+voices = client.list_voices()
 ```
 
 ## Virtual Portraits (`PortraitClient`)

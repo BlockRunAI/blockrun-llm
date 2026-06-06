@@ -36,6 +36,13 @@ Video generation:
     result = client.generate("a red apple slowly spinning on a wooden table")
     print(result.data[0].url)  # permanent MP4 URL
 
+Text-to-speech (BlockRun Voice / ElevenLabs):
+    from blockrun_llm import SpeechClient
+
+    client = SpeechClient()
+    result = client.generate("Welcome to BlockRun.", voice="sarah")
+    print(result.data[0].url)  # audio URL
+
 Other Chains:
     - XRPL (RLUSD): Use blockrun-llm-xrpl (pip install blockrun-llm-xrpl)
     - Solana (USDC): Use SolanaLLMClient (pip install blockrun-llm[solana])
@@ -53,6 +60,7 @@ from .anthropic_client import AnthropicClient
 from .solana_client import AsyncSolanaLLMClient, SolanaLLMClient
 from .image import ImageClient
 from .music import MusicClient
+from .speech import SpeechClient
 from .video import VideoClient
 from .portrait import PortraitClient
 from .realface import RealFaceClient
@@ -78,6 +86,9 @@ from .types import (
     MusicResponse,
     AudioTrack,
     AudioModel,
+    # Speech (TTS / sound effects) types
+    SpeechResponse,
+    SpeechAudio,
     # Video types
     VideoResponse,
     VideoClip,
@@ -167,7 +178,7 @@ from .cache import (
 )
 from .tx_log import TransactionLogger, decode_settlement_header, format_row
 
-__version__ = "0.37.0"
+__version__ = "0.38.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -185,6 +196,7 @@ __all__ = [
     "list_image_models",
     "ImageClient",
     "MusicClient",
+    "SpeechClient",
     "VideoClient",
     "PortraitClient",
     "RealFaceClient",
@@ -208,6 +220,8 @@ __all__ = [
     "MusicResponse",
     "AudioTrack",
     "AudioModel",
+    "SpeechResponse",
+    "SpeechAudio",
     "VideoResponse",
     "VideoClip",
     "VideoModel",

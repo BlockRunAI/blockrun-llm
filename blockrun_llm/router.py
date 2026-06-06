@@ -258,9 +258,10 @@ AUTO_TIERS: Dict[Tier, TierConfig] = {
     "REASONING": {
         # deepseek/deepseek-reasoner is V4 Flash thinking ($0.20/$0.40, 1M ctx)
         # — the cheapest production-grade reasoner. deepseek/deepseek-v4-pro
-        # ($0.50/$1.00 with 75% promo through 2026-05-31, MMLU-Pro 87.5,
-        # GPQA 90.1, SWE-bench 80.6) is the strongest open-weight reasoner
-        # we serve; first fallback when V4 Flash thinking is unavailable.
+        # ($0.435/$0.87 — the 75% launch promo became DeepSeek's permanent
+        # list price after 2026-05-31; MMLU-Pro 87.5, GPQA 90.1, SWE-bench
+        # 80.6) is the strongest open-weight reasoner we serve; first
+        # fallback when V4 Flash thinking is unavailable.
         "primary": "deepseek/deepseek-reasoner",
         "fallback": ["deepseek/deepseek-v4-pro", "openai/o3", "openai/o3-mini"],
     },
@@ -280,19 +281,21 @@ ECO_TIERS: Dict[Tier, TierConfig] = {
         "fallback": ["google/gemini-2.5-flash-lite", "google/gemini-2.5-flash"],
     },
     "COMPLEX": {
-        # zai/glm-5.1 (flat $0.001/call regardless of token count, 200K
-        # context) is the cheapest viable option for long-context complex
-        # work — added as last fallback after the per-token paid options.
+        # 2026-06-05: zai/glm-5.1 dropped from this chain — its launch promo
+        # ended (now per-token $1.40/$4.40, the most expensive option here)
+        # and the backend pulled it from the free fallback chain for timeouts.
+        # zai/glm-5 (flat $0.001/call, 200K context) takes the cheap
+        # long-context slot as last fallback instead.
         "primary": "google/gemini-2.5-pro",
         "fallback": [
             "deepseek/deepseek-v4-pro",
             "deepseek/deepseek-chat",
             "google/gemini-2.5-flash",
-            "zai/glm-5.1",
+            "zai/glm-5",
         ],
     },
     "REASONING": {
-        # V4 Flash thinking ($0.20/$0.40) preferred over V4 Pro ($0.50/$1.00)
+        # V4 Flash thinking ($0.20/$0.40) preferred over V4 Pro ($0.435/$0.87)
         # in eco mode — V4 Pro retained as fallback for harder reasoning.
         "primary": "deepseek/deepseek-reasoner",
         "fallback": ["deepseek/deepseek-v4-pro", "openai/o3-mini"],
