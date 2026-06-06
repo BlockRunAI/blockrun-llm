@@ -52,7 +52,6 @@ SWEEP_TARGETS: List[str] = [
     "openai/gpt-5.2-pro",
     "openai/gpt-5-mini",
     "openai/o1",
-    "openai/o1-mini",
     "openai/o3",
     "openai/o3-mini",
     # Anthropic
@@ -64,7 +63,6 @@ SWEEP_TARGETS: List[str] = [
     "anthropic/claude-haiku-4.5",
     # Google
     "google/gemini-3.1-pro",
-    "google/gemini-3-pro-preview",
     "google/gemini-3-flash-preview",
     "google/gemini-2.5-pro",
     "google/gemini-2.5-flash",
@@ -107,7 +105,6 @@ SWEEP_TARGETS: List[str] = [
 
 REASONING_MODELS = {
     "openai/o1",
-    "openai/o1-mini",
     "openai/o3",
     "openai/o3-mini",
     "openai/gpt-5.3-codex",
@@ -134,10 +131,6 @@ HIDDEN_REDIRECTED = {
     "nvidia/deepseek-v4-pro",
     "nvidia/deepseek-v3.2",
     "nvidia/glm-4.7",
-    # Upstream delistings 2026-06-06: o1-mini 404s at OpenAI (→ o4-mini),
-    # gemini-3-pro-preview 404s at Google (→ gemini-3.1-pro).
-    "openai/o1-mini",
-    "google/gemini-3-pro-preview",
 }
 
 ASYNC_SMOKE_MODELS = [
