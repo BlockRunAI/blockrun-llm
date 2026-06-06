@@ -134,6 +134,10 @@ HIDDEN_REDIRECTED = {
     "nvidia/deepseek-v4-pro",
     "nvidia/deepseek-v3.2",
     "nvidia/glm-4.7",
+    # Upstream delistings 2026-06-06: o1-mini 404s at OpenAI (→ o4-mini),
+    # gemini-3-pro-preview 404s at Google (→ gemini-3.1-pro).
+    "openai/o1-mini",
+    "google/gemini-3-pro-preview",
 }
 
 ASYNC_SMOKE_MODELS = [
