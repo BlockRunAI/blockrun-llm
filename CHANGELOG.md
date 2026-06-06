@@ -2,6 +2,17 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.38.1 — 2026-06-06
+
+### Changed
+- **GLM flat-rate pricing fully retired.** Z.AI's remaining launch promos ended
+  2026-06-06: `zai/glm-5` now bills per-token at $0.60/$1.92 and
+  `zai/glm-5-turbo` at $1.20/$4.00 (no more flat $0.001/call anywhere in the
+  family; glm-5.1 stays $1.40/$4.40). README ZAI section rewritten.
+- **`zai/glm-5` removed from the ECO COMPLEX router fallback chain** — its slot
+  existed only for the flat-rate pricing; at $0.60/$1.92 the existing per-token
+  chain (deepseek-v4-pro $0.435/$0.87 first) is both cheaper and stronger.
+
 ## 0.38.0 — 2026-06-05
 
 ### Added
