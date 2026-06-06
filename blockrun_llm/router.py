@@ -281,17 +281,15 @@ ECO_TIERS: Dict[Tier, TierConfig] = {
         "fallback": ["google/gemini-2.5-flash-lite", "google/gemini-2.5-flash"],
     },
     "COMPLEX": {
-        # 2026-06-05: zai/glm-5.1 dropped from this chain — its launch promo
-        # ended (now per-token $1.40/$4.40, the most expensive option here)
-        # and the backend pulled it from the free fallback chain for timeouts.
-        # zai/glm-5 (flat $0.001/call, 200K context) takes the cheap
-        # long-context slot as last fallback instead.
+        # 2026-06-06: the whole GLM flat-rate promo family ended (glm-5 now
+        # $0.60/$1.92 per-token), so no GLM earns a cheap-fallback slot here
+        # anymore — the per-token chain below already covers every price
+        # point (v4-pro $0.435/$0.87 is both cheaper and stronger).
         "primary": "google/gemini-2.5-pro",
         "fallback": [
             "deepseek/deepseek-v4-pro",
             "deepseek/deepseek-chat",
             "google/gemini-2.5-flash",
-            "zai/glm-5",
         ],
     },
     "REASONING": {

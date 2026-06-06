@@ -266,16 +266,14 @@ direct calls by full ID still work.
 
 ### ZAI
 
-`zai/glm-5` and `zai/glm-5-turbo` bill as **flat $0.001/call** (no token
-counting) — `/v1/models` reports them under `billing_mode: "flat"`, making
-them cheapest-of-class for short prompts. `zai/glm-5.1`'s launch promo ended
-2026-06-05; it now bills per-token.
+The GLM flat-rate launch promos have fully ended (glm-5.1 on 2026-06-05;
+glm-5 and glm-5-turbo on 2026-06-06) — the whole family now bills per-token.
 
-| Model | Price | Context | Notes |
-|-------|-------|---------|-------|
-| `zai/glm-5.1` | $1.40/M in · $4.40/M out | 200K | Z.AI's latest flagship — #1 open-source on SWE-Bench Pro, 8-hour autonomous execution. Per-token since 2026-06-05 |
-| `zai/glm-5` | $0.001/call | 200K | |
-| `zai/glm-5-turbo` | $0.001/call | 200K | |
+| Model | Input Price | Output Price | Context | Notes |
+|-------|-------------|--------------|---------|-------|
+| `zai/glm-5.1` | $1.40/M | $4.40/M | 200K | Z.AI's latest flagship — #1 open-source on SWE-Bench Pro, 8-hour autonomous execution |
+| `zai/glm-5` | $0.60/M | $1.92/M | 200K | |
+| `zai/glm-5-turbo` | $1.20/M | $4.00/M | 200K | |
 
 ### NVIDIA (Free & Hosted)
 
