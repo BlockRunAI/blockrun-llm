@@ -209,7 +209,7 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 | Model | Input Price | Output Price | Context |
 |-------|-------------|--------------|---------|
 | `openai/o1` | $15.00/M | $60.00/M | 200K |
-| `openai/o1-mini` | $1.10/M | $4.40/M | 128K |
+| `openai/o1-mini` | $1.10/M | $4.40/M | 128K | Delisted by OpenAI 2026-06-06 — gateway redirects to `o4-mini` |
 | `openai/o3` | $2.00/M | $8.00/M | 200K |
 | `openai/o3-mini` | $1.10/M | $4.40/M | 128K |
 
@@ -227,7 +227,7 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 | Model | Input Price | Output Price | Context |
 |-------|-------------|--------------|---------|
 | `google/gemini-3.1-pro` | $2.00/M | $12.00/M | 1M |
-| `google/gemini-3-pro-preview` | $2.00/M | $12.00/M | 1M |
+| `google/gemini-3-pro-preview` | $2.00/M | $12.00/M | 1M (delisted by Google 2026-06-06 — gateway redirects to `gemini-3.1-pro`) |
 | `google/gemini-3.5-flash` | $0.50/M | $3.00/M | 1M |
 | `google/gemini-3-flash-preview` | $0.50/M | $3.00/M | 1M |
 | `google/gemini-2.5-pro` | $1.25/M | $10.00/M | 1M |
