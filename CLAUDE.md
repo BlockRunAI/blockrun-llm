@@ -1,6 +1,6 @@
 # BlockRun LLM SDK (Python)
 
-Python SDK for 80+ LLMs plus image/video/music generation, standalone search, X/Twitter APIs, and Pyth-backed market data — all gated by USDC micropayments via x402. No API keys — wallet signature is authentication.
+Python SDK for 80+ LLMs plus image/video/music/speech generation, standalone search, X/Twitter APIs, and Pyth-backed market data — all gated by USDC micropayments via x402. No API keys — wallet signature is authentication.
 
 ## Commands
 
@@ -29,6 +29,7 @@ blockrun_llm/
 ├── cache.py                 # Response caching
 ├── image.py                 # Image generation (+ image-to-image)
 ├── music.py                 # Music generation
+├── speech.py                # Text-to-speech + sound effects (BlockRun Voice / ElevenLabs)
 ├── video.py                 # Video generation
 ├── portrait.py              # Virtual Portrait enrollment (AI characters)
 ├── realface.py              # RealFace enrollment (real-person likeness)

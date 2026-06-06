@@ -305,6 +305,27 @@ class AudioModel(BaseModel):
     max_duration_seconds: int
 
 
+# Speech (TTS / sound effects) types
+
+
+class SpeechAudio(BaseModel):
+    """A single synthesized audio clip."""
+
+    url: str
+    format: Optional[str] = None
+    characters: Optional[int] = None
+    credits: Optional[float] = None
+
+
+class SpeechResponse(BaseModel):
+    """Response from speech synthesis or sound-effect generation."""
+
+    created: int
+    model: str
+    data: List[SpeechAudio]
+    txHash: Optional[str] = None
+
+
 # Video generation types
 
 

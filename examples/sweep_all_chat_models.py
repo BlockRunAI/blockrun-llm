@@ -74,6 +74,9 @@ SWEEP_TARGETS: List[str] = [
     "deepseek/deepseek-v4-pro",
     "deepseek/deepseek-chat",
     "deepseek/deepseek-reasoner",
+    # xAI — resold via OpenRouter credit pool (added 2026-06-04)
+    "xai/grok-4.3",
+    "xai/grok-build-0.1",
     # MiniMax
     "minimax/minimax-m3",
     "minimax/minimax-m2.7",
@@ -110,6 +113,7 @@ REASONING_MODELS = {
     "openai/gpt-5.3-codex",
     "deepseek/deepseek-reasoner",
     "deepseek/deepseek-v4-pro",
+    "xai/grok-4.3",
     "nvidia/qwen3-next-80b-a3b-thinking",
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
 }
