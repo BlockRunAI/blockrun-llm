@@ -135,8 +135,6 @@ def _endpoint_tag(endpoint: str) -> str:
         return "phone"
     if "/v1/surf" in endpoint:
         return "surf"
-    if "/v1/x/" in endpoint or "/v1/partner/" in endpoint:
-        return "x"
     if "/v1/pm/" in endpoint:
         return "pm"
     if "/v1/price" in endpoint:

@@ -33,21 +33,6 @@ from .types import (
     APIError,
     PaymentError,
     SearchResult,
-    XUserLookupResponse,
-    XFollowersResponse,
-    XFollowingsResponse,
-    XUserInfoResponse,
-    XVerifiedFollowersResponse,
-    XTweetsResponse,
-    XMentionsResponse,
-    XTweetLookupResponse,
-    XTweetRepliesResponse,
-    XTweetThreadResponse,
-    XSearchResponse,
-    XTrendingResponse,
-    XArticlesRisingResponse,
-    XAuthorAnalyticsResponse,
-    XCompareAuthorsResponse,
 )
 from .solana_wallet import get_solana_public_key
 from .tx_log import TransactionLogger, decode_settlement_header, _resolve_log_dir
@@ -153,10 +138,10 @@ def _is_permanent_payment_error(reason: str) -> bool:
 # errors ARE recoverable with a fresh signature and so are OMITTED here — they
 # are exactly the concurrent-load failures the whole-request retry exists to fix.
 _UNRECOVERABLE_PAYMENT_PATTERNS = (
-    "insufficient",       # wallet has no USDC
+    "insufficient",  # wallet has no USDC
     "invalid signature",  # bad signing key
-    "invalid_payload",    # structurally malformed payload
-    "denied",             # payer denylisted
+    "invalid_payload",  # structurally malformed payload
+    "denied",  # payer denylisted
 )
 
 
@@ -1567,138 +1552,6 @@ class SolanaLLMClient:
         eff_timeout = timeout if timeout is not None else self._search_timeout
         data = self._request_with_payment_raw("/v1/search", body, timeout=eff_timeout)
         return SearchResult(**data)
-
-    def x_user_lookup(self, usernames: Union[List[str], str]) -> XUserLookupResponse:
-        """Look up X/Twitter user profiles (Solana payment). Powered by AttentionVC."""
-        if isinstance(usernames, str):
-            usernames = [usernames]
-
-        body: Dict[str, Any] = {"usernames": usernames}
-        data = self._request_with_payment_raw("/v1/x/users/lookup", body)
-        return XUserLookupResponse(**data)
-
-    def x_followers(self, username: str, *, cursor: Optional[str] = None) -> XFollowersResponse:
-        """Get X/Twitter followers (Solana payment). Powered by AttentionVC."""
-        body: Dict[str, Any] = {"username": username}
-        if cursor is not None:
-            body["cursor"] = cursor
-
-        data = self._request_with_payment_raw("/v1/x/users/followers", body)
-        return XFollowersResponse(**data)
-
-    def x_followings(self, username: str, *, cursor: Optional[str] = None) -> XFollowingsResponse:
-        """Get X/Twitter followings (Solana payment). Powered by AttentionVC."""
-        body: Dict[str, Any] = {"username": username}
-        if cursor is not None:
-            body["cursor"] = cursor
-
-        data = self._request_with_payment_raw("/v1/x/users/followings", body)
-        return XFollowingsResponse(**data)
-
-    def x_user_info(self, username: str) -> XUserInfoResponse:
-        """Get single X/Twitter user info (Solana payment). Powered by AttentionVC."""
-        body: Dict[str, Any] = {"username": username}
-        data = self._request_with_payment_raw("/v1/x/users/info", body)
-        return XUserInfoResponse(**data)
-
-    def x_verified_followers(
-        self, user_id: str, *, cursor: Optional[str] = None
-    ) -> XVerifiedFollowersResponse:
-        """Get verified followers (Solana payment). Powered by AttentionVC."""
-        body: Dict[str, Any] = {"userId": user_id}
-        if cursor is not None:
-            body["cursor"] = cursor
-        data = self._request_with_payment_raw("/v1/x/users/verified-followers", body)
-        return XVerifiedFollowersResponse(**data)
-
-    def x_user_tweets(
-        self, username: str, *, include_replies: bool = False, cursor: Optional[str] = None
-    ) -> XTweetsResponse:
-        """Get user tweets (Solana payment). Powered by AttentionVC."""
-        body: Dict[str, Any] = {"username": username, "includeReplies": include_replies}
-        if cursor is not None:
-            body["cursor"] = cursor
-        data = self._request_with_payment_raw("/v1/x/users/tweets", body)
-        return XTweetsResponse(**data)
-
-    def x_user_mentions(
-        self,
-        username: str,
-        *,
-        since_time: Optional[str] = None,
-        until_time: Optional[str] = None,
-        cursor: Optional[str] = None,
-    ) -> XMentionsResponse:
-        """Get user mentions (Solana payment). Powered by AttentionVC."""
-        body: Dict[str, Any] = {"username": username}
-        if since_time is not None:
-            body["sinceTime"] = since_time
-        if until_time is not None:
-            body["untilTime"] = until_time
-        if cursor is not None:
-            body["cursor"] = cursor
-        data = self._request_with_payment_raw("/v1/x/users/mentions", body)
-        return XMentionsResponse(**data)
-
-    def x_tweet_lookup(self, tweet_ids: Union[List[str], str]) -> XTweetLookupResponse:
-        """Batch tweet lookup (Solana payment). Powered by AttentionVC."""
-        if isinstance(tweet_ids, str):
-            tweet_ids = [tweet_ids]
-        body: Dict[str, Any] = {"tweet_ids": tweet_ids}
-        data = self._request_with_payment_raw("/v1/x/tweets/lookup", body)
-        return XTweetLookupResponse(**data)
-
-    def x_tweet_replies(
-        self, tweet_id: str, *, query_type: str = "Latest", cursor: Optional[str] = None
-    ) -> XTweetRepliesResponse:
-        """Get tweet replies (Solana payment). Powered by AttentionVC."""
-        body: Dict[str, Any] = {"tweetId": tweet_id, "queryType": query_type}
-        if cursor is not None:
-            body["cursor"] = cursor
-        data = self._request_with_payment_raw("/v1/x/tweets/replies", body)
-        return XTweetRepliesResponse(**data)
-
-    def x_tweet_thread(
-        self, tweet_id: str, *, cursor: Optional[str] = None
-    ) -> XTweetThreadResponse:
-        """Get tweet thread (Solana payment). Powered by AttentionVC."""
-        body: Dict[str, Any] = {"tweetId": tweet_id}
-        if cursor is not None:
-            body["cursor"] = cursor
-        data = self._request_with_payment_raw("/v1/x/tweets/thread", body)
-        return XTweetThreadResponse(**data)
-
-    def x_search(
-        self, query: str, *, query_type: str = "Latest", cursor: Optional[str] = None
-    ) -> XSearchResponse:
-        """X/Twitter search (Solana payment). Powered by AttentionVC."""
-        body: Dict[str, Any] = {"query": query, "queryType": query_type}
-        if cursor is not None:
-            body["cursor"] = cursor
-        data = self._request_with_payment_raw("/v1/x/search", body)
-        return XSearchResponse(**data)
-
-    def x_trending(self) -> XTrendingResponse:
-        """Get trending topics (Solana payment). Powered by AttentionVC."""
-        data = self._request_with_payment_raw("/v1/x/trending", {})
-        return XTrendingResponse(**data)
-
-    def x_articles_rising(self) -> XArticlesRisingResponse:
-        """Get rising articles (Solana payment). Powered by AttentionVC."""
-        data = self._request_with_payment_raw("/v1/x/articles/rising", {})
-        return XArticlesRisingResponse(**data)
-
-    def x_author_analytics(self, handle: str) -> XAuthorAnalyticsResponse:
-        """Get author analytics (Solana payment). Powered by AttentionVC."""
-        body: Dict[str, Any] = {"handle": handle}
-        data = self._request_with_payment_raw("/v1/x/authors", body)
-        return XAuthorAnalyticsResponse(**data)
-
-    def x_compare_authors(self, handle1: str, handle2: str) -> XCompareAuthorsResponse:
-        """Compare two authors (Solana payment). Powered by AttentionVC."""
-        body: Dict[str, Any] = {"handle1": handle1, "handle2": handle2}
-        data = self._request_with_payment_raw("/v1/x/compare", body)
-        return XCompareAuthorsResponse(**data)
 
     # ── Prediction Markets (Powered by Predexon) ────────────────────────────
 
