@@ -29,7 +29,7 @@ Usage:
 
 import os
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import httpx
 from eth_account import Account
 from dotenv import load_dotenv
@@ -129,10 +129,16 @@ class VideoClient:
         *,
         model: Optional[str] = None,
         image_url: Optional[str] = None,
+        last_frame_url: Optional[str] = None,
+        reference_image_urls: Optional[List[str]] = None,
         real_face_asset_id: Optional[str] = None,
         duration_seconds: Optional[int] = None,
+        aspect_ratio: Optional[str] = None,
         resolution: Optional[str] = None,
         generate_audio: Optional[bool] = None,
+        seed: Optional[int] = None,
+        watermark: Optional[bool] = None,
+        return_last_frame: Optional[bool] = None,
         budget_seconds: Optional[float] = None,
     ) -> VideoResponse:
         """
@@ -146,6 +152,16 @@ class VideoClient:
             prompt: Text description of the video.
             model: Model ID (default: xai/grok-imagine-video).
             image_url: Optional seed image URL for image-to-video.
+            last_frame_url: First-and-last-frame interpolation — a second
+                image that seeds the FINAL frame so the model tweens from
+                `image_url` -> `last_frame_url`. Requires `image_url` and a
+                Seedance model (bytedance/seedance-1.5-pro, seedance-2.0,
+                or seedance-2.0-fast). Priced identically to image-to-video.
+            reference_image_urls: Omni / multi-reference — up to 9 reference
+                image URLs for character/style consistency (Seedance 2.0
+                only). Cite them as "image 1", "image 2" in the prompt.
+                Mutually exclusive with `image_url`, `last_frame_url`, and
+                `real_face_asset_id`.
             real_face_asset_id: A `ta_xxxxxx` face/character asset for
                 identity consistency — either a Virtual Portrait (AI
                 character, via `PortraitClient`, $0.01) or a RealFace
@@ -153,11 +169,17 @@ class VideoClient:
                 Seedance 2.0 fast/pro only. Mutually exclusive with
                 `image_url`.
             duration_seconds: Billed duration (defaults to model's default).
+            aspect_ratio: `adaptive` / `16:9` / `9:16` / `1:1` / `4:3` /
+                `3:4` / `21:9` / `9:21` (Seedance only; Grok ignores).
             resolution: Output resolution — `360p` / `480p` / `720p` /
                 `1080p` / `4K`. Seedance defaults to `720p`; Grok ignores.
             generate_audio: Synced audio in the output. Seedance defaults
                 to `True` for text-to-video and `False` for image- or
                 face-conditioned generation. Grok ignores this field.
+            seed: Deterministic generation seed (Seedance only).
+            watermark: Add the provider watermark (Seedance only).
+            return_last_frame: Also return the final frame as an image
+                (Seedance only).
             budget_seconds: Overall polling budget (default 300s).
 
         Returns:
@@ -165,8 +187,9 @@ class VideoClient:
             and the settlement tx hash.
 
         Raises:
-            ValueError: If `image_url` and `real_face_asset_id` are both
-                set, or if `real_face_asset_id` is malformed.
+            ValueError: If mutually-exclusive image inputs are combined
+                (see above), `last_frame_url` is passed without `image_url`,
+                or `real_face_asset_id` is malformed.
             PaymentError: If wallet balance is insufficient.
             APIError: If upstream fails, the job times out, or any transport
                 error occurs.
@@ -175,6 +198,24 @@ class VideoClient:
             raise ValueError(
                 "image_url and real_face_asset_id are mutually exclusive; pass at most one."
             )
+        if last_frame_url and not image_url:
+            raise ValueError(
+                "last_frame_url requires image_url: image_url seeds the FIRST frame and "
+                "last_frame_url the FINAL frame — send both."
+            )
+        if last_frame_url and real_face_asset_id:
+            raise ValueError(
+                "last_frame_url and real_face_asset_id are mutually exclusive; "
+                "first-and-last-frame uses image_url + last_frame_url."
+            )
+        if reference_image_urls:
+            if image_url or last_frame_url or real_face_asset_id:
+                raise ValueError(
+                    "reference_image_urls is mutually exclusive with image_url, "
+                    "last_frame_url, and real_face_asset_id."
+                )
+            if len(reference_image_urls) > 9:
+                raise ValueError("reference_image_urls accepts at most 9 images.")
         if real_face_asset_id is not None and not real_face_asset_id.startswith("ta_"):
             raise ValueError(
                 "real_face_asset_id must start with 'ta_' "
@@ -189,14 +230,26 @@ class VideoClient:
         }
         if image_url:
             body["image_url"] = image_url
+        if last_frame_url:
+            body["last_frame_url"] = last_frame_url
+        if reference_image_urls:
+            body["reference_image_urls"] = reference_image_urls
         if real_face_asset_id:
             body["real_face_asset_id"] = real_face_asset_id
         if duration_seconds is not None:
             body["duration_seconds"] = duration_seconds
+        if aspect_ratio is not None:
+            body["aspect_ratio"] = aspect_ratio
         if resolution is not None:
             body["resolution"] = resolution
         if generate_audio is not None:
             body["generate_audio"] = generate_audio
+        if seed is not None:
+            body["seed"] = seed
+        if watermark is not None:
+            body["watermark"] = watermark
+        if return_last_frame is not None:
+            body["return_last_frame"] = return_last_frame
 
         budget = (
             budget_seconds if budget_seconds is not None else self.DEFAULT_GENERATE_BUDGET_SECONDS

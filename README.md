@@ -50,7 +50,7 @@ from blockrun_llm import LLMClient
 client = LLMClient()  # Wallet still required for signing, but $0 charged
 
 # Option 1: call a free model directly
-response = client.chat("nvidia/qwen3-next-80b-a3b-thinking", "Explain x402 in 1 sentence")
+response = client.chat("nvidia/deepseek-v4-flash", "Explain x402 in 1 sentence")
 
 # Option 2: let the smart router pick the best free model per request
 result = client.smart_chat("What is 2+2?", routing_profile="free")
@@ -64,16 +64,17 @@ print(result.response)  # '4'
 |----------|---------|----------|
 | `nvidia/deepseek-v4-flash` | 1M | DeepSeek V4 Flash — 284B / 13B active MoE, ~5× faster than V4 Pro. Best free chat / summarization / light reasoning |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Only vision-capable free model — text + images + video (≤2 min) + audio (≤1 hr) |
-| `nvidia/qwen3-next-80b-a3b-thinking` | 131K | 116 tok/s reasoning with thinking mode |
-| `nvidia/mistral-small-4-119b` | 131K | 114 tok/s — fastest free chat |
 | `nvidia/llama-4-maverick` | 131K | Meta Llama 4 Maverick MoE |
 | `nvidia/qwen3-coder-480b` | 131K | Coding-optimised 480B MoE |
+| `nvidia/mistral-small-4-119b` | 131K | ⚠️ Upstream timing out as of 2026-06-07 — avoid until NVIDIA recovers it |
 | `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models` (so SmartChat won't auto-pick it) but direct calls still work |
 | `nvidia/gpt-oss-20b` | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models` but direct calls still work |
 
 > Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.435/$0.87 — the 75% launch promo became the permanent list price after 2026-05-31) — `nvidia/deepseek-v4-pro` is hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash.
 
 > **Privacy note for `gpt-oss-120b/20b`**: NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement. The models are hidden from `/v1/models` so SmartChat won't auto-route to them, but direct calls still work — use them only when prompts contain no sensitive data.
+
+> **Retired**: `nvidia/qwen3-next-80b-a3b-thinking` hit NVIDIA end-of-life 2026-05-21 (HTTP 410). The gateway auto-redirects pinned callers to `nvidia/llama-4-maverick`.
 
 ## Solana Support
 
@@ -286,14 +287,15 @@ service improvement) but **re-enabled 2026-04-30 with `available: true` +
 auto-pick them) but direct calls by full ID still return HTTP 200.
 `nvidia/deepseek-v4-pro`, `nvidia/deepseek-v3.2`, and `nvidia/glm-4.7` are
 hidden because NVIDIA's NIM deployment is hung — backend MODEL_REDIRECTS
-auto-forwards calls to V4 Flash / qwen3-coder.
+auto-forwards calls to V4 Flash / qwen3-coder. `nvidia/qwen3-next-80b-a3b-thinking`
+hit NVIDIA end-of-life 2026-05-21 (HTTP 410) and is auto-redirected to
+`nvidia/llama-4-maverick`.
 
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
 | `nvidia/deepseek-v4-flash` | **FREE** | **FREE** | 1M | DeepSeek V4 Flash — 284B / 13B active MoE, ~5× faster than V4 Pro. Best free chat / summarization |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | **FREE** | **FREE** | 256K | First vision-capable free model — RGB images, mp4 video |
-| `nvidia/qwen3-next-80b-a3b-thinking` | **FREE** | **FREE** | 131K | Reasoning flagship — 116 tok/s, thinking mode |
-| `nvidia/mistral-small-4-119b` | **FREE** | **FREE** | 131K | Fastest chat — 114 tok/s |
+| `nvidia/mistral-small-4-119b` | **FREE** | **FREE** | 131K | ⚠️ Upstream timing out as of 2026-06-07 |
 | `nvidia/llama-4-maverick` | **FREE** | **FREE** | 131K | Meta Llama 4 Maverick MoE |
 | `nvidia/qwen3-coder-480b` | **FREE** | **FREE** | 131K | Coding-optimised 480B MoE |
 | `nvidia/gpt-oss-120b` | **FREE** | **FREE** | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models`; direct calls work |
@@ -383,6 +385,29 @@ result = client.generate(
     real_face_asset_id="ta_abc123xyz",
     resolution="1080p",
     generate_audio=True,
+)
+
+# First-and-last-frame interpolation (Seedance only): the model tweens
+# from image_url (first frame) to last_frame_url (final frame).
+# Priced identically to image-to-video.
+result = client.generate(
+    "the flower blooms in golden morning light",
+    model="bytedance/seedance-1.5-pro",
+    image_url="https://example.com/bud.jpg",
+    last_frame_url="https://example.com/bloom.jpg",
+)
+
+# Omni / multi-reference (Seedance 2.0 only): up to 9 reference images
+# for character/style consistency. Cite them as "image 1", "image 2"
+# in the prompt. Mutually exclusive with image_url / last_frame_url /
+# real_face_asset_id.
+result = client.generate(
+    "the character from image 1 walks through the city from image 2",
+    model="bytedance/seedance-2.0",
+    reference_image_urls=[
+        "https://example.com/character.jpg",
+        "https://example.com/city.jpg",
+    ],
 )
 ```
 
@@ -671,6 +696,50 @@ bars = p2.history(
 ```
 
 Supported stock markets: `us, hk, jp, kr, gb, de, fr, nl, ie, lu, cn, ca`.
+
+## Multi-chain RPC (`RpcClient`)
+
+Standard JSON-RPC 2.0 access to 40+ chains through one endpoint — Ethereum,
+Base, Solana, Polygon, BSC, Arbitrum, Optimism, Avalanche, Bitcoin, Sui, and
+more (powered by Tatum's RPC gateway). No API key, no per-chain endpoints:
+flat **$0.002 per call** in USDC; a JSON-RPC batch charges per element.
+
+```python
+from blockrun_llm import RpcClient
+
+client = RpcClient()
+
+# EVM chains speak eth_* JSON-RPC
+block = client.call("ethereum", "eth_blockNumber")
+print(int(block.result, 16))
+
+balance = client.call(
+    "base", "eth_getBalance",
+    ["0x4200000000000000000000000000000000000006", "latest"],
+)
+
+# Non-EVM chains speak their native JSON-RPC
+slot = client.call("solana", "getSlot")
+utxo_tip = client.call("bitcoin", "getblockcount")
+
+# Batch: one payment, per-element pricing ($0.002 x N)
+out = client.batch("polygon", [
+    {"method": "eth_blockNumber"},
+    {"method": "eth_gasPrice"},
+])
+
+print(block.network)    # "ethereum" (canonical key from X-Network)
+print(block.cache_hit)  # True if served from the gateway's hot cache
+print(block.tx_hash)    # x402 settlement tx
+```
+
+40 curated chains are exported as `blockrun_llm.SUPPORTED_NETWORKS`; common
+aliases (`eth`, `arb`, `op`, `matic`, `bnb`, `avax`, `sol`, `btc`, `xrp`,
+`dot`, ...) resolve server-side (`blockrun_llm.NETWORK_ALIASES`). Unknown but
+well-formed slugs fall through to a generic `{slug}-mainnet` gateway attempt,
+so new chains work without an SDK update. Hot, low-volatility reads
+(`eth_chainId`, mined blocks/receipts, `getTransaction`, ...) are served from
+a method-aware gateway cache — same price, lower latency.
 
 ## Prediction Markets (Powered by Predexon v2)
 

@@ -326,6 +326,34 @@ class SpeechResponse(BaseModel):
     txHash: Optional[str] = None
 
 
+# Multi-chain RPC types
+
+
+class RpcError(BaseModel):
+    """A JSON-RPC 2.0 error object."""
+
+    code: Optional[int] = None
+    message: Optional[str] = None
+    data: Optional[Any] = None
+
+
+class RpcResponse(BaseModel):
+    """Response from a multi-chain JSON-RPC call (/v1/rpc/{network}).
+
+    Standard JSON-RPC 2.0 envelope plus BlockRun gateway metadata pulled
+    from response headers (X-Network / X-Cache / X-Payment-Receipt).
+    """
+
+    jsonrpc: Optional[str] = None
+    id: Optional[Union[str, int]] = None
+    result: Optional[Any] = None
+    error: Optional[RpcError] = None
+    # Gateway metadata (response headers)
+    network: Optional[str] = None  # canonical network key, e.g. "ethereum"
+    cache_hit: bool = False  # served from the gateway's method-aware cache
+    tx_hash: Optional[str] = None  # x402 settlement tx (single calls)
+
+
 # Video generation types
 
 
