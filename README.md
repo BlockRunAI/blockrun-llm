@@ -741,6 +741,60 @@ so new chains work without an SDK update. Hot, low-volatility reads
 (`eth_chainId`, mined blocks/receipts, `getTransaction`, ...) are served from
 a method-aware gateway cache — same price, lower latency.
 
+## DeFi Data (Powered by DefiLlama)
+
+GET passthrough to DefiLlama — protocols, TVL, yields, token prices.
+$0.005/call ($0.001 for price lookups). Methods live on `LLMClient` /
+`AsyncLLMClient` / `SolanaLLMClient`:
+
+```python
+client = LLMClient()
+
+protocols = client.defi_protocols()           # all protocols + TVL
+aave      = client.defi_protocol("aave")      # one protocol + historical TVL
+chains    = client.defi_chains()              # TVL by chain
+pools     = client.defi_yields()              # yield pools (APY/TVL)
+prices    = client.defi_prices(["coingecko:bitcoin", "base:0x833589..."])
+
+# Generic escape hatch
+data = client.defi("protocol/uniswap-v3")
+```
+
+## DEX Swaps (Powered by 0x)
+
+Free passthrough to the 0x Swap + Gasless APIs — **no x402 payment**
+(BlockRun takes an on-chain affiliate fee on executed swaps instead).
+
+```python
+# Indicative price, then firm quote (Permit2)
+price = client.dex_price(chainId=8453, sellToken="0x...", buyToken="0x...",
+                         sellAmount="1000000")
+quote = client.dex_quote(chainId=8453, sellToken="0x...", buyToken="0x...",
+                         sellAmount="1000000", taker="0xYourWallet")
+
+# Gasless flow: quote -> sign trade.eip712 -> submit -> poll
+gq = client.dex_gasless_quote(chainId=8453, sellToken="0x...",
+                              buyToken="0x...", sellAmount="1000000",
+                              taker="0xYourWallet")
+res = client.dex_gasless_submit({"trade": {...signed...}})
+status = client.dex_gasless_status(res["tradeHash"])
+
+client.dex_chains()           # supported swap chains
+client.dex_gasless_chains()   # supported gasless chains
+```
+
+## Cloud Compute (Powered by Modal)
+
+Pay-per-call sandboxed compute — create a sandbox, run commands, tear it
+down. $0.01/create (CPU; $0.05 with GPU), $0.001 per exec/status/terminate.
+
+```python
+sb = client.modal_sandbox_create(image="python:3.11")
+out = client.modal_sandbox_exec(sb["sandbox_id"], ["python", "-c", "print(40+2)"])
+print(out["stdout"])  # 42
+client.modal_sandbox_terminate(sb["sandbox_id"])
+```
+
 ## Prediction Markets (Powered by Predexon v2)
 
 Access real-time prediction market data from Polymarket, Kalshi, Limitless, sports, and Binance Futures via [Predexon](https://predexon.com). No API keys needed — pay-per-request via x402. Tier 1 endpoints are $0.001/call, Tier 2 (wallet identity / clustering) are $0.005/call.

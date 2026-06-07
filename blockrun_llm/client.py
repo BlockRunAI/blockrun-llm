@@ -1777,6 +1777,155 @@ class LLMClient:
         and identity proofs. Tier 2 ($0.005/call)."""
         return self.pm(f"polymarket/wallet/{address}/cluster")
 
+    # ── DefiLlama (DeFi protocols / TVL / yields / prices) ──────────────────
+
+    def defi(self, path: str, **params: Any) -> Dict[str, Any]:
+        """
+        Query DefiLlama DeFi data (GET passthrough). Powered by DefiLlama.
+
+        $0.005/call for protocols / protocol/{slug} / chains / yields;
+        $0.001/call for prices/{coins}.
+
+        Args:
+            path: Endpoint path — "protocols", "protocol/{slug}", "chains",
+                "yields", or "prices/{coins}" (coins comma-separated, e.g.
+                "coingecko:bitcoin,base:0x...").
+            **params: Query parameters passed through to DefiLlama.
+
+        Example::
+
+            protocols = client.defi("protocols")
+            aave = client.defi("protocol/aave")
+        """
+        return self._get_with_payment_raw(f"/v1/defillama/{path}", params or None)
+
+    def defi_protocols(self) -> Dict[str, Any]:
+        """All DeFi protocols with TVL ($0.005/call)."""
+        return self.defi("protocols")
+
+    def defi_protocol(self, slug: str) -> Dict[str, Any]:
+        """Single protocol details + historical TVL ($0.005/call)."""
+        return self.defi(f"protocol/{slug}")
+
+    def defi_chains(self) -> Dict[str, Any]:
+        """Current TVL of every chain ($0.005/call)."""
+        return self.defi("chains")
+
+    def defi_yields(self, **params: Any) -> Dict[str, Any]:
+        """Yield pools with APY/TVL ($0.005/call)."""
+        return self.defi("yields", **params)
+
+    def defi_prices(self, coins: Union[List[str], str]) -> Dict[str, Any]:
+        """Token price lookup ($0.001/call).
+
+        Args:
+            coins: Coin ids like "coingecko:bitcoin" or "{chain}:{address}" —
+                a list or a pre-joined comma-separated string.
+        """
+        joined = ",".join(coins) if isinstance(coins, list) else coins
+        return self.defi(f"prices/{joined}")
+
+    # ── 0x DEX (swap quotes + gasless) — free passthrough ───────────────────
+
+    def dex(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        body: Optional[Dict[str, Any]] = None,
+        **params: Any,
+    ) -> Dict[str, Any]:
+        """
+        Query the 0x Swap / Gasless APIs (free — no x402 payment; BlockRun
+        takes an on-chain affiliate fee on executed swaps instead).
+
+        Args:
+            path: Endpoint path — "price", "quote", "gasless/price",
+                "gasless/quote", "gasless/submit" (POST), "gasless/status/{hash}",
+                "gasless/approval-tokens", "gasless/chains", "swap/chains".
+            method: "GET" (default) or "POST" (gasless/submit only).
+            body: JSON body for POST endpoints.
+            **params: Query parameters (chainId, sellToken, buyToken,
+                sellAmount, taker, ...).
+
+        Example::
+
+            quote = client.dex("quote", chainId=8453,
+                               sellToken="0x...", buyToken="0x...",
+                               sellAmount="1000000", taker="0x...")
+        """
+        endpoint = f"/v1/zerox/{path}"
+        if method.upper() == "POST":
+            return self._request_with_payment_raw(endpoint, body or {})
+        return self._get_with_payment_raw(endpoint, params or None)
+
+    def dex_price(self, **params: Any) -> Dict[str, Any]:
+        """Indicative Permit2 swap price — no commitment (free)."""
+        return self.dex("price", **params)
+
+    def dex_quote(self, **params: Any) -> Dict[str, Any]:
+        """Firm Permit2 swap quote with permit2.eip712 + tx data (free)."""
+        return self.dex("quote", **params)
+
+    def dex_gasless_price(self, **params: Any) -> Dict[str, Any]:
+        """Gasless indicative price quote (free)."""
+        return self.dex("gasless/price", **params)
+
+    def dex_gasless_quote(self, **params: Any) -> Dict[str, Any]:
+        """Gasless firm quote — returns trade.eip712 to sign (free)."""
+        return self.dex("gasless/quote", **params)
+
+    def dex_gasless_submit(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Submit a signed gasless trade; the 0x relayer pays gas (free)."""
+        return self.dex("gasless/submit", method="POST", body=body)
+
+    def dex_gasless_status(self, trade_hash: str) -> Dict[str, Any]:
+        """Poll a gasless trade's status by tradeHash (free)."""
+        return self.dex(f"gasless/status/{trade_hash}")
+
+    def dex_chains(self) -> Dict[str, Any]:
+        """Chains where the Swap API is supported (free)."""
+        return self.dex("swap/chains")
+
+    def dex_gasless_chains(self) -> Dict[str, Any]:
+        """Chains where the Gasless API is supported (free)."""
+        return self.dex("gasless/chains")
+
+    # ── Modal Sandbox (pay-per-call cloud compute) ───────────────────────────
+
+    def modal(self, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Call the Modal sandbox compute API (POST passthrough).
+
+        Args:
+            path: "sandbox/create" ($0.01 CPU / $0.05 GPU), "sandbox/exec"
+                ($0.001), "sandbox/status" ($0.001), "sandbox/terminate" ($0.001).
+            body: JSON body for the endpoint.
+        """
+        return self._request_with_payment_raw(f"/v1/modal/{path}", body or {})
+
+    def modal_sandbox_create(self, **body: Any) -> Dict[str, Any]:
+        """Create a sandboxed compute environment ($0.01 CPU / $0.05 GPU).
+
+        Common fields: image ("python:3.11"), gpu (optional GPU type),
+        timeout. Returns a sandbox_id for exec/status/terminate.
+        """
+        return self.modal("sandbox/create", body)
+
+    def modal_sandbox_exec(
+        self, sandbox_id: str, command: List[str], **body: Any
+    ) -> Dict[str, Any]:
+        """Execute a command in a sandbox; returns stdout/stderr ($0.001)."""
+        return self.modal("sandbox/exec", {"sandbox_id": sandbox_id, "command": command, **body})
+
+    def modal_sandbox_status(self, sandbox_id: str) -> Dict[str, Any]:
+        """Check a sandbox's status ($0.001)."""
+        return self.modal("sandbox/status", {"sandbox_id": sandbox_id})
+
+    def modal_sandbox_terminate(self, sandbox_id: str) -> Dict[str, Any]:
+        """Terminate a sandbox ($0.001)."""
+        return self.modal("sandbox/terminate", {"sandbox_id": sandbox_id})
+
     def list_models(self) -> List[Dict[str, Any]]:
         """
         List available LLM models with pricing.
@@ -2951,6 +3100,107 @@ class AsyncLLMClient:
         """Wallet-cluster discovery (on-chain transfers + identity proofs).
         Tier 2 ($0.005/call)."""
         return await self.pm(f"polymarket/wallet/{address}/cluster")
+
+    # ── DefiLlama (DeFi protocols / TVL / yields / prices) ──────────────────
+
+    async def defi(self, path: str, **params: Any) -> Dict[str, Any]:
+        """Async query DefiLlama DeFi data (GET). $0.005/call ($0.001 for prices)."""
+        return await self._get_with_payment_raw(f"/v1/defillama/{path}", params or None)
+
+    async def defi_protocols(self) -> Dict[str, Any]:
+        """Async: all DeFi protocols with TVL ($0.005/call)."""
+        return await self.defi("protocols")
+
+    async def defi_protocol(self, slug: str) -> Dict[str, Any]:
+        """Async: single protocol details + historical TVL ($0.005/call)."""
+        return await self.defi(f"protocol/{slug}")
+
+    async def defi_chains(self) -> Dict[str, Any]:
+        """Async: current TVL of every chain ($0.005/call)."""
+        return await self.defi("chains")
+
+    async def defi_yields(self, **params: Any) -> Dict[str, Any]:
+        """Async: yield pools with APY/TVL ($0.005/call)."""
+        return await self.defi("yields", **params)
+
+    async def defi_prices(self, coins: Union[List[str], str]) -> Dict[str, Any]:
+        """Async: token price lookup ($0.001/call)."""
+        joined = ",".join(coins) if isinstance(coins, list) else coins
+        return await self.defi(f"prices/{joined}")
+
+    # ── 0x DEX (swap quotes + gasless) — free passthrough ───────────────────
+
+    async def dex(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        body: Optional[Dict[str, Any]] = None,
+        **params: Any,
+    ) -> Dict[str, Any]:
+        """Async query the 0x Swap / Gasless APIs (free passthrough)."""
+        endpoint = f"/v1/zerox/{path}"
+        if method.upper() == "POST":
+            return await self._request_with_payment_raw(endpoint, body or {})
+        return await self._get_with_payment_raw(endpoint, params or None)
+
+    async def dex_price(self, **params: Any) -> Dict[str, Any]:
+        """Async: indicative Permit2 swap price (free)."""
+        return await self.dex("price", **params)
+
+    async def dex_quote(self, **params: Any) -> Dict[str, Any]:
+        """Async: firm Permit2 swap quote (free)."""
+        return await self.dex("quote", **params)
+
+    async def dex_gasless_price(self, **params: Any) -> Dict[str, Any]:
+        """Async: gasless indicative price quote (free)."""
+        return await self.dex("gasless/price", **params)
+
+    async def dex_gasless_quote(self, **params: Any) -> Dict[str, Any]:
+        """Async: gasless firm quote — returns trade.eip712 to sign (free)."""
+        return await self.dex("gasless/quote", **params)
+
+    async def dex_gasless_submit(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Async: submit a signed gasless trade (free)."""
+        return await self.dex("gasless/submit", method="POST", body=body)
+
+    async def dex_gasless_status(self, trade_hash: str) -> Dict[str, Any]:
+        """Async: poll a gasless trade's status (free)."""
+        return await self.dex(f"gasless/status/{trade_hash}")
+
+    async def dex_chains(self) -> Dict[str, Any]:
+        """Async: chains where the Swap API is supported (free)."""
+        return await self.dex("swap/chains")
+
+    async def dex_gasless_chains(self) -> Dict[str, Any]:
+        """Async: chains where the Gasless API is supported (free)."""
+        return await self.dex("gasless/chains")
+
+    # ── Modal Sandbox (pay-per-call cloud compute) ───────────────────────────
+
+    async def modal(self, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Async call the Modal sandbox compute API (POST passthrough)."""
+        return await self._request_with_payment_raw(f"/v1/modal/{path}", body or {})
+
+    async def modal_sandbox_create(self, **body: Any) -> Dict[str, Any]:
+        """Async: create a sandbox ($0.01 CPU / $0.05 GPU)."""
+        return await self.modal("sandbox/create", body)
+
+    async def modal_sandbox_exec(
+        self, sandbox_id: str, command: List[str], **body: Any
+    ) -> Dict[str, Any]:
+        """Async: execute a command in a sandbox ($0.001)."""
+        return await self.modal(
+            "sandbox/exec", {"sandbox_id": sandbox_id, "command": command, **body}
+        )
+
+    async def modal_sandbox_status(self, sandbox_id: str) -> Dict[str, Any]:
+        """Async: check a sandbox's status ($0.001)."""
+        return await self.modal("sandbox/status", {"sandbox_id": sandbox_id})
+
+    async def modal_sandbox_terminate(self, sandbox_id: str) -> Dict[str, Any]:
+        """Async: terminate a sandbox ($0.001)."""
+        return await self.modal("sandbox/terminate", {"sandbox_id": sandbox_id})
 
     async def list_models(self) -> List[Dict[str, Any]]:
         """List available LLM models asynchronously."""

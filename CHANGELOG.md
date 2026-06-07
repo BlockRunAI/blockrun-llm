@@ -2,6 +2,24 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.1.0 — 2026-06-07
+
+### Added
+- **DefiLlama passthrough (`/v1/defillama/*`, live since 2026-05-02 — coverage
+  backfill).** `defi(path, **params)` plus typed conveniences
+  `defi_protocols` / `defi_protocol(slug)` / `defi_chains` / `defi_yields` /
+  `defi_prices(coins)` on `LLMClient`, `AsyncLLMClient` and `SolanaLLMClient`.
+  $0.005/call ($0.001 for prices).
+- **0x DEX passthrough (`/v1/zerox/*`, live since 2026-05-02 — coverage
+  backfill).** Free (no x402; BlockRun monetizes via on-chain affiliate fee):
+  `dex(path, ...)` + `dex_price` / `dex_quote` / `dex_gasless_price` /
+  `dex_gasless_quote` / `dex_gasless_submit` / `dex_gasless_status` /
+  `dex_chains` / `dex_gasless_chains` on all three clients.
+- **Modal sandbox compute (`/v1/modal/*`, live since 2026-04-09 — coverage
+  backfill).** `modal(path, body)` + `modal_sandbox_create` ($0.01 CPU /
+  $0.05 GPU) / `modal_sandbox_exec` / `modal_sandbox_status` /
+  `modal_sandbox_terminate` ($0.001 each) on all three clients.
+
 ## 1.0.0 — 2026-06-07
 
 ### Removed (BREAKING)
