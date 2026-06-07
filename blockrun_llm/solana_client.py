@@ -1708,6 +1708,106 @@ class SolanaLLMClient:
             "/v1/exa/answer", {"query": query, **kwargs}, timeout=self._search_timeout
         )
 
+    # ── DefiLlama (DeFi protocols / TVL / yields / prices) ──────────────────
+
+    def defi(self, path: str, **params: Any) -> Dict[str, Any]:
+        """Query DefiLlama DeFi data (GET, Solana payment). $0.005/call
+        ($0.001 for prices/{coins})."""
+        return self._get_with_payment_raw(f"/v1/defillama/{path}", params or None)
+
+    def defi_protocols(self) -> Dict[str, Any]:
+        """All DeFi protocols with TVL ($0.005/call)."""
+        return self.defi("protocols")
+
+    def defi_protocol(self, slug: str) -> Dict[str, Any]:
+        """Single protocol details + historical TVL ($0.005/call)."""
+        return self.defi(f"protocol/{slug}")
+
+    def defi_chains(self) -> Dict[str, Any]:
+        """Current TVL of every chain ($0.005/call)."""
+        return self.defi("chains")
+
+    def defi_yields(self, **params: Any) -> Dict[str, Any]:
+        """Yield pools with APY/TVL ($0.005/call)."""
+        return self.defi("yields", **params)
+
+    def defi_prices(self, coins: Union[List[str], str]) -> Dict[str, Any]:
+        """Token price lookup ($0.001/call)."""
+        joined = ",".join(coins) if isinstance(coins, list) else coins
+        return self.defi(f"prices/{joined}")
+
+    # ── 0x DEX (swap quotes + gasless) — free passthrough ───────────────────
+
+    def dex(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        body: Optional[Dict[str, Any]] = None,
+        **params: Any,
+    ) -> Dict[str, Any]:
+        """Query the 0x Swap / Gasless APIs (free — no x402 payment)."""
+        endpoint = f"/v1/zerox/{path}"
+        if method.upper() == "POST":
+            return self._request_with_payment_raw(endpoint, body or {})
+        return self._get_with_payment_raw(endpoint, params or None)
+
+    def dex_price(self, **params: Any) -> Dict[str, Any]:
+        """Indicative Permit2 swap price — no commitment (free)."""
+        return self.dex("price", **params)
+
+    def dex_quote(self, **params: Any) -> Dict[str, Any]:
+        """Firm Permit2 swap quote with permit2.eip712 + tx data (free)."""
+        return self.dex("quote", **params)
+
+    def dex_gasless_price(self, **params: Any) -> Dict[str, Any]:
+        """Gasless indicative price quote (free)."""
+        return self.dex("gasless/price", **params)
+
+    def dex_gasless_quote(self, **params: Any) -> Dict[str, Any]:
+        """Gasless firm quote — returns trade.eip712 to sign (free)."""
+        return self.dex("gasless/quote", **params)
+
+    def dex_gasless_submit(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Submit a signed gasless trade; the 0x relayer pays gas (free)."""
+        return self.dex("gasless/submit", method="POST", body=body)
+
+    def dex_gasless_status(self, trade_hash: str) -> Dict[str, Any]:
+        """Poll a gasless trade's status by tradeHash (free)."""
+        return self.dex(f"gasless/status/{trade_hash}")
+
+    def dex_chains(self) -> Dict[str, Any]:
+        """Chains where the Swap API is supported (free)."""
+        return self.dex("swap/chains")
+
+    def dex_gasless_chains(self) -> Dict[str, Any]:
+        """Chains where the Gasless API is supported (free)."""
+        return self.dex("gasless/chains")
+
+    # ── Modal Sandbox (pay-per-call cloud compute) ───────────────────────────
+
+    def modal(self, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Call the Modal sandbox compute API (POST, Solana payment)."""
+        return self._request_with_payment_raw(f"/v1/modal/{path}", body or {})
+
+    def modal_sandbox_create(self, **body: Any) -> Dict[str, Any]:
+        """Create a sandboxed compute environment ($0.01 CPU / $0.05 GPU)."""
+        return self.modal("sandbox/create", body)
+
+    def modal_sandbox_exec(
+        self, sandbox_id: str, command: List[str], **body: Any
+    ) -> Dict[str, Any]:
+        """Execute a command in a sandbox; returns stdout/stderr ($0.001)."""
+        return self.modal("sandbox/exec", {"sandbox_id": sandbox_id, "command": command, **body})
+
+    def modal_sandbox_status(self, sandbox_id: str) -> Dict[str, Any]:
+        """Check a sandbox's status ($0.001)."""
+        return self.modal("sandbox/status", {"sandbox_id": sandbox_id})
+
+    def modal_sandbox_terminate(self, sandbox_id: str) -> Dict[str, Any]:
+        """Terminate a sandbox ($0.001)."""
+        return self.modal("sandbox/terminate", {"sandbox_id": sandbox_id})
+
 
 # ===========================================================================
 # AsyncSolanaLLMClient — async mirror of SolanaLLMClient (chat only, v0.22.0)
