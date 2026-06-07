@@ -339,25 +339,33 @@ FREE_TIERS: Dict[Tier, TierConfig] = {
     # for the same hang. Primaries here are pinned to visible models so the
     # Python pricing dict (built from /v1/models) can resolve them.
     #
-    # 2026-05-09 sweep: nvidia/deepseek-v4-flash itself is now timing out at
-    # 120s (NIM upstream regression). Demoted from MEDIUM primary and from
-    # all fallback chains; nvidia/llama-4-maverick (fastest visible free tier
-    # in the sweep, 413ms) takes its place as the safety net.
+    # 2026-06-07 sweep (live-probed every visible free model):
+    # - nvidia/qwen3-next-80b-a3b-thinking hit NVIDIA END-OF-LIFE 2026-05-21
+    #   (HTTP 410 Gone; backend marks it hidden + unavailable and redirects to
+    #   llama-4-maverick). Dropped as COMPLEX/REASONING primary.
+    # - nvidia/mistral-small-4-119b is timing out upstream (3/3 probes >60s).
+    #   Dropped as SIMPLE primary and from all fallback chains.
+    # - nvidia/deepseek-v4-flash RECOVERED from the 05-09 NIM regression
+    #   (896ms probe) — reinstated as SIMPLE primary (1M context, fastest
+    #   capable free chat).
+    # - nvidia/nemotron-3-nano-omni-30b-a3b-reasoning (681ms, 256K ctx,
+    #   explicit reasoning + vision) takes the REASONING primary.
+    # - nvidia/qwen3-coder-480b (871ms, 480B MoE) takes the COMPLEX primary.
     "SIMPLE": {
-        "primary": "nvidia/mistral-small-4-119b",
+        "primary": "nvidia/deepseek-v4-flash",
         "fallback": ["nvidia/llama-4-maverick"],
     },
     "MEDIUM": {
         "primary": "nvidia/llama-4-maverick",
-        "fallback": ["nvidia/qwen3-coder-480b", "nvidia/mistral-small-4-119b"],
+        "fallback": ["nvidia/qwen3-coder-480b", "nvidia/deepseek-v4-flash"],
     },
     "COMPLEX": {
-        "primary": "nvidia/qwen3-next-80b-a3b-thinking",
-        "fallback": ["nvidia/llama-4-maverick", "nvidia/qwen3-coder-480b"],
+        "primary": "nvidia/qwen3-coder-480b",
+        "fallback": ["nvidia/llama-4-maverick", "nvidia/deepseek-v4-flash"],
     },
     "REASONING": {
-        "primary": "nvidia/qwen3-next-80b-a3b-thinking",
-        "fallback": ["nvidia/llama-4-maverick", "nvidia/qwen3-coder-480b"],
+        "primary": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        "fallback": ["nvidia/llama-4-maverick", "nvidia/deepseek-v4-flash"],
     },
 }
 

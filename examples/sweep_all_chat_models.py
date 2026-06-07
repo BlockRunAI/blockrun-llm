@@ -86,9 +86,10 @@ SWEEP_TARGETS: List[str] = [
     "moonshot/kimi-k2.5",
     "moonshot/kimi-k2.6",
     # NVIDIA — free tier
+    # (qwen3-next-80b-a3b-thinking removed: NVIDIA EOL 2026-05-21, HTTP 410;
+    # gateway redirects pinned callers to llama-4-maverick)
     "nvidia/deepseek-v4-flash",
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-    "nvidia/qwen3-next-80b-a3b-thinking",
     "nvidia/mistral-small-4-119b",
     "nvidia/llama-4-maverick",
     "nvidia/qwen3-coder-480b",
@@ -111,7 +112,6 @@ REASONING_MODELS = {
     "deepseek/deepseek-reasoner",
     "deepseek/deepseek-v4-pro",
     "xai/grok-4.3",
-    "nvidia/qwen3-next-80b-a3b-thinking",
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
 }
 

@@ -2,6 +2,49 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 0.39.0 — 2026-06-07
+
+### Added
+- **`RpcClient` — Multi-chain JSON-RPC (40+ chains).** Mirrors the new
+  backend `POST /v1/rpc/{network}` (Tatum gateway passthrough, launched
+  2026-06-07). Flat $0.002 per call; a JSON-RPC batch charges per element.
+  - `call(network, method, params)` — single JSON-RPC 2.0 call. EVM chains
+    speak `eth_*`; non-EVM (Solana / Bitcoin-family / NEAR / Sui / XRP
+    Ledger / Polkadot) speak their native JSON-RPC.
+  - `batch(network, requests)` — JSON-RPC batch, priced per element.
+  - `SUPPORTED_NETWORKS` (40 curated chains) + `NETWORK_ALIASES` (eth, arb,
+    op, matic, bnb, avax, sol, btc, xrp, dot, ...). Unknown well-formed slugs
+    fall through server-side to `{slug}-mainnet`, so new Tatum chains work
+    without an SDK update.
+  - New types: `RpcResponse` (JSON-RPC envelope + `network` / `cache_hit` /
+    `tx_hash` gateway metadata), `RpcError`.
+- **`VideoClient.generate()` new Seedance parameters** (backend 2026-06-02):
+  - `last_frame_url` — first-and-last-frame interpolation: the model tweens
+    from `image_url` (first frame) to `last_frame_url` (final frame).
+    Requires `image_url` + a Seedance model. Priced as image-to-video.
+  - `reference_image_urls` — omni / multi-reference: up to 9 reference images
+    for character/style consistency (Seedance 2.0 only); cite them as
+    "image 1", "image 2" in the prompt. Mutually exclusive with `image_url` /
+    `last_frame_url` / `real_face_asset_id`.
+  - token360 passthroughs that were already live upstream: `aspect_ratio`,
+    `seed`, `watermark`, `return_last_frame`.
+  - Client-side validation mirrors the backend mutual-exclusion rules.
+
+### Changed
+- **Free-tier router table rebuilt from a 2026-06-07 live sweep** (every
+  visible free model probed):
+  - `nvidia/qwen3-next-80b-a3b-thinking` hit NVIDIA end-of-life 2026-05-21
+    (HTTP 410) — dropped as COMPLEX/REASONING primary. COMPLEX →
+    `nvidia/qwen3-coder-480b` (871ms probe); REASONING →
+    `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` (681ms, explicit
+    reasoning + vision).
+  - `nvidia/mistral-small-4-119b` is timing out upstream (3/3 probes >60s) —
+    dropped as SIMPLE primary and from all fallback chains.
+  - `nvidia/deepseek-v4-flash` RECOVERED from the 05-09 NIM regression
+    (896ms probe) — reinstated as SIMPLE primary.
+- README free-model tables updated to match (qwen3-next retired,
+  mistral-small flagged as timing out); sweep example pruned.
+
 ## 0.38.1 — 2026-06-06
 
 ### Changed

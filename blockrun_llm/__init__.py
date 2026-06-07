@@ -43,6 +43,13 @@ Text-to-speech (BlockRun Voice / ElevenLabs):
     result = client.generate("Welcome to BlockRun.", voice="sarah")
     print(result.data[0].url)  # audio URL
 
+Multi-chain RPC (40+ chains, $0.002/call):
+    from blockrun_llm import RpcClient
+
+    client = RpcClient()
+    block = client.call("ethereum", "eth_blockNumber")
+    print(block.result)
+
 Other Chains:
     - Solana (USDC): Use SolanaLLMClient (pip install blockrun-llm[solana])
 """
@@ -69,6 +76,7 @@ from .surf import SurfClient
 from .search import SearchClient
 from .x_client import XClient
 from .price import PriceClient
+from .rpc import RpcClient, SUPPORTED_NETWORKS, NETWORK_ALIASES
 from .types import (
     ChatMessage,
     ChatResponse,
@@ -139,6 +147,9 @@ from .types import (
     PriceBar,
     PriceHistoryResponse,
     SymbolListResponse,
+    # Multi-chain RPC types
+    RpcResponse,
+    RpcError,
 )
 from .wallet import (
     setup_agent_wallet,  # Entry point for agents (auto-creates wallet)
@@ -177,7 +188,7 @@ from .cache import (
 )
 from .tx_log import TransactionLogger, decode_settlement_header, format_row
 
-__version__ = "0.38.1"
+__version__ = "0.39.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -205,6 +216,9 @@ __all__ = [
     "SearchClient",
     "XClient",
     "PriceClient",
+    "RpcClient",
+    "SUPPORTED_NETWORKS",
+    "NETWORK_ALIASES",
     "ChatMessage",
     "ChatResponse",
     "ChatCompletionChunk",
@@ -269,6 +283,9 @@ __all__ = [
     "PriceBar",
     "PriceHistoryResponse",
     "SymbolListResponse",
+    # Multi-chain RPC types
+    "RpcResponse",
+    "RpcError",
     # Wallet utilities
     "get_or_create_wallet",
     "get_wallet_address",
