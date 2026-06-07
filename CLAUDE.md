@@ -1,6 +1,6 @@
 # BlockRun LLM SDK (Python)
 
-Python SDK for 80+ LLMs plus image/video/music/speech generation, standalone search, X/Twitter APIs, and Pyth-backed market data — all gated by USDC micropayments via x402. No API keys — wallet signature is authentication.
+Python SDK for 80+ LLMs plus image/video/music/speech generation, standalone search, multi-chain RPC, and Pyth-backed market data — all gated by USDC micropayments via x402. No API keys — wallet signature is authentication.
 
 ## Commands
 
@@ -34,8 +34,8 @@ blockrun_llm/
 ├── portrait.py              # Virtual Portrait enrollment (AI characters)
 ├── realface.py              # RealFace enrollment (real-person likeness)
 ├── search.py                # Standalone Grok Live Search
-├── x_client.py              # X/Twitter (AttentionVC) endpoints
 ├── price.py                 # Pyth market data (crypto/fx/commodity/stocks)
+├── rpc.py                   # Multi-chain JSON-RPC (Tatum gateway, 40+ chains)
 └── anthropic_client.py      # Anthropic-compatible client
 ```
 

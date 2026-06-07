@@ -2,6 +2,18 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.0.0 — 2026-06-07
+
+### Removed (BREAKING)
+- **`XClient` and the entire X/Twitter (AttentionVC) surface.** The backend
+  removed the AttentionVC integration on 2026-04-30; every `/v1/x/*` endpoint
+  has returned HTTP 404 since. Deleted: `x_client.py` (`XClient`), the 15
+  `x_*` methods on `LLMClient` / `AsyncLLMClient` / `SolanaLLMClient`, and the
+  18 `X*` response types (`XUser`, `XTweet`, `XSearchResponse`, ...).
+  `XSearchSource` (Grok Live Search `sources:["x"]`) is unrelated and stays.
+  If you need X/Twitter data, use Grok Live Search (`SearchClient` /
+  `client.search(...)` with the `x` source) instead.
+
 ## 0.39.0 — 2026-06-07
 
 ### Added

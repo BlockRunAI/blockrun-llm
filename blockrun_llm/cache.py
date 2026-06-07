@@ -28,7 +28,6 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 # Default TTL in seconds per endpoint pattern
 DEFAULT_TTL: Dict[str, int] = {
     # X/Twitter data — cache 1 hour (followers/tweets don't change every minute)
-    "/v1/x/": 3600,
     "/v1/partner/": 3600,
     # Prediction markets — cache 30 minutes
     "/v1/pm/": 1800,
@@ -104,8 +103,6 @@ def _readable_filename(endpoint: str, body: Dict[str, Any]) -> str:
     ep = endpoint.rstrip("/").rsplit("/", 1)[-1]
     if "/v1/chat/" in endpoint:
         ep = "chat"
-    elif "/v1/x/" in endpoint:
-        ep = "x_" + ep
     elif "/v1/search" in endpoint:
         ep = "search"
     elif "/v1/image" in endpoint:

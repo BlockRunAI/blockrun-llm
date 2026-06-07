@@ -74,7 +74,6 @@ from .voice import VoiceClient
 from .phone import PhoneClient
 from .surf import SurfClient
 from .search import SearchClient
-from .x_client import XClient
 from .price import PriceClient
 from .rpc import RpcClient, SUPPORTED_NETWORKS, NETWORK_ALIASES
 from .types import (
@@ -123,25 +122,6 @@ from .types import (
     SmartChatResponse,
     # Standalone search
     SearchResult,
-    # X/Twitter types
-    XUser,
-    XUserLookupResponse,
-    XFollower,
-    XFollowersResponse,
-    XFollowingsResponse,
-    XUserInfoResponse,
-    XVerifiedFollowersResponse,
-    XTweet,
-    XTweetsResponse,
-    XMentionsResponse,
-    XTweetLookupResponse,
-    XTweetRepliesResponse,
-    XTweetThreadResponse,
-    XSearchResponse,
-    XTrendingResponse,
-    XArticlesRisingResponse,
-    XAuthorAnalyticsResponse,
-    XCompareAuthorsResponse,
     # Pyth market data types
     PricePoint,
     PriceBar,
@@ -188,7 +168,7 @@ from .cache import (
 )
 from .tx_log import TransactionLogger, decode_settlement_header, format_row
 
-__version__ = "0.39.0"
+__version__ = "1.0.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -214,7 +194,6 @@ __all__ = [
     "PhoneClient",
     "SurfClient",
     "SearchClient",
-    "XClient",
     "PriceClient",
     "RpcClient",
     "SUPPORTED_NETWORKS",
@@ -259,25 +238,6 @@ __all__ = [
     "SmartChatResponse",
     # Standalone search
     "SearchResult",
-    # X/Twitter types
-    "XUser",
-    "XUserLookupResponse",
-    "XFollower",
-    "XFollowersResponse",
-    "XFollowingsResponse",
-    "XUserInfoResponse",
-    "XVerifiedFollowersResponse",
-    "XTweet",
-    "XTweetsResponse",
-    "XMentionsResponse",
-    "XTweetLookupResponse",
-    "XTweetRepliesResponse",
-    "XTweetThreadResponse",
-    "XSearchResponse",
-    "XTrendingResponse",
-    "XArticlesRisingResponse",
-    "XAuthorAnalyticsResponse",
-    "XCompareAuthorsResponse",
     # Pyth market data types
     "PricePoint",
     "PriceBar",
