@@ -2430,6 +2430,358 @@ class AsyncSolanaLLMClient:
         self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
         return ChatResponse(**response_data)
 
+    # ── Raw passthrough request helpers (async, Solana payment) ─────────────
+
+    async def _request_with_payment_raw(
+        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """POST with Solana x402 payment, returning raw JSON (async mirror of
+        the sync :class:`SolanaLLMClient` helper)."""
+        from .cache import get_cached, save_to_cache
+
+        cached = get_cached(endpoint, body)
+        if cached is not None:
+            return cached
+
+        url = f"{self._api_url}{endpoint}"
+        headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
+        eff_timeout = timeout if timeout is not None else self._timeout
+
+        response = await self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
+        if response.status_code in (502, 503):
+            await asyncio.sleep(1)
+            response = await self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
+
+        if response.status_code == 402:
+            payment_headers, cost_usd = await self._sign_payment_from_response(response)
+            retry_response = await self._client.post(
+                url, json=body, headers=payment_headers, timeout=eff_timeout
+            )
+            if retry_response.status_code in (502, 503):
+                await asyncio.sleep(1)
+                retry_response = await self._client.post(
+                    url, json=body, headers=payment_headers, timeout=eff_timeout
+                )
+            if retry_response.status_code == 402:
+                raise build_payment_rejected_error(retry_response)
+            if not retry_response.is_success:
+                try:
+                    error_body = retry_response.json()
+                except Exception:
+                    error_body = {"error": "Request failed"}
+                raise APIError(
+                    f"API error after payment: {retry_response.status_code}",
+                    retry_response.status_code,
+                    sanitize_error_response(error_body),
+                )
+            self._session_calls += 1
+            self._session_total_usd += cost_usd
+            self._last_call_cost = cost_usd
+            self._capture_settlement(retry_response)
+            result = retry_response.json()
+            save_to_cache(endpoint, body, result, cost_usd=cost_usd, **self._billing_meta())
+            self._log_transaction(endpoint, body, result, cost_usd)
+            return result
+
+        if not response.is_success:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error: {response.status_code}",
+                response.status_code,
+                sanitize_error_response(error_body),
+            )
+        return response.json()
+
+    async def _get_with_payment_raw(
+        self,
+        endpoint: str,
+        params: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """GET with Solana x402 payment, returning raw JSON (async)."""
+        from .cache import get_cached, save_to_cache
+
+        cache_key_body = params or {}
+        cached = get_cached(endpoint, cache_key_body)
+        if cached is not None:
+            return cached
+
+        url = f"{self._api_url}{endpoint}"
+        headers = {"User-Agent": _get_user_agent()}
+        eff_timeout = timeout if timeout is not None else self._timeout
+
+        response = await self._client.get(url, params=params, headers=headers, timeout=eff_timeout)
+        if response.status_code in (502, 503):
+            await asyncio.sleep(1)
+            response = await self._client.get(
+                url, params=params, headers=headers, timeout=eff_timeout
+            )
+
+        if response.status_code == 402:
+            payment_headers, cost_usd = await self._sign_payment_from_response(response)
+            retry_response = await self._client.get(
+                url, params=params, headers=payment_headers, timeout=eff_timeout
+            )
+            if retry_response.status_code in (502, 503):
+                await asyncio.sleep(1)
+                retry_response = await self._client.get(
+                    url, params=params, headers=payment_headers, timeout=eff_timeout
+                )
+            if retry_response.status_code == 402:
+                raise build_payment_rejected_error(retry_response)
+            if not retry_response.is_success:
+                try:
+                    error_body = retry_response.json()
+                except Exception:
+                    error_body = {"error": "Request failed"}
+                raise APIError(
+                    f"API error after payment: {retry_response.status_code}",
+                    retry_response.status_code,
+                    sanitize_error_response(error_body),
+                )
+            self._session_calls += 1
+            self._session_total_usd += cost_usd
+            self._last_call_cost = cost_usd
+            self._capture_settlement(retry_response)
+            result = retry_response.json()
+            save_to_cache(
+                endpoint, cache_key_body, result, cost_usd=cost_usd, **self._billing_meta()
+            )
+            self._log_transaction(endpoint, cache_key_body, result, cost_usd)
+            return result
+
+        if not response.is_success:
+            try:
+                error_body = response.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"API error: {response.status_code}",
+                response.status_code,
+                sanitize_error_response(error_body),
+            )
+        return response.json()
+
+    # ── Prediction Markets (Powered by Predexon) ────────────────────────────
+
+    async def pm(self, path: str, **params: Any) -> Dict[str, Any]:
+        """Query Predexon prediction market data (GET, Solana payment). Powered by Predexon."""
+        return await self._get_with_payment_raw(f"/v1/pm/{path}", params or None)
+
+    async def pm_query(self, path: str, query: Dict[str, Any]) -> Dict[str, Any]:
+        """Structured query for Predexon data (POST, Solana payment). Powered by Predexon."""
+        return await self._request_with_payment_raw(f"/v1/pm/{path}", query)
+
+    async def pm_markets(self, **params: Any) -> Dict[str, Any]:
+        """List canonical cross-venue markets (Predexon v2). Tier 1 ($0.001/call)."""
+        return await self.pm("markets", **params)
+
+    async def pm_listings(self, **params: Any) -> Dict[str, Any]:
+        """List venue-native executable listings (Predexon v2). Tier 1 ($0.001/call)."""
+        return await self.pm("markets/listings", **params)
+
+    async def pm_outcome(self, predexon_id: str) -> Dict[str, Any]:
+        """Resolve a canonical Predexon outcome ID (Predexon v2). Tier 1 ($0.001/call)."""
+        return await self.pm(f"outcomes/{predexon_id}")
+
+    async def pm_polymarket_markets(self, **params: Any) -> Dict[str, Any]:
+        """List Polymarket markets (Predexon v2). Tier 1 ($0.001/call)."""
+        return await self.pm("polymarket/markets", **params)
+
+    async def pm_polymarket_events(self, **params: Any) -> Dict[str, Any]:
+        """List Polymarket events (Predexon v2). Tier 1 ($0.001/call)."""
+        return await self.pm("polymarket/events", **params)
+
+    async def pm_polymarket_markets_keyset(self, **params: Any) -> Dict[str, Any]:
+        """Polymarket markets with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
+        return await self.pm("polymarket/markets/keyset", **params)
+
+    async def pm_polymarket_events_keyset(self, **params: Any) -> Dict[str, Any]:
+        """Polymarket events with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
+        return await self.pm("polymarket/events/keyset", **params)
+
+    async def pm_polymarket_positions(self, **params: Any) -> Dict[str, Any]:
+        """Polymarket open positions (per-wallet, market-level PnL). Tier 1 ($0.001/call)."""
+        return await self.pm("polymarket/positions", **params)
+
+    async def pm_polymarket_trades(self, **params: Any) -> Dict[str, Any]:
+        """Recent Polymarket trades. Tier 1 ($0.001/call)."""
+        return await self.pm("polymarket/trades", **params)
+
+    async def pm_polymarket_leaderboard(self, **params: Any) -> Dict[str, Any]:
+        """Polymarket trader leaderboard. Tier 1 ($0.001/call)."""
+        return await self.pm("polymarket/leaderboard", **params)
+
+    async def pm_kalshi_markets(self, **params: Any) -> Dict[str, Any]:
+        """List Kalshi markets. Tier 1 ($0.001/call)."""
+        return await self.pm("kalshi/markets", **params)
+
+    async def pm_limitless_markets(self, **params: Any) -> Dict[str, Any]:
+        """List Limitless markets. Tier 1 ($0.001/call)."""
+        return await self.pm("limitless/markets", **params)
+
+    async def pm_sports_categories(self) -> Dict[str, Any]:
+        """List available sports categories. Tier 1 ($0.001/call)."""
+        return await self.pm("sports/categories")
+
+    async def pm_sports_markets(self, **params: Any) -> Dict[str, Any]:
+        """List sports markets grouped by game. Tier 1 ($0.001/call)."""
+        return await self.pm("sports/markets", **params)
+
+    async def pm_wallet_identity(self, wallet: str) -> Dict[str, Any]:
+        """Identity + profile for one wallet. Tier 2 ($0.005/call)."""
+        return await self.pm(f"polymarket/wallet/identity/{wallet}")
+
+    async def pm_wallet_identities(self, addresses: List[str]) -> Dict[str, Any]:
+        """Bulk identity for up to 200 wallet addresses. Tier 2 ($0.005/call)."""
+        return await self.pm_query("polymarket/wallet/identities", {"addresses": addresses})
+
+    async def pm_wallet_cluster(self, address: str) -> Dict[str, Any]:
+        """Wallet-cluster discovery (on-chain transfers + identity proofs). Tier 2 ($0.005/call)."""
+        return await self.pm(f"polymarket/wallet/{address}/cluster")
+
+    # ── Exa Web Search (Powered by Exa) ─────────────────────────────────────
+
+    async def exa(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Generic Exa endpoint proxy (POST, Solana payment). Powered by Exa.
+
+        Args:
+            path: Exa endpoint — one of: "search", "find-similar", "contents", "answer"
+            body: Request body (see Exa API docs)
+        """
+        return await self._request_with_payment_raw(
+            f"/v1/exa/{path}", body, timeout=self._search_timeout
+        )
+
+    async def exa_search(self, query: str, **kwargs: Any) -> Dict[str, Any]:
+        """Neural and keyword web search via Exa (Solana payment, $0.01/request)."""
+        return await self._request_with_payment_raw(
+            "/v1/exa/search", {"query": query, **kwargs}, timeout=self._search_timeout
+        )
+
+    async def exa_find_similar(self, url: str, **kwargs: Any) -> Dict[str, Any]:
+        """Find pages semantically similar to a given URL via Exa (Solana payment, $0.01/request)."""
+        return await self._request_with_payment_raw(
+            "/v1/exa/find-similar", {"url": url, **kwargs}, timeout=self._search_timeout
+        )
+
+    async def exa_contents(self, urls: List[str], **kwargs: Any) -> Dict[str, Any]:
+        """Extract full text content from URLs via Exa (Solana payment, $0.002/URL)."""
+        return await self._request_with_payment_raw(
+            "/v1/exa/contents", {"urls": urls, **kwargs}, timeout=self._search_timeout
+        )
+
+    async def exa_answer(self, query: str, **kwargs: Any) -> Dict[str, Any]:
+        """AI-generated answer grounded in live web search via Exa (Solana payment, $0.01/request)."""
+        return await self._request_with_payment_raw(
+            "/v1/exa/answer", {"query": query, **kwargs}, timeout=self._search_timeout
+        )
+
+    # ── DefiLlama (DeFi protocols / TVL / yields / prices) ──────────────────
+
+    async def defi(self, path: str, **params: Any) -> Dict[str, Any]:
+        """Query DefiLlama DeFi data (GET, Solana payment). $0.005/call
+        ($0.001 for prices/{coins})."""
+        return await self._get_with_payment_raw(f"/v1/defillama/{path}", params or None)
+
+    async def defi_protocols(self) -> Dict[str, Any]:
+        """All DeFi protocols with TVL ($0.005/call)."""
+        return await self.defi("protocols")
+
+    async def defi_protocol(self, slug: str) -> Dict[str, Any]:
+        """Single protocol details + historical TVL ($0.005/call)."""
+        return await self.defi(f"protocol/{slug}")
+
+    async def defi_chains(self) -> Dict[str, Any]:
+        """Current TVL of every chain ($0.005/call)."""
+        return await self.defi("chains")
+
+    async def defi_yields(self, **params: Any) -> Dict[str, Any]:
+        """Yield pools with APY/TVL ($0.005/call)."""
+        return await self.defi("yields", **params)
+
+    async def defi_prices(self, coins: Union[List[str], str]) -> Dict[str, Any]:
+        """Token price lookup ($0.001/call)."""
+        joined = ",".join(coins) if isinstance(coins, list) else coins
+        return await self.defi(f"prices/{joined}")
+
+    # ── 0x DEX (swap quotes + gasless) — free passthrough ───────────────────
+
+    async def dex(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        body: Optional[Dict[str, Any]] = None,
+        **params: Any,
+    ) -> Dict[str, Any]:
+        """Query the 0x Swap / Gasless APIs (free — no x402 payment)."""
+        endpoint = f"/v1/zerox/{path}"
+        if method.upper() == "POST":
+            return await self._request_with_payment_raw(endpoint, body or {})
+        return await self._get_with_payment_raw(endpoint, params or None)
+
+    async def dex_price(self, **params: Any) -> Dict[str, Any]:
+        """Indicative Permit2 swap price — no commitment (free)."""
+        return await self.dex("price", **params)
+
+    async def dex_quote(self, **params: Any) -> Dict[str, Any]:
+        """Firm Permit2 swap quote with permit2.eip712 + tx data (free)."""
+        return await self.dex("quote", **params)
+
+    async def dex_gasless_price(self, **params: Any) -> Dict[str, Any]:
+        """Gasless indicative price quote (free)."""
+        return await self.dex("gasless/price", **params)
+
+    async def dex_gasless_quote(self, **params: Any) -> Dict[str, Any]:
+        """Gasless firm quote — returns trade.eip712 to sign (free)."""
+        return await self.dex("gasless/quote", **params)
+
+    async def dex_gasless_submit(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Submit a signed gasless trade; the 0x relayer pays gas (free)."""
+        return await self.dex("gasless/submit", method="POST", body=body)
+
+    async def dex_gasless_status(self, trade_hash: str) -> Dict[str, Any]:
+        """Poll a gasless trade's status by tradeHash (free)."""
+        return await self.dex(f"gasless/status/{trade_hash}")
+
+    async def dex_chains(self) -> Dict[str, Any]:
+        """Chains where the Swap API is supported (free)."""
+        return await self.dex("swap/chains")
+
+    async def dex_gasless_chains(self) -> Dict[str, Any]:
+        """Chains where the Gasless API is supported (free)."""
+        return await self.dex("gasless/chains")
+
+    # ── Modal Sandbox (pay-per-call cloud compute) ───────────────────────────
+
+    async def modal(self, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Call the Modal sandbox compute API (POST, Solana payment)."""
+        return await self._request_with_payment_raw(f"/v1/modal/{path}", body or {})
+
+    async def modal_sandbox_create(self, **body: Any) -> Dict[str, Any]:
+        """Create a sandboxed compute environment ($0.01 CPU / $0.05 GPU)."""
+        return await self.modal("sandbox/create", body)
+
+    async def modal_sandbox_exec(
+        self, sandbox_id: str, command: List[str], **body: Any
+    ) -> Dict[str, Any]:
+        """Execute a command in a sandbox; returns stdout/stderr ($0.001)."""
+        return await self.modal(
+            "sandbox/exec", {"sandbox_id": sandbox_id, "command": command, **body}
+        )
+
+    async def modal_sandbox_status(self, sandbox_id: str) -> Dict[str, Any]:
+        """Check a sandbox's status ($0.001)."""
+        return await self.modal("sandbox/status", {"sandbox_id": sandbox_id})
+
+    async def modal_sandbox_terminate(self, sandbox_id: str) -> Dict[str, Any]:
+        """Terminate a sandbox ($0.001)."""
+        return await self.modal("sandbox/terminate", {"sandbox_id": sandbox_id})
+
 
 # A typing placeholder so the chat_completion_stream return type docs above
 # don't reference a name pyright can't resolve.
