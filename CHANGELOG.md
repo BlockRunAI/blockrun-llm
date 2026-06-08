@@ -2,6 +2,24 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.2.0 — 2026-06-08
+
+### Added
+- **`AsyncSolanaLLMClient` passthrough parity.** The async Solana client now
+  mirrors the sync `SolanaLLMClient` (and `AsyncLLMClient`) for the data
+  passthroughs it previously lacked: prediction markets (`pm` + all `pm_*`),
+  Exa web search (`exa`, `exa_search`, `exa_find_similar`, `exa_contents`,
+  `exa_answer`), DefiLlama (`defi` + `defi_*`), 0x DEX (`dex` + `dex_*`), and
+  Modal sandboxes (`modal` + `modal_sandbox_*`). Added the async raw request
+  helpers (`_request_with_payment_raw` / `_get_with_payment_raw`) these build
+  on, with Solana x402 signing, caching, and settlement capture.
+- **`VideoClient.generate_from_content(content, …)`** — submits a standard
+  Seedance `content[]` body to the gateway's `POST /v1/videos` endpoint
+  (validates unsupported inputs before charging, then delegates to the same
+  x402 submit+poll pipeline as `generate`). For migrating existing
+  `content[]`-shaped payloads unchanged; most callers should still prefer
+  `generate(...)` with structured kwargs.
+
 ## 1.1.0 — 2026-06-07
 
 ### Added

@@ -257,12 +257,65 @@ class VideoClient:
 
         return self._submit_and_poll(body, budget)
 
+    def generate_from_content(
+        self,
+        content: List[Dict[str, Any]],
+        *,
+        model: Optional[str] = None,
+        budget_seconds: Optional[float] = None,
+        **options: Any,
+    ) -> VideoResponse:
+        """
+        Generate a video from a standard Seedance ``content[]`` body.
+
+        This targets the gateway's ``POST /v1/videos`` endpoint, which accepts
+        the mainstream multimodal ``content`` array (text + a single reference
+        image) used by other Seedance APIs, so callers already holding a
+        ``content[]``-shaped request can submit it unchanged. The gateway
+        validates unsupported inputs *before* charging and then delegates to
+        the same x402 submit+poll pipeline as :meth:`generate`.
+
+        Most SDK users should prefer :meth:`generate` (structured kwargs like
+        ``image_url`` / ``last_frame_url``) — this method exists for migrating
+        existing ``content[]`` payloads with no reshaping.
+
+        Args:
+            content: The Seedance ``content`` array, e.g.
+                ``[{"type": "text", "text": "a red apple spinning"}]`` or a
+                text item plus ``{"type": "image_url", "image_url": {...}}``.
+            model: Model ID (default: the gateway's standard Seedance model).
+            budget_seconds: Overall polling budget (default 300s).
+            **options: Extra top-level body fields forwarded verbatim
+                (``resolution``, ``duration_seconds``, ``aspect_ratio``,
+                ``generate_audio``, ``seed``, ``watermark`` …).
+
+        Returns:
+            VideoResponse with the clip URL, duration, upstream request_id,
+            and the settlement tx hash.
+        """
+        if not content:
+            raise ValueError("content must be a non-empty list of Seedance content items.")
+
+        body: Dict[str, Any] = {"content": content, **options}
+        if model is not None:
+            body["model"] = model
+
+        budget = (
+            budget_seconds if budget_seconds is not None else self.DEFAULT_GENERATE_BUDGET_SECONDS
+        )
+        return self._submit_and_poll(body, budget, submit_path="/v1/videos")
+
     # ------------------------------------------------------------------
     # Internal: async submit + poll
     # ------------------------------------------------------------------
 
-    def _submit_and_poll(self, body: Dict[str, Any], budget_seconds: float) -> VideoResponse:
-        submit_url = f"{self.api_url}/v1/videos/generations"
+    def _submit_and_poll(
+        self,
+        body: Dict[str, Any],
+        budget_seconds: float,
+        submit_path: str = "/v1/videos/generations",
+    ) -> VideoResponse:
+        submit_url = f"{self.api_url}{submit_path}"
 
         # Step 1: unauth POST -> 402 with payment requirements
         resp402 = self._client.post(
