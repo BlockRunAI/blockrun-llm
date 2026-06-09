@@ -404,7 +404,12 @@ class VideoClient:
                     sanitize_error_response(poll_data),
                 )
 
-            if poll_resp.status_code == 200 and last_status == "completed":
+            # Terminal success is keyed on status, NOT the HTTP code — the
+            # gateway settles the moment a poll reports completed, so coupling
+            # success to a literal 200 would spin to the deadline (and report
+            # "not charged") on a completed-but-non-200 poll the caller was
+            # already charged for. Mirrors the Go/TS SDKs.
+            if last_status == "completed":
                 tx_hash = poll_resp.headers.get("x-payment-receipt") or poll_resp.headers.get(
                     "X-Payment-Receipt"
                 )
