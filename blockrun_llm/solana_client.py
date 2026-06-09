@@ -2565,6 +2565,38 @@ class AsyncSolanaLLMClient:
             )
         return response.json()
 
+    # ── Standalone search (Grok Live Search) ────────────────────────────────
+
+    async def search(
+        self,
+        query: str,
+        *,
+        sources: Optional[List[str]] = None,
+        max_results: int = 10,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> SearchResult:
+        """Standalone search (Solana payment).
+
+        ``timeout`` overrides the per-call HTTP timeout (defaults to
+        ``DEFAULT_SEARCH_TIMEOUT`` — deep web/X tool-use can run minutes).
+        """
+        body: Dict[str, Any] = {
+            "query": query,
+            "max_results": max_results,
+        }
+        if sources is not None:
+            body["sources"] = sources
+        if from_date is not None:
+            body["from_date"] = from_date
+        if to_date is not None:
+            body["to_date"] = to_date
+
+        eff_timeout = timeout if timeout is not None else self._search_timeout
+        data = await self._request_with_payment_raw("/v1/search", body, timeout=eff_timeout)
+        return SearchResult(**data)
+
     # ── Prediction Markets (Powered by Predexon) ────────────────────────────
 
     async def pm(self, path: str, **params: Any) -> Dict[str, Any]:
