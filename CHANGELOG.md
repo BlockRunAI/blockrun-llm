@@ -2,6 +2,15 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.2.2 — 2026-06-08
+
+### Fixed
+- **Video poll: terminal success is keyed on `status == "completed"`, not a
+  literal HTTP 200** (parity with the Go 0.16.2 / TS 3.2.3 fixes). A
+  completed-but-non-200 poll no longer spins to the budget deadline and raises
+  "did not complete / no payment taken" for a job the caller was already
+  charged for.
+
 ## 1.2.1 — 2026-06-08
 
 ### Added
