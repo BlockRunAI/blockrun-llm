@@ -2,6 +2,18 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.2.3 — 2026-06-08
+
+### Added
+- **`AsyncSolanaLLMClient` now has `image`, `image_edit`, and `get_balance`.**
+  This completes async-Solana public-method parity with the sync
+  `SolanaLLMClient` and the async EVM client. `image`/`image_edit` are backed by
+  a new async `_request_image_with_payment` that handles the gateway's async
+  `202 + poll` slow path (gpt-image-2, dall-e-3, nano-banana-pro 4K) — signing
+  once and polling until completion, settling only on the completed poll.
+  `get_balance` runs the synchronous Solana RPC read in a worker thread
+  (`asyncio.to_thread`) so it doesn't block the event loop.
+
 ## 1.2.2 — 2026-06-08
 
 ### Fixed
