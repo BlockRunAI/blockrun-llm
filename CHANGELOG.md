@@ -2,6 +2,14 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.2.1 — 2026-06-08
+
+### Added
+- **`AsyncSolanaLLMClient.search(...)`** — async standalone search (Grok Live
+  Search) parity with the sync `SolanaLLMClient` and the async EVM client. Thin
+  wrapper over the async raw payment helper; same signature
+  (`query`, `sources`, `max_results`, `from_date`, `to_date`, `timeout`).
+
 ## 1.2.0 — 2026-06-08
 
 ### Added
