@@ -310,11 +310,15 @@ PREMIUM_TIERS: Dict[Tier, TierConfig] = {
         "fallback": ["openai/gpt-5.4", "google/gemini-2.5-pro", "anthropic/claude-sonnet-4.6"],
     },
     "COMPLEX": {
-        # claude-opus-4.8 (1M context, agentic coding + adaptive thinking) is
-        # Anthropic's strongest current Claude. opus-4.7/4.5 retained as
-        # fallbacks for clients pricing-pinned to them.
-        "primary": "anthropic/claude-opus-4.8",
+        # claude-fable-5 ($10/$50, 1M context, 128K output, always-on
+        # thinking) is Anthropic's Mythos-class flagship — the tier above
+        # Opus, for the most demanding reasoning + long-horizon agentic work.
+        # claude-opus-4.8 retained as the first fallback (half the price,
+        # still 1M context + adaptive thinking); opus-4.7/4.5 for clients
+        # pricing-pinned to them.
+        "primary": "anthropic/claude-fable-5",
         "fallback": [
+            "anthropic/claude-opus-4.8",
             "anthropic/claude-opus-4.7",
             "anthropic/claude-opus-4.5",
             "openai/gpt-5.2-pro",
