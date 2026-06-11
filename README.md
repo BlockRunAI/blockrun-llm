@@ -216,7 +216,8 @@ Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 12
 ### Anthropic Claude
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `anthropic/claude-opus-4.8` | $5.00/M | $25.00/M | 1M | Most capable Claude — agentic coding + adaptive thinking, 128K output |
+| `anthropic/claude-fable-5` | $10.00/M | $50.00/M | 1M | Most capable Claude — Mythos-class tier above Opus, always-on thinking, 128K output |
+| `anthropic/claude-opus-4.8` | $5.00/M | $25.00/M | 1M | Agentic coding + adaptive thinking, 128K output |
 | `anthropic/claude-opus-4.7` | $5.00/M | $25.00/M | 1M | Agentic coding + adaptive thinking, 128K output |
 | `anthropic/claude-opus-4.6` | $5.00/M | $25.00/M | 200K | Hidden from `/v1/models` (superseded by 4.7); direct calls still work |
 | `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M | 200K | |
