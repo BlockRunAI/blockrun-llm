@@ -110,3 +110,47 @@ def test_modal_create_exec_lifecycle(client, captured):
     client.modal_sandbox_terminate("sb_123")
     assert captured["endpoint"] == "/v1/modal/sandbox/terminate"
     assert captured["body"] == {"sandbox_id": "sb_123"}
+
+
+# ── Coinbase Onramp ──────────────────────────────────────────────────────
+
+ADDR = "0x" + "ab" * 20  # well-formed 0x + 40 hex
+
+
+def test_onramp_path_and_body(client, monkeypatch):
+    captured = {}
+
+    def fake_post(endpoint, body):
+        captured["endpoint"] = endpoint
+        captured["body"] = body
+        return {"url": "https://pay.coinbase.com/buy/xyz"}
+
+    monkeypatch.setattr(client, "_request_with_payment_raw", fake_post)
+    result = client.onramp(ADDR)
+    assert captured["endpoint"] == "/v1/onramp/token"
+    assert captured["body"] == {"address": ADDR, "network": "base", "asset": "USDC"}
+    assert result["url"].startswith("https://pay.coinbase.com/")
+
+
+@pytest.mark.parametrize("bad", ["", "0xshort", "not-an-address", "0x" + "zz" * 20])
+def test_onramp_rejects_malformed_address(client, monkeypatch, bad):
+    # Never reaches the network — validation must fire first.
+    monkeypatch.setattr(
+        client,
+        "_request_with_payment_raw",
+        lambda *a, **k: pytest.fail("should not POST on bad address"),
+    )
+    with pytest.raises(ValueError):
+        client.onramp(bad)
+
+
+def test_onramp_rejects_non_coinbase_url(client, monkeypatch):
+    from blockrun_llm import APIError
+
+    monkeypatch.setattr(
+        client,
+        "_request_with_payment_raw",
+        lambda endpoint, body: {"url": "https://evil.example.com/buy"},
+    )
+    with pytest.raises(APIError, match="no onramp url"):
+        client.onramp(ADDR)
