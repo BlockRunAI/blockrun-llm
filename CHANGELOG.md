@@ -2,6 +2,27 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.3.0 — 2026-06-11
+
+### Changed
+- **Video poll budget default raised 5min → 15min**
+  (`DEFAULT_GENERATE_BUDGET_SECONDS = 900`). Generation itself is 1-3min, but
+  the upstream pipeline can lag the status read-path several minutes behind
+  actual completion (observed 2026-06-11: video done in 100s, status flipped
+  ~7.5min later). Jobs stay claimable ~48h, so a patient default beats a
+  premature give-up. Override per call with `budget_seconds`.
+
+### Added
+- **Automatic mid-poll re-signing.** The x402 authorization window is 600s; on
+  budgets longer than that a poll eventually 402s. The client now fetches a
+  fresh challenge from the same poll_url and re-signs with the same wallet
+  (the gateway enforces wallet binding, not signature equality), capped at 2
+  re-signs — a fresh signature that 402s again raises `PaymentError`.
+- **Recoverable timeouts.** The budget-exhausted `APIError` now carries
+  `poll_url` in its details and explains that the job stays claimable for
+  ~48h — re-GET the poll_url with a fresh same-wallet signature to fetch
+  (and settle) the finished video. A client timeout is no longer a dead end.
+
 ## 1.2.3 — 2026-06-08
 
 ### Added
