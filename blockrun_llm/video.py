@@ -13,7 +13,8 @@ Async flow (client-polled):
     POST /v1/videos/generations         -> 402 -> sign -> 202 { id, poll_url }
     GET  /v1/videos/generations/{id}    -> loop until status=completed
 
-The client signs ONCE and replays the same PAYMENT-SIGNATURE on every poll.
+The client signs once and replays the same PAYMENT-SIGNATURE on every poll,
+re-signing automatically if the 600s authorization window lapses mid-poll.
 Settlement happens only on the first completed poll, so upstream failure or
 the caller giving up = zero charge.
 
@@ -74,13 +75,20 @@ class VideoClient:
 
     DEFAULT_API_URL = "https://blockrun.ai/api"
     DEFAULT_MODEL = "xai/grok-imagine-video"
-    DEFAULT_TIMEOUT = 360.0  # overall budget: submit (~20s) + poll loop (5min)
+    DEFAULT_TIMEOUT = 360.0  # per-HTTP-call timeout (submit / each poll)
     POLL_INTERVAL_SECONDS = 5.0
-    # Upstream job TTL is 24-48h; we use a per-generate budget instead.
-    DEFAULT_GENERATE_BUDGET_SECONDS = 300.0
+    # 15 min: generation itself is 1-3 min, but the upstream pipeline can lag
+    # the status read-path several minutes behind actual completion (observed:
+    # video done in 100s, status flipped ~7.5min later). Jobs stay claimable
+    # ~48h, so a patient default beats a premature give-up.
+    DEFAULT_GENERATE_BUDGET_SECONDS = 900.0
     # Advertised signed-auth window. Server-side default is 300s; we bump to
     # 600s so the signature stays valid across the async polling window.
+    # Budgets longer than this window are handled by re-signing mid-poll.
     MAX_TIMEOUT_SECONDS = 600
+    # Max mid-poll re-signs after a 402 (signature expiry). A fresh signature
+    # that 402s again means a genuine payment problem, not expiry.
+    MAX_POLL_RESIGNS = 2
 
     def __init__(
         self,
@@ -145,8 +153,10 @@ class VideoClient:
         Generate a video clip from a text prompt (or text + image / face asset).
 
         Submits an async job, then polls until the video is ready. Typical
-        total wall-time is 60-180s. If upstream takes longer than the budget
-        (default 5min), we raise without charging.
+        total wall-time is 60-180s, but upstream status can lag several
+        minutes behind actual completion. If upstream takes longer than the
+        budget (default 15min), we raise without charging — the job stays
+        claimable ~48h via the poll_url in the error details.
 
         Args:
             prompt: Text description of the video.
@@ -180,7 +190,7 @@ class VideoClient:
             watermark: Add the provider watermark (Seedance only).
             return_last_frame: Also return the final frame as an image
                 (Seedance only).
-            budget_seconds: Overall polling budget (default 300s).
+            budget_seconds: Overall polling budget (default 900s).
 
         Returns:
             VideoResponse with the clip URL, duration, upstream request_id,
@@ -284,7 +294,7 @@ class VideoClient:
                 ``[{"type": "text", "text": "a red apple spinning"}]`` or a
                 text item plus ``{"type": "image_url", "image_url": {...}}``.
             model: Model ID (default: the gateway's standard Seedance model).
-            budget_seconds: Overall polling budget (default 300s).
+            budget_seconds: Overall polling budget (default 900s).
             **options: Extra top-level body fields forwarded verbatim
                 (``resolution``, ``duration_seconds``, ``aspect_ratio``,
                 ``generate_audio``, ``seed``, ``watermark`` …).
@@ -327,25 +337,7 @@ class VideoClient:
         if resp402.status_code != 402:
             self._raise_api_error(resp402, "Expected 402 on first POST")
 
-        payment_required = self._extract_payment_required(resp402)
-        details = extract_payment_details(payment_required)
-        resource = details.get("resource") or {}
-        extensions = payment_required.get("extensions", {})
-
-        payment_payload = create_payment_payload(
-            account=self.account,
-            recipient=details["recipient"],
-            amount=details["amount"],
-            network=details.get("network", "eip155:8453"),
-            resource_url=resource.get("url", submit_url),
-            resource_description=resource.get("description", "BlockRun Video Generation"),
-            # Ensure the signed authorization covers the entire polling window.
-            max_timeout_seconds=max(
-                details.get("maxTimeoutSeconds", 0) or 0, self.MAX_TIMEOUT_SECONDS
-            ),
-            extra=details.get("extra"),
-            extensions=extensions,
-        )
+        payment_payload = self._sign_from_challenge(resp402, submit_url)
 
         # Step 2: submit job with payment -> 202 { id, poll_url }
         submit_resp = self._client.post(
@@ -375,9 +367,14 @@ class VideoClient:
 
         poll_url = self._absolute(poll_url_rel)
 
-        # Step 3: poll with the same PAYMENT-SIGNATURE until completed
+        # Step 3: poll with the same PAYMENT-SIGNATURE until completed. The
+        # signed authorization is valid for MAX_TIMEOUT_SECONDS (600s); when a
+        # poll 402s after that window, we fetch a fresh challenge from the
+        # same poll_url and re-sign with the same wallet — the gateway
+        # enforces wallet binding, not signature equality.
         deadline = time.monotonic() + budget_seconds
         last_status = submit_data.get("status", "queued")
+        resigns_left = self.MAX_POLL_RESIGNS
 
         while time.monotonic() < deadline:
             time.sleep(self.POLL_INTERVAL_SECONDS)
@@ -417,15 +414,60 @@ class VideoClient:
                     poll_data["txHash"] = tx_hash
                 return VideoResponse(**poll_data)
 
+            if poll_resp.status_code == 402:
+                # Mid-poll 402 = the signed authorization expired (600s
+                # window) on a budget longer than that. Re-challenge +
+                # re-sign and keep going. A fresh signature that 402s again
+                # is a genuine payment problem.
+                if resigns_left > 0:
+                    resigns_left -= 1
+                    challenge = self._client.get(poll_url)
+                    if challenge.status_code == 402:
+                        payment_payload = self._sign_from_challenge(challenge, poll_url)
+                        continue
+                raise PaymentError(
+                    "Payment verification failed mid-poll (not a signature-expiry). "
+                    "Check the wallet balance and that you poll from the wallet "
+                    "that submitted the job."
+                )
+
             if poll_resp.status_code not in (200, 202, 504):
                 self._raise_api_error(poll_resp, "Poll failed")
             # status 504 on a poll = transient upstream hiccup; retry
 
         raise APIError(
             f"Video generation did not complete within {budget_seconds:.0f}s "
-            f"(last status: {last_status}). No payment was taken.",
+            f"(last status: {last_status}). No payment was taken. The job is "
+            f"NOT lost: it stays claimable for ~48h — re-GET poll_url with a "
+            f"fresh signature from the same wallet to fetch (and settle) the "
+            f"finished video.",
             504,
-            {"id": job_id, "last_status": last_status},
+            {"id": job_id, "last_status": last_status, "poll_url": poll_url},
+        )
+
+    def _sign_from_challenge(self, resp402: httpx.Response, fallback_url: str) -> str:
+        """Parse an x402 challenge response and sign a payment payload for it.
+
+        Used for the initial submit AND for mid-poll re-signing after the
+        600s authorization window lapses on long polls.
+        """
+        payment_required = self._extract_payment_required(resp402)
+        details = extract_payment_details(payment_required)
+        resource = details.get("resource") or {}
+        extensions = payment_required.get("extensions", {})
+        return create_payment_payload(
+            account=self.account,
+            recipient=details["recipient"],
+            amount=details["amount"],
+            network=details.get("network", "eip155:8453"),
+            resource_url=resource.get("url", fallback_url),
+            resource_description=resource.get("description", "BlockRun Video Generation"),
+            # Cover as much of the polling window as the auth allows.
+            max_timeout_seconds=max(
+                details.get("maxTimeoutSeconds", 0) or 0, self.MAX_TIMEOUT_SECONDS
+            ),
+            extra=details.get("extra"),
+            extensions=extensions,
         )
 
     def _absolute(self, url: str) -> str:
