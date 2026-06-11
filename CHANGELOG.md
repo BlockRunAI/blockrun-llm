@@ -2,6 +2,33 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.4.0 — 2026-06-11
+
+### Added
+- **`LLMClient.onramp(address)` — Coinbase Onramp (FREE).** Mints a one-time
+  `pay.coinbase.com` link to fund a wallet with fiat (card/bank, 60+ currencies
+  → Base USDC). POSTs `{address, network: "base", asset: "USDC"}` to
+  `/v1/onramp/token`. The x402 signature only authenticates the wallet, so the
+  funding address must equal the signing wallet — pass
+  `client.get_wallet_address()`. The returned URL is single-use and expires in
+  ~5 min, so mint it at click time and never cache it. Base / USDC only;
+  the address is validated against `^0x[0-9a-fA-F]{40}$` and a non-Coinbase URL
+  raises `APIError("gateway returned no onramp url")`. Not added to the Solana
+  client (Base-only). Adds `validation.validate_eth_address`.
+
+### Docs
+- **Claude Fable 5 surfaced.** `anthropic/claude-fable-5` (Mythos-class tier
+  above Opus — 1M context, 128K output, always-on thinking, $10/M in, $50/M out,
+  fallback `claude-opus-4.8`) is documented as the top Anthropic model and noted
+  as available in the Anthropic SDK example. Model IDs pass through, so no code
+  change.
+- **README payment section rewritten** into an explicit two-phase money flow:
+  Phase 1 fund your wallet once (buy via `onramp()`, transfer Base USDC, or skip
+  with free NVIDIA models — `get_balance()` to check); Phase 2 every request pays
+  itself via automatic x402. Plus per-call pay-as-you-go costs, spend tracking
+  (`get_spending()` / `blockrun_llm.billing`), BaseScan settlement verification,
+  and the non-custodial key-never-leaves-your-machine guarantee.
+
 ## 1.3.0 — 2026-06-11
 
 ### Changed

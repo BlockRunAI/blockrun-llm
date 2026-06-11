@@ -164,15 +164,70 @@ The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
 | COMPLEX | Architecture, long documents | google/gemini-3.1-pro |
 | REASONING | Proofs, multi-step reasoning | deepseek/deepseek-reasoner |
 
-## How It Works
+## How Payment Works
 
-1. You send a request to BlockRun's API
-2. The API returns a 402 Payment Required with the price
-3. The SDK automatically signs a USDC payment on Base
-4. The request is retried with the payment proof
-5. You receive the AI response
+No API keys, no subscription. You hold USDC on Base in your own wallet, and
+**each request pays for itself** with an on-chain micropayment. There are two
+phases:
 
-**Your private key never leaves your machine** - it's only used for local signing.
+### Phase 1 — Fund your wallet once (USDC on Base)
+
+You only do this when your balance runs low. Three ways:
+
+```python
+from blockrun_llm import LLMClient
+
+client = LLMClient()  # auto-detects wallet from BLOCKRUN_WALLET_KEY
+
+# (a) Buy USDC with a card / bank (FREE) — mint a one-time Coinbase Onramp link
+link = client.onramp(client.get_wallet_address())
+print(link["url"])  # open https://pay.coinbase.com/... to buy USDC on Base
+# The link is single-use and expires in ~5 min — mint it at click time, never cache it.
+
+# (b) Transfer existing Base USDC to your wallet address
+print(client.get_wallet_address())  # send USDC on Base to this 0x… address
+
+# (c) Skip funding entirely — the free NVIDIA models cost $0
+client.chat("nvidia/deepseek-v4-flash", "Hello!")  # routing_profile="free" also works
+```
+
+`$5` of USDC covers thousands of paid requests. Check your balance any time:
+
+```python
+print(f"Balance: ${client.get_balance():.2f} USDC")
+```
+
+### Phase 2 — Every request pays itself (automatic x402)
+
+```python
+reply = client.chat("anthropic/claude-sonnet-4.6", "Explain x402 in one line")
+```
+
+That single call does all of this under the hood:
+
+1. You send the request to BlockRun's gateway.
+2. The gateway returns `402 Payment Required` with the price.
+3. The SDK signs a USDC payment on Base **locally** (EIP-712) — your private
+   key never leaves your machine.
+4. The request is retried with the signed payment proof.
+5. The gateway settles on-chain and returns the AI response.
+
+One call, no separate pay step.
+
+### What it costs, and how to verify it
+
+- **Pay-as-you-go, per call.** You pay only the gateway price of each request
+  (see [Available Models](#available-models)). The free NVIDIA models are `$0`.
+- **Track spend.** `client.get_spending()` returns this session's
+  `{total_usd, calls}`. Every paid call also appends a line to
+  `~/.blockrun/cost_log.jsonl`; summarize/export it with
+  `blockrun_llm.billing` (`get_cost_log_summary`, `export_cost_log_csv`) — see
+  [Billing & Cost Tracking](#billing--cost-tracking).
+- **Verify settlements on-chain.** Each settlement returns a tx hash you can
+  inspect on BaseScan — `https://basescan.org/tx/<hash>`, or view all activity
+  for your wallet at `https://basescan.org/address/<your-address>`.
+- **Non-custodial.** Your wallet is yours; the key is only used for local
+  signing and **never leaves your machine**. No deposits held by BlockRun.
 
 ## Available Models
 
@@ -794,6 +849,19 @@ sb = client.modal_sandbox_create(image="python:3.11")
 out = client.modal_sandbox_exec(sb["sandbox_id"], ["python", "-c", "print(40+2)"])
 print(out["stdout"])  # 42
 client.modal_sandbox_terminate(sb["sandbox_id"])
+```
+
+## Fund a Wallet with Fiat (Coinbase Onramp)
+
+Mint a one-time `pay.coinbase.com` link to buy Base USDC with a card or bank
+(60+ fiat currencies) — **FREE** (no x402 payment). The signature only
+authenticates the wallet, so the funding address **must equal the signing
+wallet**. Base / USDC only. The returned URL is single-use and expires in
+~5 min, so mint it at click time and never cache it.
+
+```python
+link = client.onramp(client.get_wallet_address())
+print(link["url"])  # https://pay.coinbase.com/... — open to buy USDC on Base
 ```
 
 ## Prediction Markets (Powered by Predexon v2)
@@ -1506,6 +1574,8 @@ response = client.messages.create(
 ```
 
 The `AnthropicClient` wraps `anthropic.Anthropic` with a custom httpx transport that handles x402 payment signing transparently. Your private key never leaves your machine.
+
+The newest Anthropic model id, `claude-fable-5` (the Mythos-class tier above Opus — 1M context, 128K output, always-on thinking), is available here too; pass `model="claude-fable-5"`.
 
 ## Links
 

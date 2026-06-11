@@ -63,6 +63,27 @@ def validate_private_key(key: str) -> None:
         raise ValueError("Private key must contain only hexadecimal characters (0-9, a-f, A-F)")
 
 
+def validate_eth_address(address: str) -> None:
+    """
+    Validate that a value is a well-formed Ethereum / Base address.
+
+    Args:
+        address: The 0x-prefixed 20-byte address to validate
+
+    Raises:
+        ValueError: If the address format is invalid
+
+    Example:
+        >>> validate_eth_address("0x036CbD53842c5426634e7929541eC2318f3dCF7e")
+    """
+    if not isinstance(address, str):
+        raise ValueError("Address must be a string")
+
+    # Must be a 0x-prefixed 40-character hexadecimal string
+    if not re.match(r"^0x[0-9a-fA-F]{40}$", address):
+        raise ValueError("Address must be a 0x-prefixed 40-character hexadecimal string")
+
+
 def validate_model(model: str) -> None:
     """
     Validate model ID format.

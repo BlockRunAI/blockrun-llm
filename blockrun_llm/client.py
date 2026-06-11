@@ -61,6 +61,7 @@ from .tx_log import TransactionLogger, decode_settlement_header, _resolve_log_di
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
 from .validation import (
     validate_private_key,
+    validate_eth_address,
     validate_api_url,
     validate_model,
     validate_max_tokens,
@@ -1925,6 +1926,41 @@ class LLMClient:
     def modal_sandbox_terminate(self, sandbox_id: str) -> Dict[str, Any]:
         """Terminate a sandbox ($0.001)."""
         return self.modal("sandbox/terminate", {"sandbox_id": sandbox_id})
+
+    # ── Coinbase Onramp ──────────────────────────────────────────────────────
+
+    def onramp(self, address: str) -> Dict[str, Any]:
+        """Mint a one-time Coinbase Onramp link to fund a wallet with fiat (FREE).
+
+        Opens the door to buying Base USDC with a card or bank (60+ fiat
+        currencies) via pay.coinbase.com. FREE — the x402 signature only
+        authenticates the wallet, so the funding ``address`` MUST equal the
+        signing wallet (use ``client.get_wallet_address()``). Base / USDC only.
+
+        The returned URL is single-use and expires in ~5 minutes, so mint it at
+        click time and never cache it.
+
+        Args:
+            address: Destination wallet (0x-prefixed Base address). Must match
+                the signing wallet, since the link funds that exact address.
+
+        Returns:
+            Dict with a ``url`` pointing at ``https://pay.coinbase.com/``.
+
+        Example::
+
+            link = client.onramp(client.get_wallet_address())
+            print(link["url"])  # open in a browser to buy USDC on Base
+        """
+        validate_eth_address(address)
+        data = self._request_with_payment_raw(
+            "/v1/onramp/token",
+            {"address": address, "network": "base", "asset": "USDC"},
+        )
+        url = data.get("url") if isinstance(data, dict) else None
+        if not isinstance(url, str) or not url.startswith("https://pay.coinbase.com/"):
+            raise APIError("gateway returned no onramp url", 0, None)
+        return data
 
     def list_models(self) -> List[Dict[str, Any]]:
         """
