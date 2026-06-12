@@ -506,3 +506,87 @@ class TestStreamingFallback:
             ))
         # Single attempt; no retries (400 isn't 5xx), no fallback (400 isn't retriable).
         assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Streamed tool calls — regression for the archive-loop crash
+# ---------------------------------------------------------------------------
+
+def _sse_with_tool_call(model: str = "anthropic/claude-haiku-4-5") -> bytes:
+    """SSE for a streamed tool call: role frame, a name frame, then argument-
+    fragment frames (id/name absent — these used to fail the strict ToolCall
+    schema), and a final finish=tool_calls frame with usage."""
+    frames = [
+        {"choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {"tool_calls": [
+            {"index": 0, "id": "call_1", "type": "function",
+             "function": {"name": "get_weather", "arguments": ""}}]}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": "{\"city\":"}}]}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": "\"Paris\"}"}}]}, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}},
+    ]
+    lines = []
+    for f in frames:
+        f = {"id": "chatcmpl-tc", "object": "chat.completion.chunk",
+             "created": 1700000000, "model": model, **f}
+        lines.append("data: " + json.dumps(f))
+    lines.append("data: [DONE]")
+    return ("\n\n".join(lines) + "\n\n").encode("utf-8")
+
+
+def _collect_tool_args(chunks: List[ChatCompletionChunk]) -> str:
+    out: List[str] = []
+    for c in chunks:
+        if not c.choices:
+            continue
+        for tc in (c.choices[0].delta.tool_calls or []):
+            if tc.function and tc.function.arguments:
+                out.append(tc.function.arguments)
+    return "".join(out)
+
+
+class TestStreamedToolCalls:
+    """Streamed tool calls must parse + archive without crashing.
+
+    The argument-fragment frames (id/name absent) used to fail the strict
+    ToolCall schema, fall back to model_construct (leaving choices as dicts),
+    then crash the archive loop with "'dict' object has no attribute 'delta'".
+    The PAID path is used so cost_usd > 0 and the archive loop actually runs.
+    """
+
+    def test_sync_streamed_tool_call(self):
+        calls: List[httpx.Request] = []
+        client = LLMClient(private_key=TEST_PRIVATE_KEY)
+        client._client = httpx.Client(
+            transport=_make_paid_model_transport(_sse_with_tool_call(), calls)
+        )
+        chunks = list(client.chat_completion_stream(
+            "openai/gpt-5.5", [{"role": "user", "content": "weather?"}], max_tokens=64,
+        ))
+        tool_frames = [c for c in chunks if c.choices and c.choices[0].delta.tool_calls]
+        assert tool_frames, "expected streamed tool_call deltas"
+        for c in tool_frames:
+            assert hasattr(c.choices[0], "delta")  # parsed object, not a raw dict
+        assert _collect_tool_args(chunks) == '{"city":"Paris"}'
+        finishes = [c.choices[0].finish_reason for c in chunks
+                    if c.choices and c.choices[0].finish_reason]
+        assert finishes == ["tool_calls"]
+
+    @pytest.mark.asyncio
+    async def test_async_streamed_tool_call(self):
+        calls: List[httpx.Request] = []
+        client = AsyncLLMClient(private_key=TEST_PRIVATE_KEY)
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(
+            transport=_make_paid_model_transport(_sse_with_tool_call(), calls)
+        )
+        chunks: List[ChatCompletionChunk] = []
+        async for chunk in client.chat_completion_stream(
+            "openai/gpt-5.5", [{"role": "user", "content": "weather?"}],
+        ):
+            chunks.append(chunk)
+        assert _collect_tool_args(chunks) == '{"city":"Paris"}'
+        await client.close()
