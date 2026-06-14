@@ -13,7 +13,6 @@ spins instantly.
 
 from __future__ import annotations
 
-import json
 from typing import List
 
 import httpx
@@ -240,7 +239,6 @@ def test_image_poll_surfaces_upstream_failure(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(ImageClient, "IMAGE_POLL_INTERVAL_SECONDS", 0.0)
 
     def handler(request: httpx.Request) -> httpx.Response:
-        path = request.url.path
         if request.method == "POST":
             if "PAYMENT-SIGNATURE" not in request.headers:
                 return _payment_required_402(request)

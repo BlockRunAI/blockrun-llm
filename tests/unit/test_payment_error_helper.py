@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-import pytest
 
 from blockrun_llm.types import PaymentError
 from blockrun_llm.validation import build_payment_rejected_error
@@ -34,7 +33,10 @@ class TestPaymentErrorEnrichment:
         exc = PaymentError(
             "Payment rejected by gateway: transaction_simulation_failed",
             status_code=402,
-            response={"message": "Payment settlement failed", "details": "transaction_simulation_failed"},
+            response={
+                "message": "Payment settlement failed",
+                "details": "transaction_simulation_failed",
+            },
         )
         assert exc.status_code == 402
         assert exc.response is not None

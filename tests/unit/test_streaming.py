@@ -18,7 +18,7 @@ chunks skipped, finish_reason on the final chunk.
 from __future__ import annotations
 
 import json
-from typing import Iterator, List
+from typing import List
 
 import httpx
 import pytest
