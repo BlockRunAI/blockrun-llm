@@ -2,6 +2,21 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.4.1 — 2026-06-14
+
+### Fixed
+- **Streamed tool calls no longer crash the SDK** (`'dict' object has no
+  attribute 'delta'`). OpenAI streams tool calls incrementally — the first frame
+  carries `id` + `function.name`, later frames only `function.arguments`
+  fragments — which the strict non-stream `ToolCall` schema rejected, forcing a
+  `model_construct` fallback that left `choices` as raw dicts and crashed the
+  stream-archiving loop. Added lenient `ChatChunkToolCall` /
+  `ChatChunkFunctionCall` types (all fields optional) for the streaming
+  `delta.tool_calls`, and hardened the four sync/async archive loops
+  (`client.py`, `solana_client.py`) with dict-tolerant accessors so any future
+  `model_construct` fallback can't crash the stream. Affects `LLMClient` and
+  `SolanaLLMClient`, sync and async.
+
 ## 1.4.0 — 2026-06-11
 
 ### Added
@@ -17,11 +32,6 @@ All notable changes to blockrun-llm will be documented in this file.
   client (Base-only). Adds `validation.validate_eth_address`.
 
 ### Docs
-- **Claude Fable 5 surfaced.** `anthropic/claude-fable-5` (Mythos-class tier
-  above Opus — 1M context, 128K output, always-on thinking, $10/M in, $50/M out,
-  fallback `claude-opus-4.8`) is documented as the top Anthropic model and noted
-  as available in the Anthropic SDK example. Model IDs pass through, so no code
-  change.
 - **README payment section rewritten** into an explicit two-phase money flow:
   Phase 1 fund your wallet once (buy via `onramp()`, transfer Base USDC, or skip
   with free NVIDIA models — `get_balance()` to check); Phase 2 every request pays
