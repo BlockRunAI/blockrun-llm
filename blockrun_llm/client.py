@@ -55,6 +55,10 @@ from .types import (
     SmartChatResponse,
     RoutingProfile,
     SearchResult,
+    stream_choice_content,
+    stream_choice_finish_reason,
+    chunk_meta,
+    chunk_usage_dict,
 )
 from .router import route as route_request
 from .tx_log import TransactionLogger, decode_settlement_header, _resolve_log_dir
@@ -881,16 +885,21 @@ class LLMClient:
         for chunk in self._iter_sse_chunks(response):
             if chunk.choices:
                 choice = chunk.choices[0]
-                if choice.delta.content:
-                    content_parts.append(choice.delta.content)
-                if choice.finish_reason:
-                    finish_reason = choice.finish_reason
-            if assembled_id is None and chunk.id:
-                assembled_id = chunk.id
-                assembled_model = chunk.model
-                assembled_created = chunk.created
-            if chunk.usage is not None:
-                usage_dict = chunk.usage.model_dump(exclude_none=True)
+                content = stream_choice_content(choice)
+                if content:
+                    content_parts.append(content)
+                fr = stream_choice_finish_reason(choice)
+                if fr:
+                    finish_reason = fr
+            if assembled_id is None:
+                _id, _model, _created = chunk_meta(chunk)
+                if _id:
+                    assembled_id = _id
+                    assembled_model = _model
+                    assembled_created = _created
+            _usage = chunk_usage_dict(chunk)
+            if _usage is not None:
+                usage_dict = _usage
             yield chunk
 
         # Stream complete (saw [DONE]). Free models have cost_usd == 0; only
@@ -2544,16 +2553,21 @@ class AsyncLLMClient:
         async for chunk in self._aiter_sse_chunks(response):
             if chunk.choices:
                 choice = chunk.choices[0]
-                if choice.delta.content:
-                    content_parts.append(choice.delta.content)
-                if choice.finish_reason:
-                    finish_reason = choice.finish_reason
-            if assembled_id is None and chunk.id:
-                assembled_id = chunk.id
-                assembled_model = chunk.model
-                assembled_created = chunk.created
-            if chunk.usage is not None:
-                usage_dict = chunk.usage.model_dump(exclude_none=True)
+                content = stream_choice_content(choice)
+                if content:
+                    content_parts.append(content)
+                fr = stream_choice_finish_reason(choice)
+                if fr:
+                    finish_reason = fr
+            if assembled_id is None:
+                _id, _model, _created = chunk_meta(chunk)
+                if _id:
+                    assembled_id = _id
+                    assembled_model = _model
+                    assembled_created = _created
+            _usage = chunk_usage_dict(chunk)
+            if _usage is not None:
+                usage_dict = _usage
             yield chunk
 
         if cost_usd > 0:

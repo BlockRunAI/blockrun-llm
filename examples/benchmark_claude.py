@@ -85,8 +85,8 @@ def _count_tokens(text: str, model_hint: str = "") -> int:
 @dataclass
 class ReqResult:
     ok: bool
-    ttft: Optional[float] = None       # seconds to first content token
-    latency: Optional[float] = None    # seconds request → last token
+    ttft: Optional[float] = None  # seconds to first content token
+    latency: Optional[float] = None  # seconds request → last token
     out_tokens: int = 0
     error: str = ""
 
@@ -180,7 +180,9 @@ class Bench:
         usage = getattr(resp, "usage", None)
         if usage is None:
             return 0.0
-        u: Dict[str, Any] = usage.model_dump(exclude_none=True) if hasattr(usage, "model_dump") else dict(usage)
+        u: Dict[str, Any] = (
+            usage.model_dump(exclude_none=True) if hasattr(usage, "model_dump") else dict(usage)
+        )
         prompt_tokens = u.get("prompt_tokens") or 0
         cache_read = u.get("cache_read_input_tokens") or 0
         cache_creation = u.get("cache_creation_input_tokens") or 0
@@ -212,8 +214,10 @@ class Bench:
         print("\n" + "=" * 56)
         print(f" Claude E2E benchmark — {self.model}  ({self.chain})")
         print(f" {self.api_url}")
-        print(f" requests={self.requests} concurrency={self.concurrency} "
-              f"max_tokens={self.max_tokens}")
+        print(
+            f" requests={self.requests} concurrency={self.concurrency} "
+            f"max_tokens={self.max_tokens}"
+        )
         print("=" * 56)
         rows = [
             ("单个请求吞吐 (token/s)", fmt(statistics.mean(per_req_tps)) if per_req_tps else "nan"),
@@ -232,7 +236,9 @@ class Bench:
         for name, val in rows:
             print(f"  {name:<34} {val}")
         print("-" * 56)
-        print(f"  样本: 成功 {len(ok)}/{self.requests}   总输出≈{total_out} tokens   wall={wall:.2f}s")
+        print(
+            f"  样本: 成功 {len(ok)}/{self.requests}   总输出≈{total_out} tokens   wall={wall:.2f}s"
+        )
         fails = [r for r in self.results if not r.ok]
         if fails:
             print(f"  失败 {len(fails)} 例，示例: {fails[0].error}")
@@ -249,15 +255,23 @@ def main() -> None:
     p.add_argument("--max-tokens", type=int, default=256)
     p.add_argument("--prompt", default=DEFAULT_PROMPT)
     p.add_argument("--private-key", default=None, help="wallet key (else env / ~/.blockrun)")
-    p.add_argument("--cache-probe", action="store_true",
-                   help="add 2 non-streaming calls to measure cache hit rate (extra spend)")
+    p.add_argument(
+        "--cache-probe",
+        action="store_true",
+        help="add 2 non-streaming calls to measure cache hit rate (extra spend)",
+    )
     args = p.parse_args()
 
     api_url = args.api_url or (SOLANA_API_URL if args.chain == "solana" else BASE_API_URL)
     bench = Bench(
-        chain=args.chain, model=args.model, api_url=api_url,
-        requests=args.requests, concurrency=args.concurrency,
-        prompt=args.prompt, max_tokens=args.max_tokens, private_key=args.private_key,
+        chain=args.chain,
+        model=args.model,
+        api_url=api_url,
+        requests=args.requests,
+        concurrency=args.concurrency,
+        prompt=args.prompt,
+        max_tokens=args.max_tokens,
+        private_key=args.private_key,
     )
     print(f"[benchmark] {args.requests} paid streaming requests → {api_url} ({args.model}) …")
     wall = bench.run_throughput_phase()

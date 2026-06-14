@@ -10,8 +10,11 @@ This module provides validation functions to ensure:
 """
 
 import re
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from .types import PaymentError
 
 
 # Localhost domains that are allowed to use HTTP
