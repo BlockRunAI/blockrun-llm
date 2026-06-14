@@ -57,6 +57,7 @@ from .types import (
     SearchResult,
     stream_choice_content,
     stream_choice_finish_reason,
+    chunk_meta,
     chunk_usage_dict,
 )
 from .router import route as route_request
@@ -890,10 +891,12 @@ class LLMClient:
                 fr = stream_choice_finish_reason(choice)
                 if fr:
                     finish_reason = fr
-            if assembled_id is None and chunk.id:
-                assembled_id = chunk.id
-                assembled_model = chunk.model
-                assembled_created = chunk.created
+            if assembled_id is None:
+                _id, _model, _created = chunk_meta(chunk)
+                if _id:
+                    assembled_id = _id
+                    assembled_model = _model
+                    assembled_created = _created
             _usage = chunk_usage_dict(chunk)
             if _usage is not None:
                 usage_dict = _usage
@@ -2556,10 +2559,12 @@ class AsyncLLMClient:
                 fr = stream_choice_finish_reason(choice)
                 if fr:
                     finish_reason = fr
-            if assembled_id is None and chunk.id:
-                assembled_id = chunk.id
-                assembled_model = chunk.model
-                assembled_created = chunk.created
+            if assembled_id is None:
+                _id, _model, _created = chunk_meta(chunk)
+                if _id:
+                    assembled_id = _id
+                    assembled_model = _model
+                    assembled_created = _created
             _usage = chunk_usage_dict(chunk)
             if _usage is not None:
                 usage_dict = _usage

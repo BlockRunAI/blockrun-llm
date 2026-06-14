@@ -149,7 +149,10 @@ class ChatChunkToolCall(BaseModel):
 
     index: Optional[int] = None
     id: Optional[str] = None
-    type: Optional[Literal["function"]] = None
+    # Kept as a free-form ``str`` (not ``Literal["function"]``) so an upstream
+    # that streams a non-"function" tool type can't fail validation and re-trigger
+    # the very ``model_construct`` fallback this lenient type exists to avoid.
+    type: Optional[str] = None
     function: Optional[ChatChunkFunctionCall] = None
 
     class Config:
@@ -224,6 +227,23 @@ def stream_choice_finish_reason(choice: Any) -> Optional[str]:
     if isinstance(choice, dict):
         return choice.get("finish_reason")
     return getattr(choice, "finish_reason", None)
+
+
+def chunk_meta(chunk: Any) -> "tuple[Optional[str], Optional[str], Optional[int]]":
+    """``(id, model, created)`` of a chunk, tolerant of a ``model_construct``'d
+    chunk that omits required fields.
+
+    ``model_construct`` does not populate missing required fields, so a drifted
+    frame that lost its top-level ``id`` yields a chunk object with no ``id``
+    attribute. Reading ``chunk.id`` directly would then raise ``AttributeError``
+    and crash the stream-archiving loop — the same failure class the other
+    accessors here guard against. ``getattr`` keeps those reads safe.
+    """
+    return (
+        getattr(chunk, "id", None),
+        getattr(chunk, "model", None),
+        getattr(chunk, "created", None),
+    )
 
 
 def chunk_usage_dict(chunk: Any) -> Optional[Dict[str, Any]]:
