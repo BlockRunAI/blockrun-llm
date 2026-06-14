@@ -201,7 +201,10 @@ def load_solana_wallet() -> Optional[str]:
 
     # Legacy session file
     if SOLANA_WALLET_FILE.exists():
-        key = SOLANA_WALLET_FILE.read_text().strip()
+        try:
+            key = SOLANA_WALLET_FILE.read_text().strip()
+        except OSError:
+            return None  # unreadable (bad perms/ownership) → treat as "no wallet"
         if key:
             return key
     return None
