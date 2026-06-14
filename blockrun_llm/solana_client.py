@@ -365,10 +365,18 @@ class SolanaLLMClient:
                 "Solana payment requires the x402 SDK. "
                 "Install with: pip install blockrun-llm[solana]"
             )
-        key = private_key or os.environ.get("SOLANA_WALLET_KEY")
+        from .solana_wallet import load_solana_wallet
+
+        key = (
+            private_key
+            or os.environ.get("SOLANA_WALLET_KEY")
+            or load_solana_wallet()  # disk: newest ~/.*/solana-wallet.json, else ~/.blockrun/.solana-session
+        )
         if not key:
             raise ValueError(
-                "Private key required. Pass private_key or set SOLANA_WALLET_KEY env var."
+                "Private key required. Pass private_key, set SOLANA_WALLET_KEY, "
+                "or have a Solana wallet on disk "
+                "(~/.<provider>/solana-wallet.json or ~/.blockrun/.solana-session)."
             )
         self._private_key = key
         validate_api_url(api_url)
@@ -398,7 +406,15 @@ class SolanaLLMClient:
 
         # Initialize x402 SDK client for Solana payment signing.
         self._x402_client = x402ClientSync()
-        signer = _create_signer(self._private_key)
+        try:
+            signer = _create_signer(self._private_key)
+        except Exception as e:
+            # Parity with the Base client, which validates the resolved key up
+            # front: turn a malformed key (incl. one auto-loaded from disk) into
+            # a clean error instead of a raw base58/solders exception.
+            raise ValueError(
+                "Invalid Solana private key (expected a base58-encoded keypair " "or 32-byte seed)."
+            ) from e
         _register_svm_with_headers(self._x402_client, signer, resolved_url, resolved_headers)
         # x402ClientSync is NOT thread-safe: concurrent payment signing on one
         # shared client races on nonce/authorization state. This lock serializes
@@ -1871,10 +1887,18 @@ class AsyncSolanaLLMClient:
                 "Solana payment requires the x402 SDK. "
                 "Install with: pip install blockrun-llm[solana]"
             )
-        key = private_key or os.environ.get("SOLANA_WALLET_KEY")
+        from .solana_wallet import load_solana_wallet
+
+        key = (
+            private_key
+            or os.environ.get("SOLANA_WALLET_KEY")
+            or load_solana_wallet()  # disk: newest ~/.*/solana-wallet.json, else ~/.blockrun/.solana-session
+        )
         if not key:
             raise ValueError(
-                "Private key required. Pass private_key or set SOLANA_WALLET_KEY env var."
+                "Private key required. Pass private_key, set SOLANA_WALLET_KEY, "
+                "or have a Solana wallet on disk "
+                "(~/.<provider>/solana-wallet.json or ~/.blockrun/.solana-session)."
             )
         self._private_key = key
         validate_api_url(api_url)
@@ -1903,7 +1927,15 @@ class AsyncSolanaLLMClient:
         from x402 import x402Client  # local import to keep optional dep clean
 
         self._x402_client = x402Client()
-        signer = _create_signer(self._private_key)
+        try:
+            signer = _create_signer(self._private_key)
+        except Exception as e:
+            # Parity with the Base client, which validates the resolved key up
+            # front: turn a malformed key (incl. one auto-loaded from disk) into
+            # a clean error instead of a raw base58/solders exception.
+            raise ValueError(
+                "Invalid Solana private key (expected a base58-encoded keypair " "or 32-byte seed)."
+            ) from e
         _register_svm_with_headers(self._x402_client, signer, resolved_url, resolved_headers)
         # Lazily created on first sign (avoids binding asyncio.Lock to a loop at
         # construction time). Serializes the async signing critical section so a
