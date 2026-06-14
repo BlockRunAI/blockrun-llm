@@ -365,10 +365,17 @@ class SolanaLLMClient:
                 "Solana payment requires the x402 SDK. "
                 "Install with: pip install blockrun-llm[solana]"
             )
-        key = private_key or os.environ.get("SOLANA_WALLET_KEY")
+        from .solana_wallet import load_solana_wallet
+
+        key = (
+            private_key
+            or os.environ.get("SOLANA_WALLET_KEY")
+            or load_solana_wallet()  # Loads from ~/.blockrun/.solana-session
+        )
         if not key:
             raise ValueError(
-                "Private key required. Pass private_key or set SOLANA_WALLET_KEY env var."
+                "Private key required. Pass private_key, set SOLANA_WALLET_KEY, "
+                "or create a wallet at ~/.blockrun/.solana-session."
             )
         self._private_key = key
         validate_api_url(api_url)
@@ -1871,10 +1878,17 @@ class AsyncSolanaLLMClient:
                 "Solana payment requires the x402 SDK. "
                 "Install with: pip install blockrun-llm[solana]"
             )
-        key = private_key or os.environ.get("SOLANA_WALLET_KEY")
+        from .solana_wallet import load_solana_wallet
+
+        key = (
+            private_key
+            or os.environ.get("SOLANA_WALLET_KEY")
+            or load_solana_wallet()  # Loads from ~/.blockrun/.solana-session
+        )
         if not key:
             raise ValueError(
-                "Private key required. Pass private_key or set SOLANA_WALLET_KEY env var."
+                "Private key required. Pass private_key, set SOLANA_WALLET_KEY, "
+                "or create a wallet at ~/.blockrun/.solana-session."
             )
         self._private_key = key
         validate_api_url(api_url)

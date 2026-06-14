@@ -20,12 +20,22 @@ class TestSolanaLLMClientInit:
         assert client is not None
         del os.environ["SOLANA_WALLET_KEY"]
 
-    def test_raises_without_key(self):
-        saved = os.environ.pop("SOLANA_WALLET_KEY", None)
+    def test_raises_without_key(self, monkeypatch):
+        # No env var AND no wallet session on disk → must still raise. Patch the
+        # session loader so the test is deterministic regardless of whether the
+        # machine running it happens to have ~/.blockrun/.solana-session.
+        monkeypatch.delenv("SOLANA_WALLET_KEY", raising=False)
+        monkeypatch.setattr("blockrun_llm.solana_wallet.load_solana_wallet", lambda: None)
         with pytest.raises(ValueError, match="[Pp]rivate key required"):
             SolanaLLMClient()
-        if saved:
-            os.environ["SOLANA_WALLET_KEY"] = saved
+
+    def test_init_from_session_file(self, monkeypatch):
+        # No env var, but a wallet session exists on disk → auto-load it (parity
+        # with the Base LLMClient, which already falls back to load_wallet()).
+        monkeypatch.delenv("SOLANA_WALLET_KEY", raising=False)
+        monkeypatch.setattr("blockrun_llm.solana_wallet.load_solana_wallet", lambda: TEST_BS58_KEY)
+        client = SolanaLLMClient()
+        assert client is not None
 
     def test_default_api_url(self):
         client = SolanaLLMClient(private_key=TEST_BS58_KEY)
