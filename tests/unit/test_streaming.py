@@ -18,7 +18,7 @@ chunks skipped, finish_reason on the final chunk.
 from __future__ import annotations
 
 import json
-from typing import Iterator, List
+from typing import List
 
 import httpx
 import pytest
@@ -33,39 +33,49 @@ from ..helpers import TEST_PRIVATE_KEY, build_payment_required_response
 # Synthetic SSE bodies
 # ---------------------------------------------------------------------------
 
+
 def _sse_events(deltas: List[str], finish: str = "stop", model: str = "test/model") -> bytes:
     """Render a list of content deltas as raw SSE bytes ending with [DONE]."""
     lines: List[str] = []
     # First chunk — role only.
     lines.append(
-        "data: " + json.dumps({
-            "id": "chatcmpl-test",
-            "object": "chat.completion.chunk",
-            "created": 1700000000,
-            "model": model,
-            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
-        })
-    )
-    # Content chunks.
-    for i, d in enumerate(deltas):
-        lines.append(
-            "data: " + json.dumps({
+        "data: "
+        + json.dumps(
+            {
                 "id": "chatcmpl-test",
                 "object": "chat.completion.chunk",
                 "created": 1700000000,
                 "model": model,
-                "choices": [{"index": 0, "delta": {"content": d}, "finish_reason": None}],
-            })
+                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+            }
+        )
+    )
+    # Content chunks.
+    for i, d in enumerate(deltas):
+        lines.append(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion.chunk",
+                    "created": 1700000000,
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {"content": d}, "finish_reason": None}],
+                }
+            )
         )
     # Final chunk with finish_reason.
     lines.append(
-        "data: " + json.dumps({
-            "id": "chatcmpl-test",
-            "object": "chat.completion.chunk",
-            "created": 1700000000,
-            "model": model,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
-        })
+        "data: "
+        + json.dumps(
+            {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
+            }
+        )
     )
     lines.append("data: [DONE]")
     body = "\n\n".join(lines) + "\n\n"
@@ -87,6 +97,7 @@ def _sse_with_garbage(deltas: List[str]) -> bytes:
 # Mock transports
 # ---------------------------------------------------------------------------
 
+
 def _make_free_model_transport(sse_body: bytes, calls: List[httpx.Request]) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
@@ -99,9 +110,7 @@ def _make_free_model_transport(sse_body: bytes, calls: List[httpx.Request]) -> h
     return httpx.MockTransport(handler)
 
 
-def _make_paid_model_transport(
-    sse_body: bytes, calls: List[httpx.Request]
-) -> httpx.MockTransport:
+def _make_paid_model_transport(sse_body: bytes, calls: List[httpx.Request]) -> httpx.MockTransport:
     """First call → 402 with valid payment-required header; second → 200 SSE."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -127,6 +136,7 @@ def _make_paid_model_transport(
 # ---------------------------------------------------------------------------
 # Sync tests
 # ---------------------------------------------------------------------------
+
 
 class TestSyncStreaming:
     def test_free_model_streams_without_payment(self):
@@ -180,9 +190,10 @@ class TestSyncStreaming:
         assert client._session_calls == 1
         assert client._session_total_usd > 0
         # Streamed content arrives.
-        assert "".join(
-            c.choices[0].delta.content for c in chunks if c.choices[0].delta.content
-        ) == "Paid"
+        assert (
+            "".join(c.choices[0].delta.content for c in chunks if c.choices[0].delta.content)
+            == "Paid"
+        )
 
     def test_malformed_chunks_dont_abort_stream(self):
         calls: List[httpx.Request] = []
@@ -198,9 +209,7 @@ class TestSyncStreaming:
             )
         )
         # We should have gotten both deltas through, despite the garbage chunk.
-        joined = "".join(
-            c.choices[0].delta.content for c in chunks if c.choices[0].delta.content
-        )
+        joined = "".join(c.choices[0].delta.content for c in chunks if c.choices[0].delta.content)
         assert joined == "AB"
 
     def test_paid_path_propagates_payment_rejected(self):
@@ -236,6 +245,7 @@ class TestSyncStreaming:
 # Async tests
 # ---------------------------------------------------------------------------
 
+
 class TestAsyncStreaming:
     @pytest.mark.asyncio
     async def test_async_free_model(self):
@@ -255,9 +265,10 @@ class TestAsyncStreaming:
             chunks.append(chunk)
 
         assert len(calls) == 1
-        assert "".join(
-            c.choices[0].delta.content for c in chunks if c.choices[0].delta.content
-        ) == "Hi!"
+        assert (
+            "".join(c.choices[0].delta.content for c in chunks if c.choices[0].delta.content)
+            == "Hi!"
+        )
         await client.close()
 
     @pytest.mark.asyncio
@@ -286,6 +297,7 @@ class TestAsyncStreaming:
 # 5xx retry tests
 # ---------------------------------------------------------------------------
 
+
 def _make_flaky_free_transport(
     sse_body: bytes,
     fail_count: int,
@@ -301,9 +313,7 @@ def _make_flaky_free_transport(
             return httpx.Response(
                 status, headers={"content-type": "application/json"}, json={"error": "transient"}
             )
-        return httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, content=sse_body
-        )
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_body)
 
     return httpx.MockTransport(handler)
 
@@ -350,10 +360,12 @@ class TestStreamingRetries:
         from blockrun_llm.types import APIError
 
         with pytest.raises(APIError):
-            list(client.chat_completion_stream(
-                "nvidia/deepseek-v4-flash",
-                [{"role": "user", "content": "hi"}],
-            ))
+            list(
+                client.chat_completion_stream(
+                    "nvidia/deepseek-v4-flash",
+                    [{"role": "user", "content": "hi"}],
+                )
+            )
         # 1 + 3 backoffs == 4 probe attempts before raising.
         assert len(calls) == 1 + len(LLMClient._STREAM_5XX_BACKOFFS)
 
@@ -382,17 +394,17 @@ class TestStreamingRetries:
             paid_calls = sum(1 for c in calls if c.headers.get("PAYMENT-SIGNATURE"))
             if paid_calls <= 2:
                 return httpx.Response(503, json={"error": "transient"})
-            return httpx.Response(
-                200, headers={"content-type": "text/event-stream"}, content=body
-            )
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
 
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
         client._client = httpx.Client(transport=httpx.MockTransport(handler))
 
-        chunks = list(client.chat_completion_stream(
-            "openai/gpt-5.5",
-            [{"role": "user", "content": "hi"}],
-        ))
+        chunks = list(
+            client.chat_completion_stream(
+                "openai/gpt-5.5",
+                [{"role": "user", "content": "hi"}],
+            )
+        )
         # 1 probe (402) + 2 paid-503 + 1 paid-200 == 4 total
         assert len(calls) == 4
         assert any(c.choices[0].delta.content == "paid-OK" for c in chunks)
@@ -401,6 +413,7 @@ class TestStreamingRetries:
 # ---------------------------------------------------------------------------
 # Fallback chain tests
 # ---------------------------------------------------------------------------
+
 
 class TestStreamingFallback:
     """``fallback_models`` walks the chain only on retriable pre-stream
@@ -415,6 +428,7 @@ class TestStreamingFallback:
             calls.append(request)
             body = request.read()
             import json as _json
+
             payload = _json.loads(body)
             if payload["model"] == "primary/bad":
                 return httpx.Response(503, json={"error": "down"})
@@ -428,11 +442,13 @@ class TestStreamingFallback:
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
         client._client = httpx.Client(transport=httpx.MockTransport(handler))
 
-        chunks = list(client.chat_completion_stream(
-            "primary/bad",
-            [{"role": "user", "content": "hi"}],
-            fallback_models=["fallback/good"],
-        ))
+        chunks = list(
+            client.chat_completion_stream(
+                "primary/bad",
+                [{"role": "user", "content": "hi"}],
+                fallback_models=["fallback/good"],
+            )
+        )
 
         # 4 hits on primary (1 + 3 retries) all 503 → swap to fallback → 1 success
         assert len(calls) >= 5
@@ -471,11 +487,13 @@ class TestStreamingFallback:
         # naturally — no exception, no fallback. The fallback handler should
         # NEVER be invoked because we got valid chunks before the stream
         # ended.
-        chunks = list(client.chat_completion_stream(
-            "primary/bad",
-            [{"role": "user", "content": "hi"}],
-            fallback_models=["fallback/good"],
-        ))
+        chunks = list(
+            client.chat_completion_stream(
+                "primary/bad",
+                [{"role": "user", "content": "hi"}],
+                fallback_models=["fallback/good"],
+            )
+        )
         # Exactly one upstream call: no fallback because partial chunks were
         # already yielded.
         assert len(calls) == 1
@@ -499,10 +517,236 @@ class TestStreamingFallback:
         from blockrun_llm.types import APIError
 
         with pytest.raises(APIError):
-            list(client.chat_completion_stream(
-                "primary/bad",
-                [{"role": "user", "content": "hi"}],
-                fallback_models=["fallback/good"],
-            ))
+            list(
+                client.chat_completion_stream(
+                    "primary/bad",
+                    [{"role": "user", "content": "hi"}],
+                    fallback_models=["fallback/good"],
+                )
+            )
         # Single attempt; no retries (400 isn't 5xx), no fallback (400 isn't retriable).
         assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Streamed tool calls — regression for the archive-loop crash
+# ---------------------------------------------------------------------------
+
+
+def _sse_with_tool_call(model: str = "anthropic/claude-haiku-4-5") -> bytes:
+    """SSE for a streamed tool call: role frame, a name frame, then argument-
+    fragment frames (id/name absent — these used to fail the strict ToolCall
+    schema), and a final finish=tool_calls frame with usage."""
+    frames = [
+        {"choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]},
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": ""},
+                            }
+                        ]
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"city":'}}]},
+                    "finish_reason": None,
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 0, "function": {"arguments": '"Paris"}'}}]},
+                    "finish_reason": None,
+                }
+            ]
+        },
+        {
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        },
+    ]
+    lines = []
+    for f in frames:
+        f = {
+            "id": "chatcmpl-tc",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": model,
+            **f,
+        }
+        lines.append("data: " + json.dumps(f))
+    lines.append("data: [DONE]")
+    return ("\n\n".join(lines) + "\n\n").encode("utf-8")
+
+
+def _collect_tool_args(chunks: List[ChatCompletionChunk]) -> str:
+    out: List[str] = []
+    for c in chunks:
+        if not c.choices:
+            continue
+        for tc in c.choices[0].delta.tool_calls or []:
+            if tc.function and tc.function.arguments:
+                out.append(tc.function.arguments)
+    return "".join(out)
+
+
+class TestStreamedToolCalls:
+    """Streamed tool calls must parse + archive without crashing.
+
+    The argument-fragment frames (id/name absent) used to fail the strict
+    ToolCall schema, fall back to model_construct (leaving choices as dicts),
+    then crash the archive loop with "'dict' object has no attribute 'delta'".
+    The PAID path is used so cost_usd > 0 and the archive loop actually runs.
+    """
+
+    def test_sync_streamed_tool_call(self):
+        calls: List[httpx.Request] = []
+        client = LLMClient(private_key=TEST_PRIVATE_KEY)
+        client._client = httpx.Client(
+            transport=_make_paid_model_transport(_sse_with_tool_call(), calls)
+        )
+        chunks = list(
+            client.chat_completion_stream(
+                "openai/gpt-5.5",
+                [{"role": "user", "content": "weather?"}],
+                max_tokens=64,
+            )
+        )
+        tool_frames = [c for c in chunks if c.choices and c.choices[0].delta.tool_calls]
+        assert tool_frames, "expected streamed tool_call deltas"
+        for c in tool_frames:
+            assert hasattr(c.choices[0], "delta")  # parsed object, not a raw dict
+        assert _collect_tool_args(chunks) == '{"city":"Paris"}'
+        finishes = [
+            c.choices[0].finish_reason for c in chunks if c.choices and c.choices[0].finish_reason
+        ]
+        assert finishes == ["tool_calls"]
+
+    @pytest.mark.asyncio
+    async def test_async_streamed_tool_call(self):
+        calls: List[httpx.Request] = []
+        client = AsyncLLMClient(private_key=TEST_PRIVATE_KEY)
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(
+            transport=_make_paid_model_transport(_sse_with_tool_call(), calls)
+        )
+        chunks: List[ChatCompletionChunk] = []
+        async for chunk in client.chat_completion_stream(
+            "openai/gpt-5.5",
+            [{"role": "user", "content": "weather?"}],
+        ):
+            chunks.append(chunk)
+        assert _collect_tool_args(chunks) == '{"city":"Paris"}'
+        await client.close()
+
+    def test_sync_streamed_tool_call_non_function_type(self):
+        """A non-"function" tool ``type`` must still parse into a real object
+        rather than re-trigger the strict-validation -> model_construct fallback
+        (which would leave choices as raw dicts and crash consumers)."""
+        frames = [
+            {
+                "id": "chatcmpl-tc",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "anthropic/claude-haiku-4-5",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "custom",  # non-"function" type
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": '{"city":"Paris"}',
+                                    },
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "id": "chatcmpl-tc",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "anthropic/claude-haiku-4-5",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        ]
+        sse = (
+            "\n\n".join("data: " + json.dumps(f) for f in frames) + "\n\ndata: [DONE]\n\n"
+        ).encode()
+        calls: List[httpx.Request] = []
+        client = LLMClient(private_key=TEST_PRIVATE_KEY)
+        client._client = httpx.Client(transport=_make_paid_model_transport(sse, calls))
+        chunks = list(
+            client.chat_completion_stream(
+                "openai/gpt-5.5",
+                [{"role": "user", "content": "weather?"}],
+                max_tokens=64,
+            )
+        )
+        tool_frames = [c for c in chunks if c.choices and c.choices[0].delta.tool_calls]
+        assert tool_frames, "expected the non-'function' tool_call delta to parse"
+        assert tool_frames[0].choices[0].delta.tool_calls[0].type == "custom"
+        assert _collect_tool_args(chunks) == '{"city":"Paris"}'
+
+    def test_sync_stream_archive_survives_model_construct_chunk_missing_id(self):
+        """Archive-loop hardening: a frame that omits the required top-level
+        ``id`` fails strict validation and is yielded via ``model_construct``
+        (no ``id`` attribute). The stream-archiving loop must not crash reading
+        ``chunk.id`` (old behaviour: ``AttributeError``); draining the generator
+        runs the paid archive path end to end."""
+        frames = [
+            # Missing "id" -> model_construct, no .id attribute on the chunk.
+            {
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "anthropic/claude-haiku-4-5",
+                "choices": [{"index": 0, "delta": {"content": "hi"}, "finish_reason": None}],
+            },
+            {
+                "id": "chatcmpl-tc",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": "anthropic/claude-haiku-4-5",
+                "choices": [{"index": 0, "delta": {"content": " there"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        ]
+        sse = (
+            "\n\n".join("data: " + json.dumps(f) for f in frames) + "\n\ndata: [DONE]\n\n"
+        ).encode()
+        calls: List[httpx.Request] = []
+        client = LLMClient(private_key=TEST_PRIVATE_KEY)
+        client._client = httpx.Client(transport=_make_paid_model_transport(sse, calls))
+        # Must not raise: the archive loop reads chunk.id via the dict/attr-tolerant
+        # accessor, so a model_construct'd chunk missing id is skipped, not fatal.
+        chunks = list(
+            client.chat_completion_stream(
+                "openai/gpt-5.5",
+                [{"role": "user", "content": "hi"}],
+                max_tokens=64,
+            )
+        )
+        assert len(chunks) == 2  # both frames yielded, stream drained cleanly

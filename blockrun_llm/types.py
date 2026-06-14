@@ -121,6 +121,44 @@ class ChatResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class ChatChunkFunctionCall(BaseModel):
+    """Streaming function-call delta. The model sends ``name`` on the first
+    frame and ``arguments`` in fragments afterwards, so both are optional here —
+    unlike the non-stream :class:`FunctionCall` where both are required."""
+
+    name: Optional[str] = None
+    arguments: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
+class ChatChunkToolCall(BaseModel):
+    """One streaming tool-call delta.
+
+    OpenAI streams tool calls incrementally: the first frame carries
+    ``index`` + ``id`` + ``function.name`` (+ empty args), later frames carry
+    only ``index`` + ``function.arguments`` fragments. Every field is therefore
+    optional. The strict non-stream :class:`ToolCall` (``id`` / ``function.name``
+    / ``arguments`` all required) rejected the argument-fragment frames, which
+    made ``ChatCompletionChunk(**chunk)`` raise and fall back to
+    ``model_construct`` — leaving ``choices`` as raw dicts and crashing the
+    archive loop with ``'dict' object has no attribute 'delta'``. Using this
+    lenient type keeps streamed tool calls parsing into real objects.
+    """
+
+    index: Optional[int] = None
+    id: Optional[str] = None
+    # Kept as a free-form ``str`` (not ``Literal["function"]``) so an upstream
+    # that streams a non-"function" tool type can't fail validation and re-trigger
+    # the very ``model_construct`` fallback this lenient type exists to avoid.
+    type: Optional[str] = None
+    function: Optional[ChatChunkFunctionCall] = None
+
+    class Config:
+        extra = "allow"
+
+
 class ChatChunkDelta(BaseModel):
     """Incremental ``message`` delta sent over SSE.
 
@@ -132,7 +170,7 @@ class ChatChunkDelta(BaseModel):
 
     role: Optional[Literal["system", "user", "assistant", "tool"]] = None
     content: Optional[str] = None
-    tool_calls: Optional[List[ToolCall]] = None
+    tool_calls: Optional[List[ChatChunkToolCall]] = None
     reasoning_content: Optional[str] = None
     thinking: Optional[str] = None
 
@@ -166,6 +204,57 @@ class ChatCompletionChunk(BaseModel):
 
     class Config:
         extra = "allow"
+
+
+def stream_choice_content(choice: Any) -> Optional[str]:
+    """Text delta from a streaming choice, tolerant of a raw ``dict`` choice.
+
+    A chunk that fails strict validation falls back to ``model_construct``,
+    which leaves nested ``choices`` as plain dicts. Defensive accessors keep the
+    stream-archiving loop from crashing on those (``'dict' object has no
+    attribute 'delta'``); a tool-call frame simply has no content and yields
+    ``None``.
+    """
+    if isinstance(choice, dict):
+        delta = choice.get("delta")
+        return delta.get("content") if isinstance(delta, dict) else None
+    delta = getattr(choice, "delta", None)
+    return getattr(delta, "content", None) if delta is not None else None
+
+
+def stream_choice_finish_reason(choice: Any) -> Optional[str]:
+    """``finish_reason`` from a streaming choice, tolerant of a raw dict choice."""
+    if isinstance(choice, dict):
+        return choice.get("finish_reason")
+    return getattr(choice, "finish_reason", None)
+
+
+def chunk_meta(chunk: Any) -> "tuple[Optional[str], Optional[str], Optional[int]]":
+    """``(id, model, created)`` of a chunk, tolerant of a ``model_construct``'d
+    chunk that omits required fields.
+
+    ``model_construct`` does not populate missing required fields, so a drifted
+    frame that lost its top-level ``id`` yields a chunk object with no ``id``
+    attribute. Reading ``chunk.id`` directly would then raise ``AttributeError``
+    and crash the stream-archiving loop — the same failure class the other
+    accessors here guard against. ``getattr`` keeps those reads safe.
+    """
+    return (
+        getattr(chunk, "id", None),
+        getattr(chunk, "model", None),
+        getattr(chunk, "created", None),
+    )
+
+
+def chunk_usage_dict(chunk: Any) -> Optional[Dict[str, Any]]:
+    """``usage`` of a chunk as a dict, tolerant of a model_construct'd chunk
+    whose ``usage`` is a raw dict (no ``.model_dump``)."""
+    usage = getattr(chunk, "usage", None)
+    if usage is None:
+        return None
+    if isinstance(usage, dict):
+        return {k: v for k, v in usage.items() if v is not None}
+    return usage.model_dump(exclude_none=True)
 
 
 class Model(BaseModel):

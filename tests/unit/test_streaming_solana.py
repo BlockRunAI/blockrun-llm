@@ -20,7 +20,7 @@ import pytest
 pytest.importorskip("x402")
 pytest.importorskip("solders")
 
-from blockrun_llm import ChatCompletionChunk, SolanaLLMClient
+from blockrun_llm import SolanaLLMClient
 from blockrun_llm.types import APIError, PaymentError
 
 
@@ -28,35 +28,45 @@ from blockrun_llm.types import APIError, PaymentError
 # Helpers — synthetic SSE bodies (same shape Base tests use)
 # ---------------------------------------------------------------------------
 
+
 def _sse_events(deltas: List[str], finish: str = "stop", model: str = "test/model") -> bytes:
     lines: List[str] = []
     lines.append(
-        "data: " + json.dumps({
-            "id": "chatcmpl-test",
-            "object": "chat.completion.chunk",
-            "created": 1700000000,
-            "model": model,
-            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
-        })
-    )
-    for d in deltas:
-        lines.append(
-            "data: " + json.dumps({
+        "data: "
+        + json.dumps(
+            {
                 "id": "chatcmpl-test",
                 "object": "chat.completion.chunk",
                 "created": 1700000000,
                 "model": model,
-                "choices": [{"index": 0, "delta": {"content": d}, "finish_reason": None}],
-            })
+                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+            }
+        )
+    )
+    for d in deltas:
+        lines.append(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion.chunk",
+                    "created": 1700000000,
+                    "model": model,
+                    "choices": [{"index": 0, "delta": {"content": d}, "finish_reason": None}],
+                }
+            )
         )
     lines.append(
-        "data: " + json.dumps({
-            "id": "chatcmpl-test",
-            "object": "chat.completion.chunk",
-            "created": 1700000000,
-            "model": model,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
-        })
+        "data: "
+        + json.dumps(
+            {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": finish}],
+            }
+        )
     )
     lines.append("data: [DONE]")
     return ("\n\n".join(lines) + "\n\n").encode("utf-8")
@@ -74,8 +84,10 @@ def solana_client():
     after construction by replacing the x402_client with a fake."""
     import unittest.mock as mock
 
-    with mock.patch("blockrun_llm.solana_client.register_exact_svm_client"), \
-         mock.patch("blockrun_llm.solana_client._create_signer"):
+    with (
+        mock.patch("blockrun_llm.solana_client.register_exact_svm_client"),
+        mock.patch("blockrun_llm.solana_client._create_signer"),
+    ):
         client = SolanaLLMClient(
             private_key="bogus_not_used_because_signer_is_patched",
             api_url="https://sol.blockrun.ai/api",
@@ -110,17 +122,18 @@ def _patch_sse_helpers(monkeypatch):
 # Transport builders
 # ---------------------------------------------------------------------------
 
+
 def _free_transport(sse_body: bytes, calls: List[httpx.Request]) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
-        return httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, content=sse_body
-        )
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_body)
+
     return httpx.MockTransport(handler)
 
 
 def _paid_transport(sse_body: bytes, calls: List[httpx.Request]) -> httpx.MockTransport:
     """First call → 402; second call (with PAYMENT-SIGNATURE) → 200 SSE."""
+
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         if "PAYMENT-SIGNATURE" not in request.headers:
@@ -132,9 +145,8 @@ def _paid_transport(sse_body: bytes, calls: List[httpx.Request]) -> httpx.MockTr
                 },
                 json={"error": "Payment Required"},
             )
-        return httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, content=sse_body
-        )
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_body)
+
     return httpx.MockTransport(handler)
 
 
@@ -145,9 +157,8 @@ def _flaky_transport(
         calls.append(request)
         if len(calls) <= fail_count:
             return httpx.Response(status, json={"error": "transient"})
-        return httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, content=sse_body
-        )
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_body)
+
     return httpx.MockTransport(handler)
 
 
@@ -163,10 +174,12 @@ class TestSolanaStreaming:
             transport=_free_transport(_sse_events(["Hello", " world"]), calls)
         )
 
-        chunks = list(solana_client.chat_completion_stream(
-            "nvidia/deepseek-v4-flash",
-            [{"role": "user", "content": "hi"}],
-        ))
+        chunks = list(
+            solana_client.chat_completion_stream(
+                "nvidia/deepseek-v4-flash",
+                [{"role": "user", "content": "hi"}],
+            )
+        )
 
         assert len(calls) == 1
         assert "PAYMENT-SIGNATURE" not in calls[0].headers
@@ -180,10 +193,12 @@ class TestSolanaStreaming:
             transport=_paid_transport(_sse_events(["Paid"]), calls)
         )
 
-        chunks = list(solana_client.chat_completion_stream(
-            "openai/gpt-5.5",
-            [{"role": "user", "content": "hi"}],
-        ))
+        chunks = list(
+            solana_client.chat_completion_stream(
+                "openai/gpt-5.5",
+                [{"role": "user", "content": "hi"}],
+            )
+        )
         # 1 probe (402) + 1 paid (200) == 2 total
         assert len(calls) == 2
         assert "PAYMENT-SIGNATURE" not in calls[0].headers
@@ -200,10 +215,12 @@ class TestSolanaStreaming:
             transport=_flaky_transport(_sse_events(["OK"]), fail_count=2, calls=calls)
         )
 
-        chunks = list(solana_client.chat_completion_stream(
-            "nvidia/deepseek-v4-flash",
-            [{"role": "user", "content": "hi"}],
-        ))
+        chunks = list(
+            solana_client.chat_completion_stream(
+                "nvidia/deepseek-v4-flash",
+                [{"role": "user", "content": "hi"}],
+            )
+        )
         # 2 failed + 1 success
         assert len(calls) == 3
         assert any(c.choices[0].delta.content == "OK" for c in chunks)
@@ -219,10 +236,12 @@ class TestSolanaStreaming:
         solana_client._client = httpx.Client(transport=httpx.MockTransport(handler))
 
         with pytest.raises(APIError):
-            list(solana_client.chat_completion_stream(
-                "nvidia/deepseek-v4-flash",
-                [{"role": "user", "content": "hi"}],
-            ))
+            list(
+                solana_client.chat_completion_stream(
+                    "nvidia/deepseek-v4-flash",
+                    [{"role": "user", "content": "hi"}],
+                )
+            )
         # 1 + 3 backoffs == 4 attempts
         assert len(calls) == 1 + len(SolanaLLMClient._STREAM_5XX_BACKOFFS)
 
@@ -244,11 +263,13 @@ class TestSolanaStreaming:
 
         solana_client._client = httpx.Client(transport=httpx.MockTransport(handler))
 
-        chunks = list(solana_client.chat_completion_stream(
-            "primary/bad",
-            [{"role": "user", "content": "hi"}],
-            fallback_models=["fallback/good"],
-        ))
+        chunks = list(
+            solana_client.chat_completion_stream(
+                "primary/bad",
+                [{"role": "user", "content": "hi"}],
+                fallback_models=["fallback/good"],
+            )
+        )
         # 4 calls to primary/bad all 503, then 1 to fallback/good
         assert len(calls) >= 5
         assert any(c.choices[0].delta.content == "FALLBACK" for c in chunks)
@@ -273,7 +294,9 @@ class TestSolanaStreaming:
         solana_client._client = httpx.Client(transport=httpx.MockTransport(handler))
 
         with pytest.raises(PaymentError):
-            list(solana_client.chat_completion_stream(
-                "openai/gpt-5.5",
-                [{"role": "user", "content": "hi"}],
-            ))
+            list(
+                solana_client.chat_completion_stream(
+                    "openai/gpt-5.5",
+                    [{"role": "user", "content": "hi"}],
+                )
+            )
