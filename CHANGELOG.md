@@ -2,6 +2,19 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.4.2 — 2026-06-14
+
+### Fixed
+- **Solana clients auto-load the on-disk wallet (parity with Base).**
+  `SolanaLLMClient` / `AsyncSolanaLLMClient` now resolve the key as
+  `private_key` → `SOLANA_WALLET_KEY` → on-disk wallet (newest
+  `~/.<provider>/solana-wallet.json`, else `~/.blockrun/.solana-session`),
+  so `SOLANA_WALLET_KEY` is no longer required when a wallet session exists —
+  matching the Base `LLMClient.load_wallet()` fallback. A malformed key from any
+  source now raises a clean `ValueError` (instead of a raw base58/solders
+  exception), and an unreadable session file is treated as "no wallet" rather
+  than crashing.
+
 ## 1.4.1 — 2026-06-14
 
 ### Fixed
