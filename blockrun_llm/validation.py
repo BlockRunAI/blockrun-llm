@@ -37,6 +37,28 @@ KNOWN_PROVIDERS = {
 }
 
 
+# Base58 alphabet characters that never appear in a hex string. Their presence
+# is a strong signal that a key is a base58-encoded Solana key, not an EVM key.
+_BASE58_ONLY_CHARS = frozenset("GHJKLMNPQRSTUVWXYZghijkmnopqrstuvwxyz")
+
+
+def _looks_like_solana_key(key: str) -> bool:
+    """
+    Heuristically detect a base58-encoded Solana secret key.
+
+    Solana secret keys are base58, not hex: a 32-byte seed is ~43-44 chars and a
+    64-byte keypair is ~87-88 chars. An EVM key is exactly 64 hex chars (sans the
+    ``0x`` prefix). We treat a key as Solana when it contains a base58-only
+    character (one absent from the hex alphabet) and its length is outside the
+    EVM 64-char range — so a malformed 64-char hex key still routes to the
+    regular hex error rather than the Solana hint.
+    """
+    candidate = key[2:] if key.startswith("0x") else key
+    if len(candidate) == 64 or not (40 <= len(candidate) <= 90):
+        return False
+    return any(c in _BASE58_ONLY_CHARS for c in candidate)
+
+
 def validate_private_key(key: str) -> None:
     """
     Validate that a private key is properly formatted.
@@ -52,6 +74,20 @@ def validate_private_key(key: str) -> None:
     """
     if not isinstance(key, str):
         raise ValueError("Private key must be a string")
+
+    # Detect a base58 Solana key fed into the EVM (Base) client and point the
+    # user at the right entry point instead of the cryptic "66 characters" error.
+    if _looks_like_solana_key(key):
+        raise ValueError(
+            "This looks like a Solana (base58) private key, but this client uses "
+            "the Base (EVM) chain. Use the Solana client instead:\n"
+            "    from blockrun_llm import SolanaLLMClient\n"
+            '    client = SolanaLLMClient(private_key="<your base58 key>")\n'
+            "Or for agent use:\n"
+            "    from blockrun_llm import setup_agent_solana_wallet\n"
+            "    client = setup_agent_solana_wallet()\n"
+            'Install Solana support first: pip install "blockrun-llm[solana]"'
+        )
 
     # Must start with 0x
     if not key.startswith("0x"):

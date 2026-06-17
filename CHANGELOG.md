@@ -2,6 +2,17 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.4.3 — 2026-06-16
+
+### Fixed
+- **Clear error when a Solana key is passed to the Base (EVM) client.** Feeding
+  a base58 Solana secret key into `LLMClient` / `setup_agent_wallet()` (or any
+  EVM-chain client) used to fail with the cryptic `Private key must be 66
+  characters (0x + 64 hexadecimal characters)`. The SDK now detects the base58
+  Solana key shape and raises an actionable error pointing to `SolanaLLMClient`
+  / `setup_agent_solana_wallet()` and the `[solana]` extra. Valid 64-hex EVM
+  keys (including malformed ones) are unaffected and still get the hex error.
+
 ## 1.4.2 — 2026-06-14
 
 ### Fixed
