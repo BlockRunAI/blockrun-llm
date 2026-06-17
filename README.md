@@ -97,6 +97,14 @@ print(response)
 answer = client.chat("deepseek/deepseek-chat", "Explain Solana consensus", temperature=0.5)
 ```
 
+**Agent setup (auto-loads or creates a wallet):**
+```python
+from blockrun_llm import setup_agent_solana_wallet
+
+client = setup_agent_solana_wallet()   # scans ~/.*/solana-wallet.json, env, or creates one
+client.chat("openai/gpt-5.2", "gm Solana")
+```
+
 **Setup:**
 ```bash
 pip install blockrun-llm[solana]
@@ -105,6 +113,13 @@ export SOLANA_WALLET_KEY="your-bs58-solana-key"
 
 **Endpoint:** `https://sol.blockrun.ai/api`
 **Payment:** Solana USDC (SPL Token, mainnet)
+
+> **Base vs Solana keys are not interchangeable.** A Solana key is base58
+> (~44 chars for a seed, ~88 for a full keypair); a Base/EVM key is `0x` + 64
+> hex chars. Pass a Solana key to `SolanaLLMClient` — **not** `LLMClient` /
+> `setup_agent_wallet()`. If you do mix them up, the SDK now tells you exactly
+> what to switch to instead of failing with a cryptic "must be 66 characters"
+> error.
 
 ## Smart Routing (ClawRouter)
 

@@ -58,6 +58,24 @@ class TestValidatePrivateKey:
         key = "0xAc0974Bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
         validate_private_key(key)  # Should not raise
 
+    def test_reject_solana_base58_keypair_with_helpful_message(self):
+        """A 64-byte base58 Solana keypair should point users to SolanaLLMClient."""
+        key = "3zZXZ37shyzxw7ZUePxwvJk8wkab8vPjHY6AWwE7CTJzZSP6zp8hnYNSsL6U4FgkacrbMhq2c1BZwgoKu17tdUa8"
+        with pytest.raises(ValueError, match="SolanaLLMClient"):
+            validate_private_key(key)
+
+    def test_reject_solana_base58_seed_with_helpful_message(self):
+        """A 32-byte base58 Solana seed should point users to SolanaLLMClient."""
+        key = "B5Fx69Nhu21vhFotKkFsURy554TqSo5ESN7ew4M6yjvH"
+        with pytest.raises(ValueError, match="SolanaLLMClient"):
+            validate_private_key(key)
+
+    def test_reject_solana_base58_keypair_with_0x_prefix(self):
+        """Even after a caller prepends 0x, a Solana key should be detected."""
+        key = "0x3zZXZ37shyzxw7ZUePxwvJk8wkab8vPjHY6AWwE7CTJzZSP6zp8hnYNSsL6U4FgkacrbMhq2c1BZwgoKu17tdUa8"
+        with pytest.raises(ValueError, match="Solana"):
+            validate_private_key(key)
+
 
 class TestValidateApiUrl:
     def test_accept_https(self):
