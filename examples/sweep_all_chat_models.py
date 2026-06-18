@@ -79,6 +79,7 @@ SWEEP_TARGETS: List[str] = [
     "minimax/minimax-m3",
     "minimax/minimax-m2.7",
     # ZAI
+    "zai/glm-5.2",
     "zai/glm-5.1",
     "zai/glm-5",
     "zai/glm-5-turbo",
@@ -112,6 +113,7 @@ REASONING_MODELS = {
     "deepseek/deepseek-reasoner",
     "deepseek/deepseek-v4-pro",
     "xai/grok-4.3",
+    "zai/glm-5.2",
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
 }
 

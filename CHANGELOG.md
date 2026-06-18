@@ -2,6 +2,22 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.4.4 — 2026-06-18
+
+### Added
+- **`zai/glm-5.2` — Z.AI's newest flagship.** 1M-token context, top
+  open-source on long-horizon coding, billed per-token at $1.40/$4.40 (same
+  as glm-5.1). Added to the README ZAI table (as the new flagship) and to the
+  chat-model sweep (including the reasoning set). Available now via direct
+  call; SmartChat sees it live in `/v1/models`.
+
+### Changed
+- **SmartChat/Eco SIMPLE tier now routes to `moonshot/kimi-k2.7`.** Moonshot's
+  current flagship (256K context, image+video input, `reasoning_content`) and
+  the only k2 still visible in `/v1/models` — k2.6 and k2.5 are now
+  `hidden:true`, so pinning the primary to either would silently degrade the
+  tier. k2.6 retained as the documented previous-gen fallback.
+
 ## 1.4.3 — 2026-06-16
 
 ### Fixed

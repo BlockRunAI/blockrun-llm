@@ -226,14 +226,16 @@ DIMENSION_WEIGHTS = {
 
 AUTO_TIERS: Dict[Tier, TierConfig] = {
     "SIMPLE": {
-        # moonshot/kimi-k2.6 is Moonshot's flagship (256K context, vision +
-        # reasoning_content). kimi-k2.5 is hidden in the catalog (superseded)
-        # so it no longer appears in /v1/models pricing — routing here would
-        # silently fall back. k2.5 retained as fallback for clients that
-        # explicitly pricing-pin to it.
-        "primary": "moonshot/kimi-k2.6",
+        # moonshot/kimi-k2.7 is Moonshot's current flagship (256K context,
+        # image+video input, reasoning_content). It is the only k2 visible in
+        # /v1/models — k2.6 and k2.5 are now hidden:true (superseded), so they
+        # no longer appear in pricing and would be skipped by the availability
+        # check below. The primary MUST be a non-hidden model or SIMPLE silently
+        # degrades to gemini-2.5-flash-lite. k2.6 retained as a documented
+        # previous-gen fallback for clients that pricing-pin to it.
+        "primary": "moonshot/kimi-k2.7",
         "fallback": [
-            "moonshot/kimi-k2.5",
+            "moonshot/kimi-k2.6",
             "google/gemini-2.5-flash-lite",
             "deepseek/deepseek-chat",
             "nvidia/llama-4-maverick",
@@ -269,10 +271,11 @@ AUTO_TIERS: Dict[Tier, TierConfig] = {
 
 ECO_TIERS: Dict[Tier, TierConfig] = {
     "SIMPLE": {
-        # See AUTO_TIERS note: kimi-k2.6 is the catalog flagship. kimi-k2.5
-        # is hidden so the SDK no longer sees its pricing.
-        "primary": "moonshot/kimi-k2.6",
-        "fallback": ["moonshot/kimi-k2.5", "deepseek/deepseek-chat", "nvidia/llama-4-maverick"],
+        # See AUTO_TIERS note: kimi-k2.7 is the catalog flagship. k2.6 and k2.5
+        # are hidden so the SDK no longer sees their pricing; primary must stay
+        # on the non-hidden k2.7 or this tier silently falls back.
+        "primary": "moonshot/kimi-k2.7",
+        "fallback": ["moonshot/kimi-k2.6", "deepseek/deepseek-chat", "nvidia/llama-4-maverick"],
     },
     "MEDIUM": {
         # deepseek/deepseek-chat is V4 Flash non-thinking ($0.20/$0.40, 1M ctx

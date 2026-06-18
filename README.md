@@ -342,7 +342,8 @@ glm-5 and glm-5-turbo on 2026-06-06) — the whole family now bills per-token.
 
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `zai/glm-5.1` | $1.40/M | $4.40/M | 200K | Z.AI's latest flagship — #1 open-source on SWE-Bench Pro, 8-hour autonomous execution |
+| `zai/glm-5.2` | $1.40/M | $4.40/M | 1M | Z.AI's newest flagship — 1M-token context, top open-source on long-horizon coding |
+| `zai/glm-5.1` | $1.40/M | $4.40/M | 200K | #1 open-source on SWE-Bench Pro, 8-hour autonomous execution |
 | `zai/glm-5` | $0.60/M | $1.92/M | 200K | |
 | `zai/glm-5-turbo` | $1.20/M | $4.00/M | 200K | |
 
