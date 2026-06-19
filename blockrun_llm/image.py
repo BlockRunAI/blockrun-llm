@@ -127,6 +127,7 @@ class ImageClient:
         model: Optional[str] = None,
         size: Optional[str] = None,
         n: int = 1,
+        **kwargs: Any,
     ) -> ImageResponse:
         """
         Generate an image from a text prompt.
@@ -148,7 +149,17 @@ class ImageClient:
         Example:
             result = client.generate("A sunset over mountains")
             print(result.data[0].url)  # Image URL or data URL
+
+        Raises:
+            TypeError: If unexpected keyword arguments are passed
         """
+        if kwargs:
+            unsupported = ", ".join(sorted(kwargs.keys()))
+            raise TypeError(
+                f"generate() got unexpected keyword argument(s): {unsupported}. "
+                f"Valid parameters are: prompt, model, size, n"
+            )
+
         # Build request body
         body: Dict[str, Any] = {
             "model": model or self.DEFAULT_MODEL,
@@ -169,6 +180,7 @@ class ImageClient:
         mask: Optional[str] = None,
         size: Optional[str] = None,
         n: int = 1,
+        **kwargs: Any,
     ) -> ImageResponse:
         """
         Edit an image using img2img, or fuse multiple source images.
@@ -205,7 +217,17 @@ class ImageClient:
                 model="google/nano-banana",
             )
             print(result.data[0].url)
+
+        Raises:
+            TypeError: If unexpected keyword arguments are passed
         """
+        if kwargs:
+            unsupported = ", ".join(sorted(kwargs.keys()))
+            raise TypeError(
+                f"edit() got unexpected keyword argument(s): {unsupported}. "
+                f"Valid parameters are: prompt, image, model, mask, size, n"
+            )
+
         body: Dict[str, Any] = {
             "model": model or "openai/gpt-image-2",
             "prompt": prompt,
