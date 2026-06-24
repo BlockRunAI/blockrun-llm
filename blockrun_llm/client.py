@@ -1200,15 +1200,16 @@ class LLMClient:
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
-        self._capture_settlement(retry_response)
+        settlement = self._capture_settlement(retry_response)
 
         # Attach the real x402 charge (and on-chain settlement) to THIS response
-        # object so callers get a per-call, race-free cost — _last_settlement is
-        # consumed by _log_transaction below and _last_call_cost goes stale on
-        # the free path, so neither is safe to read after the call returns.
+        # object so callers get a per-call, race-free cost. Use the value
+        # _capture_settlement returns rather than re-reading self._last_settlement
+        # (shared state a concurrent call on the same client could overwrite),
+        # and a local cost_usd rather than self._last_call_cost which goes stale.
         chat_response.cost_usd = cost_usd
-        if self._last_settlement:
-            chat_response.settlement = dict(self._last_settlement)
+        if settlement:
+            chat_response.settlement = dict(settlement)
 
         # Save full response locally (cost log + response archive)
         from .cache import save_to_cache
@@ -2768,14 +2769,14 @@ class AsyncLLMClient:
             else float(details.get("amount", 0)) / 1e6
         )
         self._last_call_cost = cost_usd
-        self._capture_settlement(retry_response)
+        settlement = self._capture_settlement(retry_response)
 
         response_data = retry_response.json()
         # Per-call real charge + settlement (see sync _handle_payment_and_retry).
         chat_response = ChatResponse(**response_data)
         chat_response.cost_usd = cost_usd
-        if self._last_settlement:
-            chat_response.settlement = dict(self._last_settlement)
+        if settlement:
+            chat_response.settlement = dict(settlement)
         from .cache import save_to_cache
 
         save_to_cache(

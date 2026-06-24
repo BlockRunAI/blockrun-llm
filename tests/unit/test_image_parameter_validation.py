@@ -83,11 +83,7 @@ def test_edit_accepts_all_valid_parameters():
 
     try:
         client.edit(
-            "Make it red",
-            image=data_uri,
-            model="google/nano-banana",
-            size="1024x1024",
-            n=1
+            "Make it red", image=data_uri, model="google/nano-banana", size="1024x1024", n=1
         )
     except TypeError as e:
         if "Valid parameters are" in str(e):
