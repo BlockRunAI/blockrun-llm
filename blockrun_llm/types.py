@@ -108,6 +108,16 @@ class ChatResponse(BaseModel):
     usage: Optional[ChatUsage] = None
     citations: Optional[List[str]] = None  # xAI Live Search citation URLs
 
+    # Real x402 charge for THIS call, in USD — the exact amount debited from the
+    # wallet (0.0 for free / cached calls). This is the authoritative number to
+    # bill/track against; token-count × list-price estimates do NOT match it
+    # because the gateway price carries a per-call floor + margin. Populated by
+    # the client on every chat completion. ``settlement`` carries the decoded
+    # on-chain receipt (tx hash / micro-USDC / network) when the facilitator
+    # returned an X-PAYMENT-RESPONSE header.
+    cost_usd: Optional[float] = None
+    settlement: Optional[Dict[str, Any]] = None
+
     class Config:
         extra = "allow"
 

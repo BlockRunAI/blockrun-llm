@@ -1083,8 +1083,11 @@ class LLMClient:
                 sanitize_error_response(error_body),
             )
 
-        # Parse successful response
-        return ChatResponse(**response.json())
+        # Parse successful response. A 200 on the first attempt means no payment
+        # was required (free model / cached upstream), so the real charge is $0.
+        chat_response = ChatResponse(**response.json())
+        chat_response.cost_usd = 0.0
+        return chat_response
 
     def _handle_payment_and_retry(
         self,
@@ -1198,6 +1201,14 @@ class LLMClient:
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
         self._capture_settlement(retry_response)
+
+        # Attach the real x402 charge (and on-chain settlement) to THIS response
+        # object so callers get a per-call, race-free cost — _last_settlement is
+        # consumed by _log_transaction below and _last_call_cost goes stale on
+        # the free path, so neither is safe to read after the call returns.
+        chat_response.cost_usd = cost_usd
+        if self._last_settlement:
+            chat_response.settlement = dict(self._last_settlement)
 
         # Save full response locally (cost log + response archive)
         from .cache import save_to_cache
@@ -2655,7 +2666,10 @@ class AsyncLLMClient:
                 sanitize_error_response(error_body),
             )
 
-        return ChatResponse(**response.json())
+        # 200 on first attempt => no payment required (free / cached). Charge $0.
+        chat_response = ChatResponse(**response.json())
+        chat_response.cost_usd = 0.0
+        return chat_response
 
     async def _handle_payment_and_retry(
         self,
@@ -2757,6 +2771,11 @@ class AsyncLLMClient:
         self._capture_settlement(retry_response)
 
         response_data = retry_response.json()
+        # Per-call real charge + settlement (see sync _handle_payment_and_retry).
+        chat_response = ChatResponse(**response_data)
+        chat_response.cost_usd = cost_usd
+        if self._last_settlement:
+            chat_response.settlement = dict(self._last_settlement)
         from .cache import save_to_cache
 
         save_to_cache(
@@ -2768,7 +2787,7 @@ class AsyncLLMClient:
         )
         self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
 
-        return ChatResponse(**response_data)
+        return chat_response
 
     async def _request_with_payment_raw(
         self, endpoint: str, body: Dict[str, Any]
