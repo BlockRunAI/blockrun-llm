@@ -2,6 +2,17 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.4.6 — 2026-06-24
+
+### Added
+- **`ChatResponse.cost_usd` and `ChatResponse.settlement`** (#11, #12). Every
+  chat completion now carries the **real per-call x402 charge** (and the decoded
+  on-chain settlement receipt when present), so downstream consumers (e.g.
+  `blockrun-litellm`) can report the actual wallet deduction instead of a
+  token×list-price estimate. The cost is attached **race-free** (set on the
+  response object itself, not read back off the shared client); the free /
+  200-first path reports exactly `0.0` (never a stale prior charge).
+
 ## 1.4.4 — 2026-06-18
 
 ### Added
