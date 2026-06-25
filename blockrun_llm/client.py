@@ -74,6 +74,11 @@ from .validation import (
 # Load environment variables
 load_dotenv()
 
+# Default chat HTTP timeout (seconds). Was 120; reasoning models (opus-4.8,
+# deepseek-v4-pro) routinely take 200–300s, so 120 timed out non-streaming
+# calls. Override via the BLOCKRUN_CHAT_TIMEOUT env var.
+DEFAULT_CHAT_TIMEOUT = float(os.environ.get("BLOCKRUN_CHAT_TIMEOUT", "600"))
+
 
 # User-Agent for client identification in server logs
 # Version read lazily to avoid circular import with __init__.py
@@ -219,7 +224,7 @@ class LLMClient:
         self,
         private_key: Optional[str] = None,
         api_url: Optional[str] = None,
-        timeout: float = 120.0,
+        timeout: float = DEFAULT_CHAT_TIMEOUT,
         search_timeout: float = 300.0,
         transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
     ):
@@ -2166,7 +2171,7 @@ class AsyncLLMClient:
         self,
         private_key: Optional[str] = None,
         api_url: Optional[str] = None,
-        timeout: float = 120.0,
+        timeout: float = DEFAULT_CHAT_TIMEOUT,
         search_timeout: float = 300.0,
         transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
     ):
