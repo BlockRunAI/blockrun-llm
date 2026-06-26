@@ -29,6 +29,11 @@ from .x402 import create_payment_payload, parse_payment_required, extract_paymen
 
 load_dotenv()
 
+# Default chat HTTP timeout (seconds). Was 120; reasoning models (opus-4.8) think
+# 200–300s+, which the old default cut off mid-generation. Override via the
+# BLOCKRUN_CHAT_TIMEOUT env var. Mirrors client.py / solana_client.py.
+DEFAULT_CHAT_TIMEOUT = float(os.environ.get("BLOCKRUN_CHAT_TIMEOUT", "600"))
+
 
 class _BlockRunX402Transport(httpx.BaseTransport):
     """Custom httpx transport that intercepts 402 responses and signs x402 payments."""
@@ -123,7 +128,7 @@ class AnthropicClient:
         self,
         private_key: Optional[str] = None,
         api_url: Optional[str] = None,
-        timeout: float = 120.0,
+        timeout: float = DEFAULT_CHAT_TIMEOUT,
         **kwargs,
     ):
         """
@@ -133,7 +138,8 @@ class AnthropicClient:
             private_key: Base chain wallet private key (or set BLOCKRUN_WALLET_KEY env var).
                          Key is used for LOCAL signing only — never transmitted.
             api_url: BlockRun API endpoint (default: https://blockrun.ai/api).
-            timeout: Request timeout in seconds (default: 120).
+            timeout: Request timeout in seconds (default: 600, override via
+                     BLOCKRUN_CHAT_TIMEOUT env). Reasoning models need 200–300s+.
             **kwargs: Additional keyword arguments passed to anthropic.Anthropic.
 
         Raises:
