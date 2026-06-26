@@ -195,6 +195,46 @@ class TestSyncStreaming:
             == "Paid"
         )
 
+    def test_paid_stream_chunks_carry_real_cost(self):
+        """Every paid-path chunk carries the real per-call x402 charge as
+        ``chunk.cost_usd`` (race-free, vs the shared ``_last_call_cost``), so a
+        streaming consumer can report the actual wallet deduction."""
+        calls: List[httpx.Request] = []
+        client = LLMClient(private_key=TEST_PRIVATE_KEY)
+        client._client = httpx.Client(
+            transport=_make_paid_model_transport(_sse_events(["Paid"]), calls)
+        )
+
+        chunks = list(
+            client.chat_completion_stream(
+                "openai/gpt-5.5",
+                [{"role": "user", "content": "hi"}],
+                max_tokens=16,
+            )
+        )
+
+        charge = client._last_call_cost
+        assert charge > 0
+        assert chunks, "expected at least one chunk"
+        assert all(getattr(c, "cost_usd", None) == charge for c in chunks)
+
+    def test_free_stream_chunks_have_no_cost(self):
+        """Free models skip the 402/sign path (and the archive), so chunks
+        carry no ``cost_usd`` — consumers treat that as 'no real charge'."""
+        calls: List[httpx.Request] = []
+        client = LLMClient(private_key=TEST_PRIVATE_KEY)
+        client._client = httpx.Client(
+            transport=_make_free_model_transport(_sse_events(["hi"]), calls)
+        )
+
+        chunks = list(
+            client.chat_completion_stream(
+                "nvidia/deepseek-v4-flash",
+                [{"role": "user", "content": "hi"}],
+            )
+        )
+        assert all(getattr(c, "cost_usd", None) is None for c in chunks)
+
     def test_malformed_chunks_dont_abort_stream(self):
         calls: List[httpx.Request] = []
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
