@@ -239,7 +239,7 @@ class LLMClient:
             private_key: Base chain wallet private key (or set BLOCKRUN_WALLET_KEY env var)
                          NOTE: Key is used for LOCAL signing only - never transmitted
             api_url: API endpoint URL (default: https://blockrun.ai/api)
-            timeout: Request timeout in seconds (default: 120). Used for regular chat requests.
+            timeout: Request timeout in seconds (default: 600, override via BLOCKRUN_CHAT_TIMEOUT env). Used for regular chat requests.
             search_timeout: Timeout for xAI Live Search requests (default: 300 = 5 minutes).
                            Live Search can be slow as it searches X, web, and news sources.
                            Auto-detected when search_parameters or search=True is passed.
@@ -2202,7 +2202,7 @@ class AsyncLLMClient:
         Args:
             private_key: Base chain wallet private key (or set BLOCKRUN_WALLET_KEY env var)
             api_url: API endpoint URL (default: https://blockrun.ai/api)
-            timeout: Request timeout in seconds (default: 120). Used for regular chat requests.
+            timeout: Request timeout in seconds (default: 600, override via BLOCKRUN_CHAT_TIMEOUT env). Used for regular chat requests.
             search_timeout: Timeout for xAI Live Search requests (default: 300 = 5 minutes).
                            Auto-detected when search_parameters or search=True is passed.
             transaction_log: Same opt-in per-call log as ``LLMClient``. ``True`` →
