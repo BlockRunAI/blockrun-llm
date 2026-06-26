@@ -905,6 +905,13 @@ class LLMClient:
             _usage = chunk_usage_dict(chunk)
             if _usage is not None:
                 usage_dict = _usage
+            # Attach the real per-call x402 charge to every chunk. This is the
+            # streaming analogue of ChatResponse.cost_usd: it rides on the
+            # per-call chunk object (race-free), unlike self._last_call_cost
+            # which goes stale under shared-client concurrency. Consumers
+            # (e.g. the blockrun-litellm adapter) read it off the chunk to
+            # report the real wallet deduction instead of a list-price estimate.
+            chunk.cost_usd = cost_usd
             yield chunk
 
         # Stream complete (saw [DONE]). Free models have cost_usd == 0; only
@@ -2585,6 +2592,8 @@ class AsyncLLMClient:
             _usage = chunk_usage_dict(chunk)
             if _usage is not None:
                 usage_dict = _usage
+            # Race-free per-call x402 charge — see LLMClient._iter_and_archive.
+            chunk.cost_usd = cost_usd
             yield chunk
 
         if cost_usd > 0:

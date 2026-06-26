@@ -850,6 +850,8 @@ class SolanaLLMClient:
             _usage = chunk_usage_dict(chunk)
             if _usage is not None:
                 usage_dict = _usage
+            # Race-free per-call x402 charge — see LLMClient._iter_and_archive.
+            chunk.cost_usd = cost_usd
             yield chunk
 
         if cost_usd > 0:
@@ -2313,6 +2315,8 @@ class AsyncSolanaLLMClient:
             _usage = chunk_usage_dict(chunk)
             if _usage is not None:
                 usage_dict = _usage
+            # Race-free per-call x402 charge — see LLMClient._iter_and_archive.
+            chunk.cost_usd = cost_usd
             yield chunk
 
         if cost_usd > 0:

@@ -2,6 +2,18 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.4.7 — 2026-06-26
+
+### Added
+- **`ChatCompletionChunk.cost_usd` on streamed calls.** The streaming paths now
+  attach the real per-call x402 charge to every chunk (`_iter_and_archive` /
+  `_aiter_and_archive`, Base + Solana), the streaming analogue of
+  `ChatResponse.cost_usd`. It rides on the per-call chunk object, so it's
+  **race-free** under shared-client concurrency (unlike `client._last_call_cost`,
+  which goes stale). Downstream consumers (e.g. `blockrun-litellm`) can report
+  the actual wallet deduction on streamed calls instead of a token×list-price
+  estimate. Free / 200-first streams skip the signer and carry no `cost_usd`.
+
 ## 1.4.6 — 2026-06-24
 
 ### Added
