@@ -86,7 +86,7 @@ DEFAULT_MAX_TOKENS = 1024
 #
 # Public callers can also override per-call via ``timeout=`` on
 # ``chat_completion`` / ``image`` / ``image_edit`` / ``search``.
-DEFAULT_CHAT_TIMEOUT = 120.0
+DEFAULT_CHAT_TIMEOUT = float(os.environ.get("BLOCKRUN_CHAT_TIMEOUT", "600"))  # was 120; reasoning models need 200–300s+
 DEFAULT_IMAGE_TIMEOUT = 200.0
 DEFAULT_SEARCH_TIMEOUT = 300.0
 DEFAULT_FAST_TIMEOUT = 30.0  # pyth / x_user_info / quick lookups
