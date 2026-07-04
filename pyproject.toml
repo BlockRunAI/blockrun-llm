@@ -45,6 +45,10 @@ anthropic = [
 ]
 solana = [
     "x402[svm]>=2.0.0",
+    # solana 0.40.0 (2026-06-27) removed solana.rpc.api, which x402's SVM
+    # signer imports — fresh installs get _HAS_X402=False. Lift when x402
+    # supports the new layout.
+    "solana>=0.36,<0.40",
 ]
 
 [project.urls]
