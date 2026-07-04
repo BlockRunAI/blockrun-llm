@@ -123,6 +123,9 @@ def _readable_filename(endpoint: str, body: Dict[str, Any]) -> str:
     elif "/v1/image" in endpoint:
         ep = "image"
 
+    if not isinstance(body, dict):
+        # JSON-RPC batch requests send a list body — no labelable fields.
+        body = {}
     label = (
         body.get("query")
         or body.get("username")
@@ -178,7 +181,7 @@ def save_to_cache(
     _append_cost_log(
         endpoint,
         cost_usd,
-        model=model or body.get("model"),
+        model=model or (body.get("model") if isinstance(body, dict) else None),
         wallet=wallet,
         network=network,
         client_kind=client_kind,
