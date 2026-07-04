@@ -37,6 +37,21 @@ DEFAULT_TTL: Dict[str, int] = {
     "/v1/search": 900,
     # Image — no cache
     "/v1/image": 0,
+    # Video generation — no cache (each clip is unique / expensive)
+    "/v1/videos": 0,
+    # Audio (music / speech / sound-effects) — no cache
+    "/v1/audio": 0,
+    # Media enrollment (portrait / realface) — no cache
+    "/v1/portrait/": 0,
+    "/v1/realface/": 0,
+    # Live JSON-RPC — no cache (chain state is realtime)
+    "/v1/rpc/": 0,
+    # Pyth market data — no cache (realtime quotes)
+    "/v1/crypto": 0,
+    "/v1/fx": 0,
+    "/v1/commodity": 0,
+    "/v1/stocks": 0,
+    "/v1/usstock": 0,
 }
 
 CACHE_DIR = Path.home() / ".blockrun" / "cache"
