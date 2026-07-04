@@ -74,6 +74,7 @@ def _make_client(transport: httpx.MockTransport, **kwargs: float) -> SolanaLLMCl
     class _FakePayload:
         class accepted:
             amount = "1000000"
+            pay_to = "GsbwXfJraMomNxBcpR3DBNxnKwZbyq7YCoDdSLDwzxdV"
 
     client._x402_client = mock.MagicMock()
     client._x402_client.create_payment_payload.return_value = _FakePayload()
@@ -228,6 +229,7 @@ def _make_async_client(transport: httpx.MockTransport, **kwargs: float):
     class _FakePayload:
         class accepted:
             amount = "1000000"
+            pay_to = "GsbwXfJraMomNxBcpR3DBNxnKwZbyq7YCoDdSLDwzxdV"
 
     client._x402_client = mock.MagicMock()
     client._x402_client.create_payment_payload = mock.AsyncMock(return_value=_FakePayload())

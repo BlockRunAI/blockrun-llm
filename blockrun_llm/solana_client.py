@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import os
+import re
 import sys
 import threading
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
@@ -53,6 +54,8 @@ from .types import (
 )
 from .solana_wallet import get_solana_public_key
 from .tx_log import TransactionLogger, decode_settlement_header, _resolve_log_dir
+from .price import Category, Market, Resolution, Session
+from .realface import _GROUP_ID_RE
 from .validation import (
     build_payment_rejected_error,
     sanitize_error_response,
@@ -320,6 +323,46 @@ def _should_fallback_solana(exc: Exception) -> bool:
     return False
 
 
+# Characters safe to interpolate into a single URL path segment. network /
+# symbol / market / wallet address all get f-string'd into a paid endpoint
+# path; a '/', '..', '?' or '#' would silently re-target the payment-signing
+# request. These values often come from LLM output in agent use, so validate
+# before building the URL.
+_SAFE_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _safe_path_segment(value: str, field: str) -> str:
+    """Return ``value`` if it is a single safe URL path segment, else raise."""
+    if not value or not _SAFE_PATH_SEGMENT_RE.match(value):
+        raise ValueError(
+            f"{field} must contain only letters, digits, '.', '_' or '-' " f"(got {value!r})"
+        )
+    return value
+
+
+def _receipt_from_headers(headers: Any) -> Optional[str]:
+    """Pull the x402 settlement tx hash from a paid response's headers."""
+    if headers is None:
+        return None
+    return headers.get("x-payment-receipt") or headers.get("X-Payment-Receipt")
+
+
+def _assert_same_payment_terms(signed_payload: Any, orig_amount: Any, orig_pay_to: Any) -> None:
+    """Guard a mid-poll re-sign: the fresh 402 challenge must charge the same
+    amount to the same recipient as the payment originally authorized for this
+    job. A gateway (buggy or hostile) that reprices or redirects the re-challenge
+    would otherwise extract an unbounded, unrelated payment from the wallet.
+    Raises :class:`PaymentError` on any mismatch so no signature is submitted."""
+    accepted = signed_payload.accepted
+    if str(accepted.amount) != str(orig_amount) or accepted.pay_to != orig_pay_to:
+        raise PaymentError(
+            "Mid-poll re-sign challenge changed the payment terms "
+            f"(amount {orig_amount!r} -> {accepted.amount!r}, "
+            f"pay_to {orig_pay_to!r} -> {accepted.pay_to!r}); refusing to "
+            "authorize a different payment for the same job."
+        )
+
+
 class SolanaLLMClient:
     """
     BlockRun LLM Client for Solana — pays via Solana USDC x402.
@@ -346,7 +389,10 @@ class SolanaLLMClient:
     VIDEO_DEFAULT_MODEL = "xai/grok-imagine-video"
     VIDEO_POLL_INTERVAL_SECONDS = 5.0
     VIDEO_POLL_BUDGET_SECONDS = 900.0
-    MEDIA_POLL_MAX_RESIGNS = 3
+    # Matches Base VideoClient.MAX_POLL_RESIGNS (2) — each re-sign is only used
+    # to refresh an expired blockhash, and every fresh signature is validated
+    # against the original payment terms before use.
+    MEDIA_POLL_MAX_RESIGNS = 2
 
     # Media generation defaults (mirror the Base MusicClient/SpeechClient).
     MUSIC_DEFAULT_MODEL = "minimax/music-2.5+"
@@ -433,6 +479,11 @@ class SolanaLLMClient:
             TransactionLogger(log_dir) if log_dir is not None else None
         )
         self._last_settlement: Optional[Dict[str, Any]] = None
+        # Response headers from the most recent raw paid POST — consumed by
+        # rpc()/music()/speech() to surface the settlement receipt + gateway
+        # metadata the shared JSON-only helper would otherwise drop. Read it
+        # immediately after the helper returns (no intervening await).
+        self._last_raw_headers: Optional[httpx.Headers] = None
 
         # Initialize x402 SDK client for Solana payment signing.
         self._x402_client = x402ClientSync()
@@ -479,6 +530,14 @@ class SolanaLLMClient:
         settlement = decode_settlement_header(header)
         self._last_settlement = settlement
         return settlement
+
+    def _attach_receipt(self, data: Any) -> None:
+        """Inject the settlement tx hash from the most recent paid POST into a
+        raw response dict under ``txHash`` (mirrors the Base Music/Speech
+        clients). No-op on free responses (no receipt header)."""
+        tx_hash = _receipt_from_headers(self._last_raw_headers)
+        if tx_hash and isinstance(data, dict) and not data.get("txHash"):
+            data["txHash"] = tx_hash
 
     def get_wallet_address(self) -> str:
         if not self._address:
@@ -1117,6 +1176,10 @@ class SolanaLLMClient:
         if cached is not None:
             return cached
 
+        # Reset per-call receipt headers; only a paid retry repopulates them, so
+        # a free/cached model can't inherit a prior call's settlement receipt.
+        self._last_raw_headers = None
+
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
         eff_timeout = timeout if timeout is not None else self._timeout
@@ -1210,6 +1273,7 @@ class SolanaLLMClient:
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
         self._capture_settlement(retry_response)
+        self._last_raw_headers = retry_response.headers
 
         return retry_response.json()
 
@@ -1316,6 +1380,7 @@ class SolanaLLMClient:
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
         self._capture_settlement(retry_response)
+        self._last_raw_headers = retry_response.headers
 
         return retry_response.json()
 
@@ -1413,6 +1478,9 @@ class SolanaLLMClient:
         payment_payload_obj = self._sign_payment(payment_required)
         encoded_payment = encode_payment_signature_header(payment_payload_obj)
         cost_usd = float(payment_payload_obj.accepted.amount) / 1e6
+        # Terms this job is authorized to pay — any mid-poll re-sign must match.
+        orig_amount = payment_payload_obj.accepted.amount
+        orig_pay_to = payment_payload_obj.accepted.pay_to
 
         paid_headers = {
             "Content-Type": "application/json",
@@ -1510,17 +1578,33 @@ class SolanaLLMClient:
                 # fresh signature that 402s again is a genuine payment problem.
                 if resigns_left > 0:
                     resigns_left -= 1
-                    challenge = self._client.get(
-                        poll_url,
-                        headers={"User-Agent": _get_user_agent()},
-                        timeout=eff_timeout,
-                    )
-                    resign_header = self._extract_payment_header(challenge)
-                    if challenge.status_code == 402 and resign_header:
-                        resign_required = decode_payment_required_header(resign_header)
-                        resign_payload = self._sign_payment(resign_required)
-                        encoded_payment = encode_payment_signature_header(resign_payload)
-                        poll_headers["PAYMENT-SIGNATURE"] = encoded_payment
+                    resign_payload = None
+                    try:
+                        challenge = self._client.get(
+                            poll_url,
+                            headers={"User-Agent": _get_user_agent()},
+                            timeout=eff_timeout,
+                        )
+                        resign_header = self._extract_payment_header(challenge)
+                        if challenge.status_code == 402 and resign_header:
+                            resign_required = decode_payment_required_header(resign_header)
+                            resign_payload = self._sign_payment(resign_required)
+                    except (PaymentError, httpx.HTTPError):
+                        # Challenge GET failed, or signing was rejected — fall
+                        # through to surface the gateway's real 402 reason rather
+                        # than masking it with a network/signing error. Nothing
+                        # settled here.
+                        resign_payload = None
+                    if resign_payload is not None:
+                        # Refuse a re-challenge that reprices or redirects the
+                        # payment vs. what this job originally authorized. This
+                        # PaymentError must propagate (NOT fall through to the
+                        # generic 402). The guard also pins the amount, so the
+                        # submit-time cost_usd stays correct for the ledger.
+                        _assert_same_payment_terms(resign_payload, orig_amount, orig_pay_to)
+                        poll_headers["PAYMENT-SIGNATURE"] = encode_payment_signature_header(
+                            resign_payload
+                        )
                         continue
                 raise build_payment_rejected_error(poll_resp)
 
@@ -1671,60 +1755,21 @@ class SolanaLLMClient:
         **no payment** and leaves the job claimable ~48h. Default model is
         ``xai/grok-imagine-video``.
         """
-        if image_url and real_face_asset_id:
-            raise ValueError(
-                "image_url and real_face_asset_id are mutually exclusive; pass at most one."
-            )
-        if last_frame_url and not image_url:
-            raise ValueError(
-                "last_frame_url requires image_url: image_url seeds the FIRST frame and "
-                "last_frame_url the FINAL frame — send both."
-            )
-        if last_frame_url and real_face_asset_id:
-            raise ValueError(
-                "last_frame_url and real_face_asset_id are mutually exclusive; "
-                "first-and-last-frame uses image_url + last_frame_url."
-            )
-        if reference_image_urls:
-            if image_url or last_frame_url or real_face_asset_id:
-                raise ValueError(
-                    "reference_image_urls is mutually exclusive with image_url, "
-                    "last_frame_url, and real_face_asset_id."
-                )
-            if len(reference_image_urls) > 9:
-                raise ValueError("reference_image_urls accepts at most 9 images.")
-        if real_face_asset_id is not None and not real_face_asset_id.startswith("ta_"):
-            raise ValueError(
-                "real_face_asset_id must start with 'ta_' "
-                "(a Virtual Portrait or RealFace asset id, e.g. 'ta_abc123xyz')"
-            )
-
-        body: Dict[str, Any] = {
-            "model": model or self.VIDEO_DEFAULT_MODEL,
-            "prompt": prompt,
-        }
-        if image_url:
-            body["image_url"] = image_url
-        if last_frame_url:
-            body["last_frame_url"] = last_frame_url
-        if reference_image_urls:
-            body["reference_image_urls"] = reference_image_urls
-        if real_face_asset_id:
-            body["real_face_asset_id"] = real_face_asset_id
-        if duration_seconds is not None:
-            body["duration_seconds"] = duration_seconds
-        if aspect_ratio is not None:
-            body["aspect_ratio"] = aspect_ratio
-        if resolution is not None:
-            body["resolution"] = resolution
-        if generate_audio is not None:
-            body["generate_audio"] = generate_audio
-        if seed is not None:
-            body["seed"] = seed
-        if watermark is not None:
-            body["watermark"] = watermark
-        if return_last_frame is not None:
-            body["return_last_frame"] = return_last_frame
+        body = self._build_video_body(
+            prompt,
+            model=model,
+            image_url=image_url,
+            last_frame_url=last_frame_url,
+            reference_image_urls=reference_image_urls,
+            real_face_asset_id=real_face_asset_id,
+            duration_seconds=duration_seconds,
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+            generate_audio=generate_audio,
+            seed=seed,
+            watermark=watermark,
+            return_last_frame=return_last_frame,
+        )
 
         data = self._request_image_with_payment(
             "/v1/videos/generations",
@@ -1800,6 +1845,7 @@ class SolanaLLMClient:
         if lyrics and lyrics.strip():
             body["lyrics"] = lyrics.strip()
         data = self._request_with_payment_raw("/v1/audio/generations", body, timeout=timeout)
+        self._attach_receipt(data)
         return MusicResponse(**data)
 
     # ------------------------------------------------------------------
@@ -1833,6 +1879,7 @@ class SolanaLLMClient:
         if speed is not None:
             body["speed"] = speed
         data = self._request_with_payment_raw("/v1/audio/speech", body, timeout=timeout)
+        self._attach_receipt(data)
         return SpeechResponse(**data)
 
     def sound_effect(
@@ -1858,12 +1905,15 @@ class SolanaLLMClient:
         if response_format:
             body["response_format"] = response_format
         data = self._request_with_payment_raw("/v1/audio/sound-effects", body, timeout=timeout)
+        self._attach_receipt(data)
         return SpeechResponse(**data)
 
     def list_voices(self) -> List[Dict[str, Any]]:
         """List available speech voices (free)."""
         url = f"{self._api_url}/v1/audio/voices"
-        resp = self._client.get(url, headers={"User-Agent": _get_user_agent()})
+        resp = self._client.get(
+            url, headers={"User-Agent": _get_user_agent()}, timeout=DEFAULT_FAST_TIMEOUT
+        )
         if resp.status_code != 200:
             try:
                 error_body = resp.json()
@@ -1875,7 +1925,8 @@ class SolanaLLMClient:
                 sanitize_error_response(error_body),
             )
         data = resp.json()
-        return data.get("voices", data) if isinstance(data, dict) else data
+        # Gateway wraps the voice list under "data" (mirrors SpeechClient.list_voices).
+        return data.get("data", []) if isinstance(data, dict) else data
 
     # ------------------------------------------------------------------
     # Virtual Portrait enrollment (Solana payment)
@@ -1897,9 +1948,11 @@ class SolanaLLMClient:
 
     def list_portraits(self, wallet_address: Optional[str] = None) -> PortraitList:
         """List Virtual Portraits enrolled by a wallet (free, rate-limited)."""
-        addr = wallet_address or self.get_wallet_address()
+        addr = _safe_path_segment(wallet_address or self.get_wallet_address(), "wallet_address")
         url = f"{self._api_url}/v1/wallet/{addr}/portraits"
-        resp = self._client.get(url, headers={"User-Agent": _get_user_agent()})
+        resp = self._client.get(
+            url, headers={"User-Agent": _get_user_agent()}, timeout=DEFAULT_FAST_TIMEOUT
+        )
         if resp.status_code != 200:
             try:
                 error_body = resp.json()
@@ -1924,6 +1977,8 @@ class SolanaLLMClient:
             raise ValueError("name is required (1-64 chars)")
         if len(name) > 64:
             raise ValueError(f"name must be 64 chars or fewer (got {len(name)})")
+        if group_id is not None and not _GROUP_ID_RE.match(group_id):
+            raise ValueError("group_id must look like 'legacy_rf_<digits>'")
         body: Dict[str, Any] = {"name": name}
         if group_id:
             body["groupId"] = group_id
@@ -1932,6 +1987,7 @@ class SolanaLLMClient:
             url,
             json=body,
             headers={"Content-Type": "application/json", "User-Agent": _get_user_agent()},
+            timeout=DEFAULT_FAST_TIMEOUT,
         )
         if resp.status_code != 200:
             try:
@@ -1945,11 +2001,14 @@ class SolanaLLMClient:
 
     def realface_status(self, group_id: str) -> RealFaceStatus:
         """Poll a RealFace group's state (free, rate-limited)."""
-        if not group_id:
-            raise ValueError("group_id is required")
+        if not group_id or not _GROUP_ID_RE.match(group_id):
+            raise ValueError("group_id must look like 'legacy_rf_<digits>'")
         url = f"{self._api_url}/v1/realface/status"
         resp = self._client.get(
-            url, params={"groupId": group_id}, headers={"User-Agent": _get_user_agent()}
+            url,
+            params={"groupId": group_id},
+            headers={"User-Agent": _get_user_agent()},
+            timeout=DEFAULT_FAST_TIMEOUT,
         )
         if resp.status_code != 200:
             try:
@@ -1996,17 +2055,19 @@ class SolanaLLMClient:
             raise ValueError(f"name must be 64 chars or fewer (got {len(name)})")
         if not image_url or not image_url.lower().startswith(("https://", "http://")):
             raise ValueError("image_url must be an http(s) URL")
-        if not group_id:
-            raise ValueError("group_id is required")
+        if not group_id or not _GROUP_ID_RE.match(group_id):
+            raise ValueError("group_id must look like 'legacy_rf_<digits>'")
         body: Dict[str, Any] = {"name": name, "image_url": image_url, "group_id": group_id}
         data = self._request_with_payment_raw("/v1/realface/enroll", body)
         return RealFaceEnrollment(**data)
 
     def list_realfaces(self, wallet_address: Optional[str] = None) -> RealFaceList:
         """List RealFace assets enrolled by a wallet (free, rate-limited)."""
-        addr = wallet_address or self.get_wallet_address()
+        addr = _safe_path_segment(wallet_address or self.get_wallet_address(), "wallet_address")
         url = f"{self._api_url}/v1/wallet/{addr}/realfaces"
-        resp = self._client.get(url, headers={"User-Agent": _get_user_agent()})
+        resp = self._client.get(
+            url, headers={"User-Agent": _get_user_agent()}, timeout=DEFAULT_FAST_TIMEOUT
+        )
         if resp.status_code != 200:
             try:
                 error_body = resp.json()
@@ -2024,28 +2085,123 @@ class SolanaLLMClient:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _build_video_body(
+        prompt: str,
+        *,
+        model: Optional[str],
+        image_url: Optional[str],
+        last_frame_url: Optional[str],
+        reference_image_urls: Optional[List[str]],
+        real_face_asset_id: Optional[str],
+        duration_seconds: Optional[int],
+        aspect_ratio: Optional[str],
+        resolution: Optional[str],
+        generate_audio: Optional[bool],
+        seed: Optional[int],
+        watermark: Optional[bool],
+        return_last_frame: Optional[bool],
+    ) -> Dict[str, Any]:
+        """Validate video kwargs and build the request body. Shared by the sync
+        and async ``video()`` so their validation and payload never drift."""
+        if image_url and real_face_asset_id:
+            raise ValueError(
+                "image_url and real_face_asset_id are mutually exclusive; pass at most one."
+            )
+        if last_frame_url and not image_url:
+            raise ValueError(
+                "last_frame_url requires image_url: image_url seeds the FIRST frame and "
+                "last_frame_url the FINAL frame — send both."
+            )
+        if last_frame_url and real_face_asset_id:
+            raise ValueError(
+                "last_frame_url and real_face_asset_id are mutually exclusive; "
+                "first-and-last-frame uses image_url + last_frame_url."
+            )
+        if reference_image_urls:
+            if image_url or last_frame_url or real_face_asset_id:
+                raise ValueError(
+                    "reference_image_urls is mutually exclusive with image_url, "
+                    "last_frame_url, and real_face_asset_id."
+                )
+            if len(reference_image_urls) > 9:
+                raise ValueError("reference_image_urls accepts at most 9 images.")
+        if real_face_asset_id is not None and not real_face_asset_id.startswith("ta_"):
+            raise ValueError(
+                "real_face_asset_id must start with 'ta_' "
+                "(a Virtual Portrait or RealFace asset id, e.g. 'ta_abc123xyz')"
+            )
+
+        body: Dict[str, Any] = {
+            "model": model or SolanaLLMClient.VIDEO_DEFAULT_MODEL,
+            "prompt": prompt,
+        }
+        if image_url:
+            body["image_url"] = image_url
+        if last_frame_url:
+            body["last_frame_url"] = last_frame_url
+        if reference_image_urls:
+            body["reference_image_urls"] = reference_image_urls
+        if real_face_asset_id:
+            body["real_face_asset_id"] = real_face_asset_id
+        if duration_seconds is not None:
+            body["duration_seconds"] = duration_seconds
+        if aspect_ratio is not None:
+            body["aspect_ratio"] = aspect_ratio
+        if resolution is not None:
+            body["resolution"] = resolution
+        if generate_audio is not None:
+            body["generate_audio"] = generate_audio
+        if seed is not None:
+            body["seed"] = seed
+        if watermark is not None:
+            body["watermark"] = watermark
+        if return_last_frame is not None:
+            body["return_last_frame"] = return_last_frame
+        return body
+
+    @staticmethod
+    def _rpc_response(
+        data: Any, headers: Optional[httpx.Headers], fallback_network: str
+    ) -> RpcResponse:
+        """Build an RpcResponse, surfacing gateway metadata from the paid
+        response headers (canonical network, cache hit, settlement tx) exactly
+        like the Base RPCClient. Strips body keys that would collide with those
+        metadata kwargs."""
+        if not isinstance(data, dict):
+            data = {"result": data}
+        else:
+            data = {k: v for k, v in data.items() if k not in ("network", "cache_hit", "tx_hash")}
+        hdrs = headers if headers is not None else httpx.Headers()
+        return RpcResponse(
+            **data,
+            network=hdrs.get("x-network") or fallback_network,
+            cache_hit=(hdrs.get("x-cache", "") or "").upper() == "HIT",
+            tx_hash=_receipt_from_headers(hdrs),
+        )
+
+    @staticmethod
     def _price_category_path(
         category: str, market: Optional[str], kind: str, symbol: Optional[str]
     ) -> str:
         if category == "stocks":
             if not market:
                 raise ValueError("market is required for category='stocks' (e.g. market='us')")
-            base = f"/v1/stocks/{market}"
+            base = f"/v1/stocks/{_safe_path_segment(market, 'market')}"
         elif category in ("crypto", "fx", "commodity", "usstock"):
             base = f"/v1/{category}"
         else:
             raise ValueError(f"Unknown category: {category}")
         if symbol is None:
             return f"{base}/{kind}"
-        return f"{base}/{kind}/{symbol.upper()}"
+        return f"{base}/{kind}/{_safe_path_segment(symbol.upper(), 'symbol')}"
 
     def price(
         self,
-        category: str,
+        category: Category,
         symbol: str,
         *,
-        market: Optional[str] = None,
-        session: Optional[str] = None,
+        market: Optional[Market] = None,
+        session: Optional[Session] = None,
     ) -> PricePoint:
         """Fetch a realtime Pyth price quote (Solana payment for paid
         categories). ``market`` is required for ``category='stocks'``."""
@@ -2053,10 +2209,12 @@ class SolanaLLMClient:
         params: Dict[str, Any] = {}
         if session is not None:
             params["session"] = session
-        data = self._get_with_payment_raw(endpoint, params=params or None)
+        data = self._get_with_payment_raw(
+            endpoint, params=params or None, timeout=DEFAULT_FAST_TIMEOUT
+        )
         return PricePoint(
             symbol=data.get("symbol", symbol.upper()),
-            price=data["price"],
+            price=data.get("price"),
             publish_time=data.get("publishTime"),
             confidence=data.get("confidence"),
             feed_id=data.get("feedId"),
@@ -2069,21 +2227,21 @@ class SolanaLLMClient:
 
     def price_history(
         self,
-        category: str,
+        category: Category,
         symbol: str,
         *,
-        resolution: str = "D",
+        resolution: Resolution = "D",
         from_ts: int,
         to_ts: int,
-        market: Optional[str] = None,
-        session: Optional[str] = None,
+        market: Optional[Market] = None,
+        session: Optional[Session] = None,
     ) -> PriceHistoryResponse:
         """Fetch OHLC bars between two Unix timestamps (seconds)."""
         endpoint = self._price_category_path(category, market, "history", symbol)
         params: Dict[str, Any] = {"resolution": resolution, "from": from_ts, "to": to_ts}
         if session is not None:
             params["session"] = session
-        data = self._get_with_payment_raw(endpoint, params=params)
+        data = self._get_with_payment_raw(endpoint, params=params, timeout=DEFAULT_FAST_TIMEOUT)
         return PriceHistoryResponse(
             symbol=data.get("symbol", symbol.upper()),
             resolution=data.get("resolution", resolution),
@@ -2093,18 +2251,18 @@ class SolanaLLMClient:
 
     def list_symbols(
         self,
-        category: str,
+        category: Category,
         *,
         q: Optional[str] = None,
         limit: int = 100,
-        market: Optional[str] = None,
+        market: Optional[Market] = None,
     ) -> SymbolListResponse:
         """List available symbols in a Pyth category (free discovery)."""
         endpoint = self._price_category_path(category, market, "list", None)
         params: Dict[str, Any] = {"limit": limit}
         if q:
             params["q"] = q
-        data = self._get_with_payment_raw(endpoint, params=params)
+        data = self._get_with_payment_raw(endpoint, params=params, timeout=DEFAULT_FAST_TIMEOUT)
         if isinstance(data, list):
             return SymbolListResponse(symbols=data, count=len(data))
         return SymbolListResponse(
@@ -2130,32 +2288,28 @@ class SolanaLLMClient:
         Mirrors ``RPCClient.call``. ``network`` may be a chain name or alias
         (``eth``, ``sol``, ``base`` …); the gateway resolves it.
         """
+        _safe_path_segment(network, "network")
         body: Dict[str, Any] = {"jsonrpc": "2.0", "id": id, "method": method}
         if params is not None:
             body["params"] = params
         data = self._request_with_payment_raw(f"/v1/rpc/{network}", body)
-        if not isinstance(data, dict):
-            data = {"result": data}
-        return RpcResponse(**data, network=network)
+        return self._rpc_response(data, self._last_raw_headers, network)
 
     def rpc_batch(self, network: str, requests: List[Dict[str, Any]]) -> List[RpcResponse]:
         """Make a JSON-RPC 2.0 batch call (Solana payment, $0.002 x N)."""
         if not requests:
             raise ValueError("batch requires at least one request")
+        _safe_path_segment(network, "network")
         body: List[Dict[str, Any]] = []
         for i, req in enumerate(requests):
             if "method" not in req:
                 raise ValueError(f"batch request {i} is missing 'method'")
             body.append({"jsonrpc": "2.0", "id": i + 1, **req})
         data = self._request_with_payment_raw(f"/v1/rpc/{network}", body)  # type: ignore[arg-type]
+        headers = self._last_raw_headers
         if not isinstance(data, list):
             data = [data]
-        out: List[RpcResponse] = []
-        for item in data:
-            if not isinstance(item, dict):
-                item = {"result": item}
-            out.append(RpcResponse(**item, network=network))
-        return out
+        return [self._rpc_response(item, headers, network) for item in data]
 
     def search(
         self,
@@ -2531,6 +2685,11 @@ class AsyncSolanaLLMClient:
             TransactionLogger(log_dir) if log_dir is not None else None
         )
         self._last_settlement: Optional[Dict[str, Any]] = None
+        # Response headers from the most recent raw paid POST — consumed by
+        # rpc()/music()/speech() to surface the settlement receipt + gateway
+        # metadata the shared JSON-only helper would otherwise drop. Read it
+        # immediately after the helper returns (no intervening await).
+        self._last_raw_headers: Optional[httpx.Headers] = None
 
         # Async x402 client + same SVM signer the sync class uses.
         from x402 import x402Client  # local import to keep optional dep clean
@@ -2571,6 +2730,14 @@ class AsyncSolanaLLMClient:
         settlement = decode_settlement_header(header)
         self._last_settlement = settlement
         return settlement
+
+    def _attach_receipt(self, data: Any) -> None:
+        """Inject the settlement tx hash from the most recent paid POST into a
+        raw response dict under ``txHash`` (mirrors the Base Music/Speech
+        clients). No-op on free responses (no receipt header)."""
+        tx_hash = _receipt_from_headers(self._last_raw_headers)
+        if tx_hash and isinstance(data, dict) and not data.get("txHash"):
+            data["txHash"] = tx_hash
 
     def _log_transaction(
         self,
@@ -3100,6 +3267,10 @@ class AsyncSolanaLLMClient:
         if cached is not None:
             return cached
 
+        # Reset per-call receipt headers; only a paid retry repopulates them, so
+        # a free/cached model can't inherit a prior call's settlement receipt.
+        self._last_raw_headers = None
+
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
         eff_timeout = timeout if timeout is not None else self._timeout
@@ -3135,6 +3306,7 @@ class AsyncSolanaLLMClient:
             self._session_total_usd += cost_usd
             self._last_call_cost = cost_usd
             self._capture_settlement(retry_response)
+            self._last_raw_headers = retry_response.headers
             result = retry_response.json()
             save_to_cache(endpoint, body, result, cost_usd=cost_usd, **self._billing_meta())
             self._log_transaction(endpoint, body, result, cost_usd)
@@ -3360,44 +3532,21 @@ class AsyncSolanaLLMClient:
     ) -> VideoResponse:
         """Generate a video clip (Solana payment). Async mirror of
         :meth:`SolanaLLMClient.video`."""
-        if image_url and real_face_asset_id:
-            raise ValueError(
-                "image_url and real_face_asset_id are mutually exclusive; pass at most one."
-            )
-        if last_frame_url and not image_url:
-            raise ValueError("last_frame_url requires image_url (seeds the FIRST frame).")
-        if last_frame_url and real_face_asset_id:
-            raise ValueError("last_frame_url and real_face_asset_id are mutually exclusive.")
-        if reference_image_urls:
-            if image_url or last_frame_url or real_face_asset_id:
-                raise ValueError(
-                    "reference_image_urls is mutually exclusive with image_url, "
-                    "last_frame_url, and real_face_asset_id."
-                )
-            if len(reference_image_urls) > 9:
-                raise ValueError("reference_image_urls accepts at most 9 images.")
-        if real_face_asset_id is not None and not real_face_asset_id.startswith("ta_"):
-            raise ValueError("real_face_asset_id must start with 'ta_'.")
-
-        body: Dict[str, Any] = {
-            "model": model or SolanaLLMClient.VIDEO_DEFAULT_MODEL,
-            "prompt": prompt,
-        }
-        for k, v in (
-            ("image_url", image_url),
-            ("last_frame_url", last_frame_url),
-            ("reference_image_urls", reference_image_urls),
-            ("real_face_asset_id", real_face_asset_id),
-            ("duration_seconds", duration_seconds),
-            ("aspect_ratio", aspect_ratio),
-            ("resolution", resolution),
-            ("generate_audio", generate_audio),
-            ("seed", seed),
-            ("watermark", watermark),
-            ("return_last_frame", return_last_frame),
-        ):
-            if v is not None:
-                body[k] = v
+        body = SolanaLLMClient._build_video_body(
+            prompt,
+            model=model,
+            image_url=image_url,
+            last_frame_url=last_frame_url,
+            reference_image_urls=reference_image_urls,
+            real_face_asset_id=real_face_asset_id,
+            duration_seconds=duration_seconds,
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+            generate_audio=generate_audio,
+            seed=seed,
+            watermark=watermark,
+            return_last_frame=return_last_frame,
+        )
 
         data = await self._request_image_with_payment(
             "/v1/videos/generations",
@@ -3464,6 +3613,7 @@ class AsyncSolanaLLMClient:
         if lyrics and lyrics.strip():
             body["lyrics"] = lyrics.strip()
         data = await self._request_with_payment_raw("/v1/audio/generations", body, timeout=timeout)
+        self._attach_receipt(data)
         return MusicResponse(**data)
 
     async def speech(
@@ -3488,6 +3638,7 @@ class AsyncSolanaLLMClient:
         if speed is not None:
             body["speed"] = speed
         data = await self._request_with_payment_raw("/v1/audio/speech", body, timeout=timeout)
+        self._attach_receipt(data)
         return SpeechResponse(**data)
 
     async def sound_effect(
@@ -3514,12 +3665,15 @@ class AsyncSolanaLLMClient:
         data = await self._request_with_payment_raw(
             "/v1/audio/sound-effects", body, timeout=timeout
         )
+        self._attach_receipt(data)
         return SpeechResponse(**data)
 
     async def list_voices(self) -> List[Dict[str, Any]]:
         """List available speech voices (free)."""
         url = f"{self._api_url}/v1/audio/voices"
-        resp = await self._client.get(url, headers={"User-Agent": _get_user_agent()})
+        resp = await self._client.get(
+            url, headers={"User-Agent": _get_user_agent()}, timeout=DEFAULT_FAST_TIMEOUT
+        )
         if resp.status_code != 200:
             try:
                 error_body = resp.json()
@@ -3531,7 +3685,8 @@ class AsyncSolanaLLMClient:
                 sanitize_error_response(error_body),
             )
         data = resp.json()
-        return data.get("voices", data) if isinstance(data, dict) else data
+        # Gateway wraps the voice list under "data" (mirrors SpeechClient.list_voices).
+        return data.get("data", []) if isinstance(data, dict) else data
 
     async def portrait_enroll(self, name: str, image_url: str) -> PortraitEnrollment:
         """Enroll a Virtual Portrait ($0.01 USDC). Returns a ``ta_`` asset id."""
@@ -3548,9 +3703,11 @@ class AsyncSolanaLLMClient:
 
     async def list_portraits(self, wallet_address: Optional[str] = None) -> PortraitList:
         """List Virtual Portraits enrolled by a wallet (free, rate-limited)."""
-        addr = wallet_address or self.get_wallet_address()
+        addr = _safe_path_segment(wallet_address or self.get_wallet_address(), "wallet_address")
         url = f"{self._api_url}/v1/wallet/{addr}/portraits"
-        resp = await self._client.get(url, headers={"User-Agent": _get_user_agent()})
+        resp = await self._client.get(
+            url, headers={"User-Agent": _get_user_agent()}, timeout=DEFAULT_FAST_TIMEOUT
+        )
         if resp.status_code != 200:
             try:
                 error_body = resp.json()
@@ -3567,6 +3724,8 @@ class AsyncSolanaLLMClient:
             raise ValueError("name is required (1-64 chars)")
         if len(name) > 64:
             raise ValueError(f"name must be 64 chars or fewer (got {len(name)})")
+        if group_id is not None and not _GROUP_ID_RE.match(group_id):
+            raise ValueError("group_id must look like 'legacy_rf_<digits>'")
         body: Dict[str, Any] = {"name": name}
         if group_id:
             body["groupId"] = group_id
@@ -3575,6 +3734,7 @@ class AsyncSolanaLLMClient:
             url,
             json=body,
             headers={"Content-Type": "application/json", "User-Agent": _get_user_agent()},
+            timeout=DEFAULT_FAST_TIMEOUT,
         )
         if resp.status_code != 200:
             try:
@@ -3588,11 +3748,14 @@ class AsyncSolanaLLMClient:
 
     async def realface_status(self, group_id: str) -> RealFaceStatus:
         """Poll a RealFace group's state (free, rate-limited)."""
-        if not group_id:
-            raise ValueError("group_id is required")
+        if not group_id or not _GROUP_ID_RE.match(group_id):
+            raise ValueError("group_id must look like 'legacy_rf_<digits>'")
         url = f"{self._api_url}/v1/realface/status"
         resp = await self._client.get(
-            url, params={"groupId": group_id}, headers={"User-Agent": _get_user_agent()}
+            url,
+            params={"groupId": group_id},
+            headers={"User-Agent": _get_user_agent()},
+            timeout=DEFAULT_FAST_TIMEOUT,
         )
         if resp.status_code != 200:
             try:
@@ -3638,8 +3801,8 @@ class AsyncSolanaLLMClient:
             raise ValueError(f"name must be 64 chars or fewer (got {len(name)})")
         if not image_url or not image_url.lower().startswith(("https://", "http://")):
             raise ValueError("image_url must be an http(s) URL")
-        if not group_id:
-            raise ValueError("group_id is required")
+        if not group_id or not _GROUP_ID_RE.match(group_id):
+            raise ValueError("group_id must look like 'legacy_rf_<digits>'")
         data = await self._request_with_payment_raw(
             "/v1/realface/enroll", {"name": name, "image_url": image_url, "group_id": group_id}
         )
@@ -3647,9 +3810,11 @@ class AsyncSolanaLLMClient:
 
     async def list_realfaces(self, wallet_address: Optional[str] = None) -> RealFaceList:
         """List RealFace assets enrolled by a wallet (free, rate-limited)."""
-        addr = wallet_address or self.get_wallet_address()
+        addr = _safe_path_segment(wallet_address or self.get_wallet_address(), "wallet_address")
         url = f"{self._api_url}/v1/wallet/{addr}/realfaces"
-        resp = await self._client.get(url, headers={"User-Agent": _get_user_agent()})
+        resp = await self._client.get(
+            url, headers={"User-Agent": _get_user_agent()}, timeout=DEFAULT_FAST_TIMEOUT
+        )
         if resp.status_code != 200:
             try:
                 error_body = resp.json()
@@ -3662,21 +3827,23 @@ class AsyncSolanaLLMClient:
 
     async def price(
         self,
-        category: str,
+        category: Category,
         symbol: str,
         *,
-        market: Optional[str] = None,
-        session: Optional[str] = None,
+        market: Optional[Market] = None,
+        session: Optional[Session] = None,
     ) -> PricePoint:
         """Fetch a realtime Pyth price quote (Solana payment for paid categories)."""
         endpoint = SolanaLLMClient._price_category_path(category, market, "price", symbol)
         params: Dict[str, Any] = {}
         if session is not None:
             params["session"] = session
-        data = await self._get_with_payment_raw(endpoint, params=params or None)
+        data = await self._get_with_payment_raw(
+            endpoint, params=params or None, timeout=DEFAULT_FAST_TIMEOUT
+        )
         return PricePoint(
             symbol=data.get("symbol", symbol.upper()),
-            price=data["price"],
+            price=data.get("price"),
             publish_time=data.get("publishTime"),
             confidence=data.get("confidence"),
             feed_id=data.get("feedId"),
@@ -3689,21 +3856,23 @@ class AsyncSolanaLLMClient:
 
     async def price_history(
         self,
-        category: str,
+        category: Category,
         symbol: str,
         *,
-        resolution: str = "D",
+        resolution: Resolution = "D",
         from_ts: int,
         to_ts: int,
-        market: Optional[str] = None,
-        session: Optional[str] = None,
+        market: Optional[Market] = None,
+        session: Optional[Session] = None,
     ) -> PriceHistoryResponse:
         """Fetch OHLC bars between two Unix timestamps (seconds)."""
         endpoint = SolanaLLMClient._price_category_path(category, market, "history", symbol)
         params: Dict[str, Any] = {"resolution": resolution, "from": from_ts, "to": to_ts}
         if session is not None:
             params["session"] = session
-        data = await self._get_with_payment_raw(endpoint, params=params)
+        data = await self._get_with_payment_raw(
+            endpoint, params=params, timeout=DEFAULT_FAST_TIMEOUT
+        )
         return PriceHistoryResponse(
             symbol=data.get("symbol", symbol.upper()),
             resolution=data.get("resolution", resolution),
@@ -3713,18 +3882,20 @@ class AsyncSolanaLLMClient:
 
     async def list_symbols(
         self,
-        category: str,
+        category: Category,
         *,
         q: Optional[str] = None,
         limit: int = 100,
-        market: Optional[str] = None,
+        market: Optional[Market] = None,
     ) -> SymbolListResponse:
         """List available symbols in a Pyth category (free discovery)."""
         endpoint = SolanaLLMClient._price_category_path(category, market, "list", None)
         params: Dict[str, Any] = {"limit": limit}
         if q:
             params["q"] = q
-        data = await self._get_with_payment_raw(endpoint, params=params)
+        data = await self._get_with_payment_raw(
+            endpoint, params=params, timeout=DEFAULT_FAST_TIMEOUT
+        )
         if isinstance(data, list):
             return SymbolListResponse(symbols=data, count=len(data))
         return SymbolListResponse(
@@ -3742,32 +3913,28 @@ class AsyncSolanaLLMClient:
         id: Union[str, int] = 1,
     ) -> RpcResponse:
         """Make a single JSON-RPC 2.0 call (Solana payment, flat $0.002)."""
+        _safe_path_segment(network, "network")
         body: Dict[str, Any] = {"jsonrpc": "2.0", "id": id, "method": method}
         if params is not None:
             body["params"] = params
         data = await self._request_with_payment_raw(f"/v1/rpc/{network}", body)
-        if not isinstance(data, dict):
-            data = {"result": data}
-        return RpcResponse(**data, network=network)
+        return SolanaLLMClient._rpc_response(data, self._last_raw_headers, network)
 
     async def rpc_batch(self, network: str, requests: List[Dict[str, Any]]) -> List[RpcResponse]:
         """Make a JSON-RPC 2.0 batch call (Solana payment, $0.002 x N)."""
         if not requests:
             raise ValueError("batch requires at least one request")
+        _safe_path_segment(network, "network")
         body: List[Dict[str, Any]] = []
         for i, req in enumerate(requests):
             if "method" not in req:
                 raise ValueError(f"batch request {i} is missing 'method'")
             body.append({"jsonrpc": "2.0", "id": i + 1, **req})
         data = await self._request_with_payment_raw(f"/v1/rpc/{network}", body)  # type: ignore[arg-type]
+        headers = self._last_raw_headers
         if not isinstance(data, list):
             data = [data]
-        out: List[RpcResponse] = []
-        for item in data:
-            if not isinstance(item, dict):
-                item = {"result": item}
-            out.append(RpcResponse(**item, network=network))
-        return out
+        return [SolanaLLMClient._rpc_response(item, headers, network) for item in data]
 
     async def _request_image_with_payment(
         self,
@@ -3908,18 +4075,20 @@ class AsyncSolanaLLMClient:
                 # Base VideoClient.
                 if resigns_left > 0:
                     resigns_left -= 1
-                    challenge = await self._client.get(
-                        poll_url,
-                        headers={"User-Agent": _get_user_agent()},
-                        timeout=eff_timeout,
-                    )
-                    if challenge.status_code == 402:
-                        try:
+                    try:
+                        challenge = await self._client.get(
+                            poll_url,
+                            headers={"User-Agent": _get_user_agent()},
+                            timeout=eff_timeout,
+                        )
+                        if challenge.status_code == 402:
                             resign_headers, _ = await self._sign_payment_from_response(challenge)
                             poll_headers["PAYMENT-SIGNATURE"] = resign_headers["PAYMENT-SIGNATURE"]
                             continue
-                        except PaymentError:
-                            pass
+                    except (PaymentError, httpx.HTTPError):
+                        # Challenge GET or re-sign failed — surface the gateway's
+                        # real 402 reason, not a network/signing error.
+                        pass
                 raise build_payment_rejected_error(poll_resp)
 
             if last_status == "failed":
