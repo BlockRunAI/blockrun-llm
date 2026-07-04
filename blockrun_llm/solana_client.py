@@ -30,6 +30,19 @@ from .types import (
     ChatCompletionChunk,
     ChatResponse,
     ImageResponse,
+    VideoResponse,
+    MusicResponse,
+    SpeechResponse,
+    PortraitEnrollment,
+    PortraitList,
+    RealFaceInit,
+    RealFaceStatus,
+    RealFaceEnrollment,
+    RealFaceList,
+    PricePoint,
+    PriceHistoryResponse,
+    SymbolListResponse,
+    RpcResponse,
     APIError,
     PaymentError,
     SearchResult,
@@ -324,6 +337,21 @@ class SolanaLLMClient:
     # spend. Budget is conservative — most upstreams finish in 1-3 min.
     IMAGE_POLL_INTERVAL_SECONDS = 5.0
     IMAGE_POLL_BUDGET_SECONDS = 300.0
+
+    # Video generation slow-path polling. Video always comes back as
+    # 202 + ``poll_url`` and can run far past the 600s x402 authorization
+    # window, so the poll loop re-signs a fresh PAYMENT-SIGNATURE (same
+    # wallet) when a poll 402s mid-flight. Settlement still only happens on
+    # the first completed poll, so a poll-loop timeout = zero spend.
+    VIDEO_DEFAULT_MODEL = "xai/grok-imagine-video"
+    VIDEO_POLL_INTERVAL_SECONDS = 5.0
+    VIDEO_POLL_BUDGET_SECONDS = 900.0
+    MEDIA_POLL_MAX_RESIGNS = 3
+
+    # Media generation defaults (mirror the Base MusicClient/SpeechClient).
+    MUSIC_DEFAULT_MODEL = "minimax/music-2.5+"
+    SPEECH_DEFAULT_MODEL = "elevenlabs/flash-v2.5"
+    SOUNDFX_DEFAULT_MODEL = "elevenlabs/sound-effects"
 
     def __init__(
         self,
@@ -1304,9 +1332,23 @@ class SolanaLLMClient:
         return f"{base}{url}"
 
     def _request_image_with_payment(
-        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
+        self,
+        endpoint: str,
+        body: Dict[str, Any],
+        timeout: Optional[float] = None,
+        *,
+        poll_budget_seconds: Optional[float] = None,
+        poll_interval_seconds: Optional[float] = None,
+        max_resigns: int = 0,
+        label: str = "Image",
     ) -> Dict[str, Any]:
-        """Sign + submit + poll wrapper specific to image generation.
+        """Sign + submit + poll wrapper for async media generation.
+
+        Shared by :meth:`image` (5-min budget, no mid-poll re-signing needed)
+        and :meth:`video` (15-min budget, ``max_resigns`` re-signs to survive
+        the 600s x402 authorization window). ``poll_budget_seconds`` /
+        ``poll_interval_seconds`` default to the image constants; ``label``
+        only tunes error text.
 
         Why this exists instead of reusing ``_request_with_payment_raw``:
         the gateway falls back to an async ``202 + poll_url`` flow when a
@@ -1322,9 +1364,11 @@ class SolanaLLMClient:
         2. Sign the x402 SVM payload locally; resubmit with PAYMENT-SIGNATURE.
         3. Fast path: 200 with the finished image → settle inline.
         4. Slow path: 202 with ``{id, poll_url, status: queued}`` → loop
-           GET poll_url with the *same* PAYMENT-SIGNATURE until status =
-           ``completed``. Settlement happens on the first completed poll;
-           giving up before then costs the caller nothing.
+           GET poll_url with the PAYMENT-SIGNATURE until status = ``completed``.
+           If a poll 402s (settlement failed, e.g. stale blockhash), re-GET
+           poll_url for a fresh challenge and re-sign (up to ``max_resigns``).
+           Settlement happens on the first completed poll; giving up before
+           then costs the caller nothing.
 
         Returns the raw response JSON from the final completed response.
         """
@@ -1429,11 +1473,22 @@ class SolanaLLMClient:
             "PAYMENT-SIGNATURE": encoded_payment,
         }
 
-        deadline = _time.monotonic() + self.IMAGE_POLL_BUDGET_SECONDS
+        budget = (
+            poll_budget_seconds
+            if poll_budget_seconds is not None
+            else self.IMAGE_POLL_BUDGET_SECONDS
+        )
+        interval = (
+            poll_interval_seconds
+            if poll_interval_seconds is not None
+            else self.IMAGE_POLL_INTERVAL_SECONDS
+        )
+        deadline = _time.monotonic() + budget
         last_status = submit_data.get("status", "queued")
+        resigns_left = max_resigns
 
         while _time.monotonic() < deadline:
-            _time.sleep(self.IMAGE_POLL_INTERVAL_SECONDS)
+            _time.sleep(interval)
 
             poll_resp = self._client.get(poll_url, headers=poll_headers, timeout=eff_timeout)
             try:
@@ -1443,17 +1498,49 @@ class SolanaLLMClient:
             last_status = poll_data.get("status", last_status)
 
             if poll_resp.status_code == 402:
-                # Settlement failed on this poll — surface the gateway reason.
+                # Mid-poll 402 = settlement of the signed payment failed. For
+                # long jobs this is almost always a stale blockhash: the payment
+                # was signed at submit time, but the on-chain settlement only
+                # runs once the job completes, and by then the signed
+                # transaction's recent-blockhash can be expired — the facilitator
+                # reports ``transaction_simulation_failed``. The failing poll
+                # response carries NO fresh challenge, so re-GET poll_url WITHOUT
+                # the stale signature to solicit a fresh 402 (new blockhash),
+                # re-sign, and keep polling. Mirrors the Base VideoClient. A
+                # fresh signature that 402s again is a genuine payment problem.
+                if resigns_left > 0:
+                    resigns_left -= 1
+                    challenge = self._client.get(
+                        poll_url,
+                        headers={"User-Agent": _get_user_agent()},
+                        timeout=eff_timeout,
+                    )
+                    resign_header = self._extract_payment_header(challenge)
+                    if challenge.status_code == 402 and resign_header:
+                        resign_required = decode_payment_required_header(resign_header)
+                        resign_payload = self._sign_payment(resign_required)
+                        encoded_payment = encode_payment_signature_header(resign_payload)
+                        poll_headers["PAYMENT-SIGNATURE"] = encoded_payment
+                        continue
                 raise build_payment_rejected_error(poll_resp)
 
             if last_status == "failed":
                 raise APIError(
-                    f"Image generation failed upstream: {poll_data.get('error', 'unknown')}",
+                    f"{label} failed upstream: {poll_data.get('error', 'unknown')}",
                     poll_resp.status_code,
                     sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
                 )
 
-            if poll_resp.status_code == 200 and last_status == "completed":
+            # Terminal success is keyed on status, NOT the HTTP code — the
+            # gateway settles the moment a poll reports completed, so a
+            # completed-but-non-200 poll (which the caller was already charged
+            # for) must still be treated as success.
+            if last_status == "completed":
+                tx_hash = poll_resp.headers.get("x-payment-receipt") or poll_resp.headers.get(
+                    "X-Payment-Receipt"
+                )
+                if tx_hash and isinstance(poll_data, dict) and not poll_data.get("txHash"):
+                    poll_data["txHash"] = tx_hash
                 self._session_calls += 1
                 self._session_total_usd += cost_usd
                 self._last_call_cost = cost_usd
@@ -1473,20 +1560,21 @@ class SolanaLLMClient:
                 except Exception:
                     error_body = {"error": "Request failed"}
                 raise APIError(
-                    f"Image poll failed: HTTP {poll_resp.status_code}",
+                    f"{label} poll failed: HTTP {poll_resp.status_code}",
                     poll_resp.status_code,
                     sanitize_error_response(error_body),
                 )
 
         raise APIError(
             (
-                f"Image generation did not complete within "
-                f"{self.IMAGE_POLL_BUDGET_SECONDS:.0f}s "
+                f"{label} did not complete within {budget:.0f}s "
                 f"(last status: {last_status}). Settlement only happens on "
-                "completion, so no payment was taken."
+                "completion, so no payment was taken. The job stays claimable "
+                "for ~48h — re-poll poll_url with a fresh signature from the "
+                "same wallet to fetch (and settle) the finished result."
             ),
             504,
-            {"id": job_id, "last_status": last_status},
+            {"id": job_id, "last_status": last_status, "poll_url": poll_url},
         )
 
     def image(
@@ -1551,6 +1639,523 @@ class SolanaLLMClient:
 
         data = self._request_image_with_payment("/v1/images/image2image", body, timeout=timeout)
         return ImageResponse(**data)
+
+    # ------------------------------------------------------------------
+    # Video generation (Solana payment) — async 202 + poll, mid-poll re-sign
+    # ------------------------------------------------------------------
+
+    def video(
+        self,
+        prompt: str,
+        *,
+        model: Optional[str] = None,
+        image_url: Optional[str] = None,
+        last_frame_url: Optional[str] = None,
+        reference_image_urls: Optional[List[str]] = None,
+        real_face_asset_id: Optional[str] = None,
+        duration_seconds: Optional[int] = None,
+        aspect_ratio: Optional[str] = None,
+        resolution: Optional[str] = None,
+        generate_audio: Optional[bool] = None,
+        seed: Optional[int] = None,
+        watermark: Optional[bool] = None,
+        return_last_frame: Optional[bool] = None,
+        budget_seconds: Optional[float] = None,
+        timeout: Optional[float] = None,
+    ) -> VideoResponse:
+        """Generate a video clip from a text prompt (Solana payment).
+
+        Mirrors ``VideoClient.generate`` on Base: submits an async job and
+        polls until the clip is ready (typical 60-180s). Settlement only
+        happens on the first completed poll, so a poll-budget timeout takes
+        **no payment** and leaves the job claimable ~48h. Default model is
+        ``xai/grok-imagine-video``.
+        """
+        if image_url and real_face_asset_id:
+            raise ValueError(
+                "image_url and real_face_asset_id are mutually exclusive; pass at most one."
+            )
+        if last_frame_url and not image_url:
+            raise ValueError(
+                "last_frame_url requires image_url: image_url seeds the FIRST frame and "
+                "last_frame_url the FINAL frame — send both."
+            )
+        if last_frame_url and real_face_asset_id:
+            raise ValueError(
+                "last_frame_url and real_face_asset_id are mutually exclusive; "
+                "first-and-last-frame uses image_url + last_frame_url."
+            )
+        if reference_image_urls:
+            if image_url or last_frame_url or real_face_asset_id:
+                raise ValueError(
+                    "reference_image_urls is mutually exclusive with image_url, "
+                    "last_frame_url, and real_face_asset_id."
+                )
+            if len(reference_image_urls) > 9:
+                raise ValueError("reference_image_urls accepts at most 9 images.")
+        if real_face_asset_id is not None and not real_face_asset_id.startswith("ta_"):
+            raise ValueError(
+                "real_face_asset_id must start with 'ta_' "
+                "(a Virtual Portrait or RealFace asset id, e.g. 'ta_abc123xyz')"
+            )
+
+        body: Dict[str, Any] = {
+            "model": model or self.VIDEO_DEFAULT_MODEL,
+            "prompt": prompt,
+        }
+        if image_url:
+            body["image_url"] = image_url
+        if last_frame_url:
+            body["last_frame_url"] = last_frame_url
+        if reference_image_urls:
+            body["reference_image_urls"] = reference_image_urls
+        if real_face_asset_id:
+            body["real_face_asset_id"] = real_face_asset_id
+        if duration_seconds is not None:
+            body["duration_seconds"] = duration_seconds
+        if aspect_ratio is not None:
+            body["aspect_ratio"] = aspect_ratio
+        if resolution is not None:
+            body["resolution"] = resolution
+        if generate_audio is not None:
+            body["generate_audio"] = generate_audio
+        if seed is not None:
+            body["seed"] = seed
+        if watermark is not None:
+            body["watermark"] = watermark
+        if return_last_frame is not None:
+            body["return_last_frame"] = return_last_frame
+
+        data = self._request_image_with_payment(
+            "/v1/videos/generations",
+            body,
+            timeout=timeout,
+            poll_budget_seconds=(
+                budget_seconds if budget_seconds is not None else self.VIDEO_POLL_BUDGET_SECONDS
+            ),
+            poll_interval_seconds=self.VIDEO_POLL_INTERVAL_SECONDS,
+            max_resigns=self.MEDIA_POLL_MAX_RESIGNS,
+            label="Video generation",
+        )
+        return VideoResponse(**data)
+
+    def video_from_content(
+        self,
+        content: List[Dict[str, Any]],
+        *,
+        model: Optional[str] = None,
+        budget_seconds: Optional[float] = None,
+        timeout: Optional[float] = None,
+        **options: Any,
+    ) -> VideoResponse:
+        """Generate a video from a Seedance ``content[]`` body (Solana payment).
+
+        Targets ``POST /v1/videos`` (the multimodal ``content`` array shape).
+        Prefer :meth:`video` for structured kwargs; this exists for migrating
+        existing ``content[]`` payloads unchanged.
+        """
+        if not content:
+            raise ValueError("content must be a non-empty list of Seedance content items.")
+        body: Dict[str, Any] = {"content": content, **options}
+        if model is not None:
+            body["model"] = model
+        data = self._request_image_with_payment(
+            "/v1/videos",
+            body,
+            timeout=timeout,
+            poll_budget_seconds=(
+                budget_seconds if budget_seconds is not None else self.VIDEO_POLL_BUDGET_SECONDS
+            ),
+            poll_interval_seconds=self.VIDEO_POLL_INTERVAL_SECONDS,
+            max_resigns=self.MEDIA_POLL_MAX_RESIGNS,
+            label="Video generation",
+        )
+        return VideoResponse(**data)
+
+    # ------------------------------------------------------------------
+    # Music generation (Solana payment)
+    # ------------------------------------------------------------------
+
+    def music(
+        self,
+        prompt: str,
+        *,
+        model: Optional[str] = None,
+        instrumental: bool = True,
+        lyrics: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> MusicResponse:
+        """Generate a music track from a text prompt (Solana payment).
+
+        Mirrors ``MusicClient.generate`` on Base. Takes 1-3 minutes; the
+        returned CDN URL is valid ~24h. Default model ``minimax/music-2.5+``.
+        """
+        if instrumental and lyrics and lyrics.strip():
+            raise ValueError("Cannot specify lyrics when instrumental is True")
+        body: Dict[str, Any] = {
+            "model": model or self.MUSIC_DEFAULT_MODEL,
+            "prompt": prompt,
+            "instrumental": instrumental,
+        }
+        if lyrics and lyrics.strip():
+            body["lyrics"] = lyrics.strip()
+        data = self._request_with_payment_raw("/v1/audio/generations", body, timeout=timeout)
+        return MusicResponse(**data)
+
+    # ------------------------------------------------------------------
+    # Speech / TTS + sound effects (Solana payment)
+    # ------------------------------------------------------------------
+
+    def speech(
+        self,
+        input: str,
+        *,
+        model: Optional[str] = None,
+        voice: Optional[str] = None,
+        response_format: Optional[str] = None,
+        speed: Optional[float] = None,
+        timeout: Optional[float] = None,
+    ) -> SpeechResponse:
+        """Synthesize speech from text (Solana payment).
+
+        Mirrors ``SpeechClient.generate`` on Base. Synchronous; price scales
+        with character count. Default model ``elevenlabs/flash-v2.5``, default
+        voice ``sarah``.
+        """
+        body: Dict[str, Any] = {
+            "model": model or self.SPEECH_DEFAULT_MODEL,
+            "input": input,
+        }
+        if voice:
+            body["voice"] = voice
+        if response_format:
+            body["response_format"] = response_format
+        if speed is not None:
+            body["speed"] = speed
+        data = self._request_with_payment_raw("/v1/audio/speech", body, timeout=timeout)
+        return SpeechResponse(**data)
+
+    def sound_effect(
+        self,
+        text: str,
+        *,
+        model: Optional[str] = None,
+        duration_seconds: Optional[float] = None,
+        prompt_influence: Optional[float] = None,
+        response_format: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> SpeechResponse:
+        """Generate a cinematic sound effect from a text prompt (Solana
+        payment). Mirrors ``SpeechClient.sound_effect``. Flat $0.05, <=22s."""
+        body: Dict[str, Any] = {
+            "model": model or self.SOUNDFX_DEFAULT_MODEL,
+            "text": text,
+        }
+        if duration_seconds is not None:
+            body["duration_seconds"] = duration_seconds
+        if prompt_influence is not None:
+            body["prompt_influence"] = prompt_influence
+        if response_format:
+            body["response_format"] = response_format
+        data = self._request_with_payment_raw("/v1/audio/sound-effects", body, timeout=timeout)
+        return SpeechResponse(**data)
+
+    def list_voices(self) -> List[Dict[str, Any]]:
+        """List available speech voices (free)."""
+        url = f"{self._api_url}/v1/audio/voices"
+        resp = self._client.get(url, headers={"User-Agent": _get_user_agent()})
+        if resp.status_code != 200:
+            try:
+                error_body = resp.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"List voices failed: HTTP {resp.status_code}",
+                resp.status_code,
+                sanitize_error_response(error_body),
+            )
+        data = resp.json()
+        return data.get("voices", data) if isinstance(data, dict) else data
+
+    # ------------------------------------------------------------------
+    # Virtual Portrait enrollment (Solana payment)
+    # ------------------------------------------------------------------
+
+    def portrait_enroll(self, name: str, image_url: str) -> PortraitEnrollment:
+        """Enroll a Virtual Portrait ($0.01 USDC, one-time). Returns the
+        ``ta_xxxxxxxx`` asset id usable as ``real_face_asset_id`` in
+        :meth:`video`. Mirrors ``PortraitClient.enroll``."""
+        if not name or not name.strip():
+            raise ValueError("name is required (1-64 chars)")
+        if len(name) > 64:
+            raise ValueError(f"name must be 64 chars or fewer (got {len(name)})")
+        if not image_url or not image_url.lower().startswith(("https://", "http://")):
+            raise ValueError("image_url must be an http(s) URL")
+        body: Dict[str, Any] = {"name": name, "image_url": image_url}
+        data = self._request_with_payment_raw("/v1/portrait/enroll", body)
+        return PortraitEnrollment(**data)
+
+    def list_portraits(self, wallet_address: Optional[str] = None) -> PortraitList:
+        """List Virtual Portraits enrolled by a wallet (free, rate-limited)."""
+        addr = wallet_address or self.get_wallet_address()
+        url = f"{self._api_url}/v1/wallet/{addr}/portraits"
+        resp = self._client.get(url, headers={"User-Agent": _get_user_agent()})
+        if resp.status_code != 200:
+            try:
+                error_body = resp.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                "Portrait listing failed",
+                resp.status_code,
+                sanitize_error_response(error_body),
+            )
+        return PortraitList(**resp.json())
+
+    # ------------------------------------------------------------------
+    # RealFace enrollment (Solana payment)
+    # ------------------------------------------------------------------
+
+    def realface_init(self, name: str, group_id: Optional[str] = None) -> RealFaceInit:
+        """Start/refresh a RealFace enrollment (free, rate-limited). Returns
+        the ``group_id`` and an ``h5_link`` (render as a QR for the real
+        person's phone liveness check)."""
+        if not name or not name.strip():
+            raise ValueError("name is required (1-64 chars)")
+        if len(name) > 64:
+            raise ValueError(f"name must be 64 chars or fewer (got {len(name)})")
+        body: Dict[str, Any] = {"name": name}
+        if group_id:
+            body["groupId"] = group_id
+        url = f"{self._api_url}/v1/realface/init"
+        resp = self._client.post(
+            url,
+            json=body,
+            headers={"Content-Type": "application/json", "User-Agent": _get_user_agent()},
+        )
+        if resp.status_code != 200:
+            try:
+                error_body = resp.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                "RealFace init failed", resp.status_code, sanitize_error_response(error_body)
+            )
+        return RealFaceInit(**resp.json())
+
+    def realface_status(self, group_id: str) -> RealFaceStatus:
+        """Poll a RealFace group's state (free, rate-limited)."""
+        if not group_id:
+            raise ValueError("group_id is required")
+        url = f"{self._api_url}/v1/realface/status"
+        resp = self._client.get(
+            url, params={"groupId": group_id}, headers={"User-Agent": _get_user_agent()}
+        )
+        if resp.status_code != 200:
+            try:
+                error_body = resp.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                "RealFace status check failed",
+                resp.status_code,
+                sanitize_error_response(error_body),
+            )
+        return RealFaceStatus(**resp.json())
+
+    def realface_wait_for_active(
+        self,
+        group_id: str,
+        timeout_seconds: float = 180.0,
+        poll_interval_seconds: float = 4.0,
+    ) -> RealFaceStatus:
+        """Block until the RealFace group is active (person finished the phone
+        liveness check). Convenience wrapper around :meth:`realface_status`."""
+        import time as _time
+
+        if poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be positive")
+        deadline = _time.monotonic() + timeout_seconds
+        while True:
+            state = self.realface_status(group_id)
+            if state.ready_to_finalize:
+                return state
+            if _time.monotonic() + poll_interval_seconds >= deadline:
+                raise TimeoutError(
+                    f"RealFace group {group_id} not active after {timeout_seconds:.0f}s "
+                    f"(last status: {state.status!r})."
+                )
+            _time.sleep(poll_interval_seconds)
+
+    def realface_enroll(self, name: str, image_url: str, group_id: str) -> RealFaceEnrollment:
+        """Finalize a RealFace enrollment ($0.01 USDC). Requires the group to
+        be active (see :meth:`realface_wait_for_active`)."""
+        if not name or not name.strip():
+            raise ValueError("name is required (1-64 chars)")
+        if len(name) > 64:
+            raise ValueError(f"name must be 64 chars or fewer (got {len(name)})")
+        if not image_url or not image_url.lower().startswith(("https://", "http://")):
+            raise ValueError("image_url must be an http(s) URL")
+        if not group_id:
+            raise ValueError("group_id is required")
+        body: Dict[str, Any] = {"name": name, "image_url": image_url, "group_id": group_id}
+        data = self._request_with_payment_raw("/v1/realface/enroll", body)
+        return RealFaceEnrollment(**data)
+
+    def list_realfaces(self, wallet_address: Optional[str] = None) -> RealFaceList:
+        """List RealFace assets enrolled by a wallet (free, rate-limited)."""
+        addr = wallet_address or self.get_wallet_address()
+        url = f"{self._api_url}/v1/wallet/{addr}/realfaces"
+        resp = self._client.get(url, headers={"User-Agent": _get_user_agent()})
+        if resp.status_code != 200:
+            try:
+                error_body = resp.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                "RealFace listing failed",
+                resp.status_code,
+                sanitize_error_response(error_body),
+            )
+        return RealFaceList(**resp.json())
+
+    # ------------------------------------------------------------------
+    # Pyth market data (Solana payment for paid categories)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _price_category_path(
+        category: str, market: Optional[str], kind: str, symbol: Optional[str]
+    ) -> str:
+        if category == "stocks":
+            if not market:
+                raise ValueError("market is required for category='stocks' (e.g. market='us')")
+            base = f"/v1/stocks/{market}"
+        elif category in ("crypto", "fx", "commodity", "usstock"):
+            base = f"/v1/{category}"
+        else:
+            raise ValueError(f"Unknown category: {category}")
+        if symbol is None:
+            return f"{base}/{kind}"
+        return f"{base}/{kind}/{symbol.upper()}"
+
+    def price(
+        self,
+        category: str,
+        symbol: str,
+        *,
+        market: Optional[str] = None,
+        session: Optional[str] = None,
+    ) -> PricePoint:
+        """Fetch a realtime Pyth price quote (Solana payment for paid
+        categories). ``market`` is required for ``category='stocks'``."""
+        endpoint = self._price_category_path(category, market, "price", symbol)
+        params: Dict[str, Any] = {}
+        if session is not None:
+            params["session"] = session
+        data = self._get_with_payment_raw(endpoint, params=params or None)
+        return PricePoint(
+            symbol=data.get("symbol", symbol.upper()),
+            price=data["price"],
+            publish_time=data.get("publishTime"),
+            confidence=data.get("confidence"),
+            feed_id=data.get("feedId"),
+            **{
+                k: v
+                for k, v in data.items()
+                if k not in {"symbol", "price", "publishTime", "confidence", "feedId"}
+            },
+        )
+
+    def price_history(
+        self,
+        category: str,
+        symbol: str,
+        *,
+        resolution: str = "D",
+        from_ts: int,
+        to_ts: int,
+        market: Optional[str] = None,
+        session: Optional[str] = None,
+    ) -> PriceHistoryResponse:
+        """Fetch OHLC bars between two Unix timestamps (seconds)."""
+        endpoint = self._price_category_path(category, market, "history", symbol)
+        params: Dict[str, Any] = {"resolution": resolution, "from": from_ts, "to": to_ts}
+        if session is not None:
+            params["session"] = session
+        data = self._get_with_payment_raw(endpoint, params=params)
+        return PriceHistoryResponse(
+            symbol=data.get("symbol", symbol.upper()),
+            resolution=data.get("resolution", resolution),
+            bars=data.get("bars", []),
+            **{k: v for k, v in data.items() if k not in {"symbol", "resolution", "bars"}},
+        )
+
+    def list_symbols(
+        self,
+        category: str,
+        *,
+        q: Optional[str] = None,
+        limit: int = 100,
+        market: Optional[str] = None,
+    ) -> SymbolListResponse:
+        """List available symbols in a Pyth category (free discovery)."""
+        endpoint = self._price_category_path(category, market, "list", None)
+        params: Dict[str, Any] = {"limit": limit}
+        if q:
+            params["q"] = q
+        data = self._get_with_payment_raw(endpoint, params=params)
+        if isinstance(data, list):
+            return SymbolListResponse(symbols=data, count=len(data))
+        return SymbolListResponse(
+            symbols=data.get("symbols", data.get("feeds", [])),
+            count=data.get("count"),
+            **{k: v for k, v in data.items() if k not in {"symbols", "feeds", "count"}},
+        )
+
+    # ------------------------------------------------------------------
+    # Multi-chain JSON-RPC (Solana payment)
+    # ------------------------------------------------------------------
+
+    def rpc(
+        self,
+        network: str,
+        method: str,
+        params: Optional[List[Any]] = None,
+        *,
+        id: Union[str, int] = 1,
+    ) -> RpcResponse:
+        """Make a single JSON-RPC 2.0 call (Solana payment, flat $0.002).
+
+        Mirrors ``RPCClient.call``. ``network`` may be a chain name or alias
+        (``eth``, ``sol``, ``base`` …); the gateway resolves it.
+        """
+        body: Dict[str, Any] = {"jsonrpc": "2.0", "id": id, "method": method}
+        if params is not None:
+            body["params"] = params
+        data = self._request_with_payment_raw(f"/v1/rpc/{network}", body)
+        if not isinstance(data, dict):
+            data = {"result": data}
+        return RpcResponse(**data, network=network)
+
+    def rpc_batch(self, network: str, requests: List[Dict[str, Any]]) -> List[RpcResponse]:
+        """Make a JSON-RPC 2.0 batch call (Solana payment, $0.002 x N)."""
+        if not requests:
+            raise ValueError("batch requires at least one request")
+        body: List[Dict[str, Any]] = []
+        for i, req in enumerate(requests):
+            if "method" not in req:
+                raise ValueError(f"batch request {i} is missing 'method'")
+            body.append({"jsonrpc": "2.0", "id": i + 1, **req})
+        data = self._request_with_payment_raw(f"/v1/rpc/{network}", body)  # type: ignore[arg-type]
+        if not isinstance(data, list):
+            data = [data]
+        out: List[RpcResponse] = []
+        for item in data:
+            if not isinstance(item, dict):
+                item = {"result": item}
+            out.append(RpcResponse(**item, network=network))
+        return out
 
     def search(
         self,
@@ -2732,16 +3337,453 @@ class AsyncSolanaLLMClient:
         base = self._api_url[: -len("/api")] if self._api_url.endswith("/api") else self._api_url
         return f"{base}{url}"
 
-    async def _request_image_with_payment(
-        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
-    ) -> Dict[str, Any]:
-        """Async sign + submit + poll wrapper for image generation — the async
-        mirror of the sync :class:`SolanaLLMClient` helper.
+    # ── Video / music / speech / enrollment / market data (async) ──────────
 
-        Images fall back to an async ``202 + poll_url`` flow when a model
-        exceeds the 30s inline window, so the plain raw helper (which treats
-        202 as terminal) can't be reused — its job-stub JSON has no ``data``
-        and would fail ``ImageResponse`` validation.
+    async def video(
+        self,
+        prompt: str,
+        *,
+        model: Optional[str] = None,
+        image_url: Optional[str] = None,
+        last_frame_url: Optional[str] = None,
+        reference_image_urls: Optional[List[str]] = None,
+        real_face_asset_id: Optional[str] = None,
+        duration_seconds: Optional[int] = None,
+        aspect_ratio: Optional[str] = None,
+        resolution: Optional[str] = None,
+        generate_audio: Optional[bool] = None,
+        seed: Optional[int] = None,
+        watermark: Optional[bool] = None,
+        return_last_frame: Optional[bool] = None,
+        budget_seconds: Optional[float] = None,
+        timeout: Optional[float] = None,
+    ) -> VideoResponse:
+        """Generate a video clip (Solana payment). Async mirror of
+        :meth:`SolanaLLMClient.video`."""
+        if image_url and real_face_asset_id:
+            raise ValueError(
+                "image_url and real_face_asset_id are mutually exclusive; pass at most one."
+            )
+        if last_frame_url and not image_url:
+            raise ValueError("last_frame_url requires image_url (seeds the FIRST frame).")
+        if last_frame_url and real_face_asset_id:
+            raise ValueError("last_frame_url and real_face_asset_id are mutually exclusive.")
+        if reference_image_urls:
+            if image_url or last_frame_url or real_face_asset_id:
+                raise ValueError(
+                    "reference_image_urls is mutually exclusive with image_url, "
+                    "last_frame_url, and real_face_asset_id."
+                )
+            if len(reference_image_urls) > 9:
+                raise ValueError("reference_image_urls accepts at most 9 images.")
+        if real_face_asset_id is not None and not real_face_asset_id.startswith("ta_"):
+            raise ValueError("real_face_asset_id must start with 'ta_'.")
+
+        body: Dict[str, Any] = {
+            "model": model or SolanaLLMClient.VIDEO_DEFAULT_MODEL,
+            "prompt": prompt,
+        }
+        for k, v in (
+            ("image_url", image_url),
+            ("last_frame_url", last_frame_url),
+            ("reference_image_urls", reference_image_urls),
+            ("real_face_asset_id", real_face_asset_id),
+            ("duration_seconds", duration_seconds),
+            ("aspect_ratio", aspect_ratio),
+            ("resolution", resolution),
+            ("generate_audio", generate_audio),
+            ("seed", seed),
+            ("watermark", watermark),
+            ("return_last_frame", return_last_frame),
+        ):
+            if v is not None:
+                body[k] = v
+
+        data = await self._request_image_with_payment(
+            "/v1/videos/generations",
+            body,
+            timeout=timeout,
+            poll_budget_seconds=(
+                budget_seconds
+                if budget_seconds is not None
+                else SolanaLLMClient.VIDEO_POLL_BUDGET_SECONDS
+            ),
+            poll_interval_seconds=SolanaLLMClient.VIDEO_POLL_INTERVAL_SECONDS,
+            max_resigns=SolanaLLMClient.MEDIA_POLL_MAX_RESIGNS,
+            label="Video generation",
+        )
+        return VideoResponse(**data)
+
+    async def video_from_content(
+        self,
+        content: List[Dict[str, Any]],
+        *,
+        model: Optional[str] = None,
+        budget_seconds: Optional[float] = None,
+        timeout: Optional[float] = None,
+        **options: Any,
+    ) -> VideoResponse:
+        """Generate a video from a Seedance ``content[]`` body (Solana payment)."""
+        if not content:
+            raise ValueError("content must be a non-empty list of Seedance content items.")
+        body: Dict[str, Any] = {"content": content, **options}
+        if model is not None:
+            body["model"] = model
+        data = await self._request_image_with_payment(
+            "/v1/videos",
+            body,
+            timeout=timeout,
+            poll_budget_seconds=(
+                budget_seconds
+                if budget_seconds is not None
+                else SolanaLLMClient.VIDEO_POLL_BUDGET_SECONDS
+            ),
+            poll_interval_seconds=SolanaLLMClient.VIDEO_POLL_INTERVAL_SECONDS,
+            max_resigns=SolanaLLMClient.MEDIA_POLL_MAX_RESIGNS,
+            label="Video generation",
+        )
+        return VideoResponse(**data)
+
+    async def music(
+        self,
+        prompt: str,
+        *,
+        model: Optional[str] = None,
+        instrumental: bool = True,
+        lyrics: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> MusicResponse:
+        """Generate a music track (Solana payment)."""
+        if instrumental and lyrics and lyrics.strip():
+            raise ValueError("Cannot specify lyrics when instrumental is True")
+        body: Dict[str, Any] = {
+            "model": model or SolanaLLMClient.MUSIC_DEFAULT_MODEL,
+            "prompt": prompt,
+            "instrumental": instrumental,
+        }
+        if lyrics and lyrics.strip():
+            body["lyrics"] = lyrics.strip()
+        data = await self._request_with_payment_raw("/v1/audio/generations", body, timeout=timeout)
+        return MusicResponse(**data)
+
+    async def speech(
+        self,
+        input: str,
+        *,
+        model: Optional[str] = None,
+        voice: Optional[str] = None,
+        response_format: Optional[str] = None,
+        speed: Optional[float] = None,
+        timeout: Optional[float] = None,
+    ) -> SpeechResponse:
+        """Synthesize speech from text (Solana payment)."""
+        body: Dict[str, Any] = {
+            "model": model or SolanaLLMClient.SPEECH_DEFAULT_MODEL,
+            "input": input,
+        }
+        if voice:
+            body["voice"] = voice
+        if response_format:
+            body["response_format"] = response_format
+        if speed is not None:
+            body["speed"] = speed
+        data = await self._request_with_payment_raw("/v1/audio/speech", body, timeout=timeout)
+        return SpeechResponse(**data)
+
+    async def sound_effect(
+        self,
+        text: str,
+        *,
+        model: Optional[str] = None,
+        duration_seconds: Optional[float] = None,
+        prompt_influence: Optional[float] = None,
+        response_format: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> SpeechResponse:
+        """Generate a cinematic sound effect (Solana payment)."""
+        body: Dict[str, Any] = {
+            "model": model or SolanaLLMClient.SOUNDFX_DEFAULT_MODEL,
+            "text": text,
+        }
+        if duration_seconds is not None:
+            body["duration_seconds"] = duration_seconds
+        if prompt_influence is not None:
+            body["prompt_influence"] = prompt_influence
+        if response_format:
+            body["response_format"] = response_format
+        data = await self._request_with_payment_raw(
+            "/v1/audio/sound-effects", body, timeout=timeout
+        )
+        return SpeechResponse(**data)
+
+    async def list_voices(self) -> List[Dict[str, Any]]:
+        """List available speech voices (free)."""
+        url = f"{self._api_url}/v1/audio/voices"
+        resp = await self._client.get(url, headers={"User-Agent": _get_user_agent()})
+        if resp.status_code != 200:
+            try:
+                error_body = resp.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                f"List voices failed: HTTP {resp.status_code}",
+                resp.status_code,
+                sanitize_error_response(error_body),
+            )
+        data = resp.json()
+        return data.get("voices", data) if isinstance(data, dict) else data
+
+    async def portrait_enroll(self, name: str, image_url: str) -> PortraitEnrollment:
+        """Enroll a Virtual Portrait ($0.01 USDC). Returns a ``ta_`` asset id."""
+        if not name or not name.strip():
+            raise ValueError("name is required (1-64 chars)")
+        if len(name) > 64:
+            raise ValueError(f"name must be 64 chars or fewer (got {len(name)})")
+        if not image_url or not image_url.lower().startswith(("https://", "http://")):
+            raise ValueError("image_url must be an http(s) URL")
+        data = await self._request_with_payment_raw(
+            "/v1/portrait/enroll", {"name": name, "image_url": image_url}
+        )
+        return PortraitEnrollment(**data)
+
+    async def list_portraits(self, wallet_address: Optional[str] = None) -> PortraitList:
+        """List Virtual Portraits enrolled by a wallet (free, rate-limited)."""
+        addr = wallet_address or self.get_wallet_address()
+        url = f"{self._api_url}/v1/wallet/{addr}/portraits"
+        resp = await self._client.get(url, headers={"User-Agent": _get_user_agent()})
+        if resp.status_code != 200:
+            try:
+                error_body = resp.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                "Portrait listing failed", resp.status_code, sanitize_error_response(error_body)
+            )
+        return PortraitList(**resp.json())
+
+    async def realface_init(self, name: str, group_id: Optional[str] = None) -> RealFaceInit:
+        """Start/refresh a RealFace enrollment (free, rate-limited)."""
+        if not name or not name.strip():
+            raise ValueError("name is required (1-64 chars)")
+        if len(name) > 64:
+            raise ValueError(f"name must be 64 chars or fewer (got {len(name)})")
+        body: Dict[str, Any] = {"name": name}
+        if group_id:
+            body["groupId"] = group_id
+        url = f"{self._api_url}/v1/realface/init"
+        resp = await self._client.post(
+            url,
+            json=body,
+            headers={"Content-Type": "application/json", "User-Agent": _get_user_agent()},
+        )
+        if resp.status_code != 200:
+            try:
+                error_body = resp.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                "RealFace init failed", resp.status_code, sanitize_error_response(error_body)
+            )
+        return RealFaceInit(**resp.json())
+
+    async def realface_status(self, group_id: str) -> RealFaceStatus:
+        """Poll a RealFace group's state (free, rate-limited)."""
+        if not group_id:
+            raise ValueError("group_id is required")
+        url = f"{self._api_url}/v1/realface/status"
+        resp = await self._client.get(
+            url, params={"groupId": group_id}, headers={"User-Agent": _get_user_agent()}
+        )
+        if resp.status_code != 200:
+            try:
+                error_body = resp.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                "RealFace status check failed",
+                resp.status_code,
+                sanitize_error_response(error_body),
+            )
+        return RealFaceStatus(**resp.json())
+
+    async def realface_wait_for_active(
+        self,
+        group_id: str,
+        timeout_seconds: float = 180.0,
+        poll_interval_seconds: float = 4.0,
+    ) -> RealFaceStatus:
+        """Block until the RealFace group is active (person finished the phone
+        liveness check)."""
+        import time as _time
+
+        if poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be positive")
+        deadline = _time.monotonic() + timeout_seconds
+        while True:
+            state = await self.realface_status(group_id)
+            if state.ready_to_finalize:
+                return state
+            if _time.monotonic() + poll_interval_seconds >= deadline:
+                raise TimeoutError(
+                    f"RealFace group {group_id} not active after {timeout_seconds:.0f}s "
+                    f"(last status: {state.status!r})."
+                )
+            await asyncio.sleep(poll_interval_seconds)
+
+    async def realface_enroll(self, name: str, image_url: str, group_id: str) -> RealFaceEnrollment:
+        """Finalize a RealFace enrollment ($0.01 USDC)."""
+        if not name or not name.strip():
+            raise ValueError("name is required (1-64 chars)")
+        if len(name) > 64:
+            raise ValueError(f"name must be 64 chars or fewer (got {len(name)})")
+        if not image_url or not image_url.lower().startswith(("https://", "http://")):
+            raise ValueError("image_url must be an http(s) URL")
+        if not group_id:
+            raise ValueError("group_id is required")
+        data = await self._request_with_payment_raw(
+            "/v1/realface/enroll", {"name": name, "image_url": image_url, "group_id": group_id}
+        )
+        return RealFaceEnrollment(**data)
+
+    async def list_realfaces(self, wallet_address: Optional[str] = None) -> RealFaceList:
+        """List RealFace assets enrolled by a wallet (free, rate-limited)."""
+        addr = wallet_address or self.get_wallet_address()
+        url = f"{self._api_url}/v1/wallet/{addr}/realfaces"
+        resp = await self._client.get(url, headers={"User-Agent": _get_user_agent()})
+        if resp.status_code != 200:
+            try:
+                error_body = resp.json()
+            except Exception:
+                error_body = {"error": "Request failed"}
+            raise APIError(
+                "RealFace listing failed", resp.status_code, sanitize_error_response(error_body)
+            )
+        return RealFaceList(**resp.json())
+
+    async def price(
+        self,
+        category: str,
+        symbol: str,
+        *,
+        market: Optional[str] = None,
+        session: Optional[str] = None,
+    ) -> PricePoint:
+        """Fetch a realtime Pyth price quote (Solana payment for paid categories)."""
+        endpoint = SolanaLLMClient._price_category_path(category, market, "price", symbol)
+        params: Dict[str, Any] = {}
+        if session is not None:
+            params["session"] = session
+        data = await self._get_with_payment_raw(endpoint, params=params or None)
+        return PricePoint(
+            symbol=data.get("symbol", symbol.upper()),
+            price=data["price"],
+            publish_time=data.get("publishTime"),
+            confidence=data.get("confidence"),
+            feed_id=data.get("feedId"),
+            **{
+                k: v
+                for k, v in data.items()
+                if k not in {"symbol", "price", "publishTime", "confidence", "feedId"}
+            },
+        )
+
+    async def price_history(
+        self,
+        category: str,
+        symbol: str,
+        *,
+        resolution: str = "D",
+        from_ts: int,
+        to_ts: int,
+        market: Optional[str] = None,
+        session: Optional[str] = None,
+    ) -> PriceHistoryResponse:
+        """Fetch OHLC bars between two Unix timestamps (seconds)."""
+        endpoint = SolanaLLMClient._price_category_path(category, market, "history", symbol)
+        params: Dict[str, Any] = {"resolution": resolution, "from": from_ts, "to": to_ts}
+        if session is not None:
+            params["session"] = session
+        data = await self._get_with_payment_raw(endpoint, params=params)
+        return PriceHistoryResponse(
+            symbol=data.get("symbol", symbol.upper()),
+            resolution=data.get("resolution", resolution),
+            bars=data.get("bars", []),
+            **{k: v for k, v in data.items() if k not in {"symbol", "resolution", "bars"}},
+        )
+
+    async def list_symbols(
+        self,
+        category: str,
+        *,
+        q: Optional[str] = None,
+        limit: int = 100,
+        market: Optional[str] = None,
+    ) -> SymbolListResponse:
+        """List available symbols in a Pyth category (free discovery)."""
+        endpoint = SolanaLLMClient._price_category_path(category, market, "list", None)
+        params: Dict[str, Any] = {"limit": limit}
+        if q:
+            params["q"] = q
+        data = await self._get_with_payment_raw(endpoint, params=params)
+        if isinstance(data, list):
+            return SymbolListResponse(symbols=data, count=len(data))
+        return SymbolListResponse(
+            symbols=data.get("symbols", data.get("feeds", [])),
+            count=data.get("count"),
+            **{k: v for k, v in data.items() if k not in {"symbols", "feeds", "count"}},
+        )
+
+    async def rpc(
+        self,
+        network: str,
+        method: str,
+        params: Optional[List[Any]] = None,
+        *,
+        id: Union[str, int] = 1,
+    ) -> RpcResponse:
+        """Make a single JSON-RPC 2.0 call (Solana payment, flat $0.002)."""
+        body: Dict[str, Any] = {"jsonrpc": "2.0", "id": id, "method": method}
+        if params is not None:
+            body["params"] = params
+        data = await self._request_with_payment_raw(f"/v1/rpc/{network}", body)
+        if not isinstance(data, dict):
+            data = {"result": data}
+        return RpcResponse(**data, network=network)
+
+    async def rpc_batch(self, network: str, requests: List[Dict[str, Any]]) -> List[RpcResponse]:
+        """Make a JSON-RPC 2.0 batch call (Solana payment, $0.002 x N)."""
+        if not requests:
+            raise ValueError("batch requires at least one request")
+        body: List[Dict[str, Any]] = []
+        for i, req in enumerate(requests):
+            if "method" not in req:
+                raise ValueError(f"batch request {i} is missing 'method'")
+            body.append({"jsonrpc": "2.0", "id": i + 1, **req})
+        data = await self._request_with_payment_raw(f"/v1/rpc/{network}", body)  # type: ignore[arg-type]
+        if not isinstance(data, list):
+            data = [data]
+        out: List[RpcResponse] = []
+        for item in data:
+            if not isinstance(item, dict):
+                item = {"result": item}
+            out.append(RpcResponse(**item, network=network))
+        return out
+
+    async def _request_image_with_payment(
+        self,
+        endpoint: str,
+        body: Dict[str, Any],
+        timeout: Optional[float] = None,
+        *,
+        poll_budget_seconds: Optional[float] = None,
+        poll_interval_seconds: Optional[float] = None,
+        max_resigns: int = 0,
+        label: str = "Image",
+    ) -> Dict[str, Any]:
+        """Async sign + submit + poll wrapper for async media generation — the
+        async mirror of the sync :class:`SolanaLLMClient` helper. Shared by
+        :meth:`image` and :meth:`video` (``max_resigns`` re-signs to survive
+        the 600s x402 authorization window on long video polls).
         """
         import time as _time
 
@@ -2831,11 +3873,22 @@ class AsyncSolanaLLMClient:
             "PAYMENT-SIGNATURE": encoded_payment,
         }
 
-        deadline = _time.monotonic() + SolanaLLMClient.IMAGE_POLL_BUDGET_SECONDS
+        budget = (
+            poll_budget_seconds
+            if poll_budget_seconds is not None
+            else SolanaLLMClient.IMAGE_POLL_BUDGET_SECONDS
+        )
+        interval = (
+            poll_interval_seconds
+            if poll_interval_seconds is not None
+            else SolanaLLMClient.IMAGE_POLL_INTERVAL_SECONDS
+        )
+        deadline = _time.monotonic() + budget
         last_status = submit_data.get("status", "queued")
+        resigns_left = max_resigns
 
         while _time.monotonic() < deadline:
-            await asyncio.sleep(SolanaLLMClient.IMAGE_POLL_INTERVAL_SECONDS)
+            await asyncio.sleep(interval)
 
             poll_resp = await self._client.get(poll_url, headers=poll_headers, timeout=eff_timeout)
             try:
@@ -2845,16 +3898,45 @@ class AsyncSolanaLLMClient:
             last_status = poll_data.get("status", last_status)
 
             if poll_resp.status_code == 402:
+                # Mid-poll 402 = settlement failed, almost always a stale
+                # blockhash (the payment was signed at submit time but only
+                # settles when the job completes; by then the signed tx's
+                # recent-blockhash can be expired -> transaction_simulation_failed).
+                # The failing poll carries NO fresh challenge, so re-GET poll_url
+                # WITHOUT the stale signature to solicit a fresh 402 (new
+                # blockhash), re-sign, and keep polling. Mirrors the sync helper /
+                # Base VideoClient.
+                if resigns_left > 0:
+                    resigns_left -= 1
+                    challenge = await self._client.get(
+                        poll_url,
+                        headers={"User-Agent": _get_user_agent()},
+                        timeout=eff_timeout,
+                    )
+                    if challenge.status_code == 402:
+                        try:
+                            resign_headers, _ = await self._sign_payment_from_response(challenge)
+                            poll_headers["PAYMENT-SIGNATURE"] = resign_headers["PAYMENT-SIGNATURE"]
+                            continue
+                        except PaymentError:
+                            pass
                 raise build_payment_rejected_error(poll_resp)
 
             if last_status == "failed":
                 raise APIError(
-                    f"Image generation failed upstream: {poll_data.get('error', 'unknown')}",
+                    f"{label} failed upstream: {poll_data.get('error', 'unknown')}",
                     poll_resp.status_code,
                     sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
                 )
 
-            if poll_resp.status_code == 200 and last_status == "completed":
+            # Terminal success is keyed on status, NOT the HTTP code (see the
+            # sync helper) — a completed-but-non-200 poll is still success.
+            if last_status == "completed":
+                tx_hash = poll_resp.headers.get("x-payment-receipt") or poll_resp.headers.get(
+                    "X-Payment-Receipt"
+                )
+                if tx_hash and isinstance(poll_data, dict) and not poll_data.get("txHash"):
+                    poll_data["txHash"] = tx_hash
                 self._session_calls += 1
                 self._session_total_usd += cost_usd
                 self._last_call_cost = cost_usd
@@ -2872,20 +3954,21 @@ class AsyncSolanaLLMClient:
                 except Exception:
                     error_body = {"error": "Request failed"}
                 raise APIError(
-                    f"Image poll failed: HTTP {poll_resp.status_code}",
+                    f"{label} poll failed: HTTP {poll_resp.status_code}",
                     poll_resp.status_code,
                     sanitize_error_response(error_body),
                 )
 
         raise APIError(
             (
-                f"Image generation did not complete within "
-                f"{SolanaLLMClient.IMAGE_POLL_BUDGET_SECONDS:.0f}s "
+                f"{label} did not complete within {budget:.0f}s "
                 f"(last status: {last_status}). Settlement only happens on "
-                "completion, so no payment was taken."
+                "completion, so no payment was taken. The job stays claimable "
+                "for ~48h — re-poll poll_url with a fresh signature from the "
+                "same wallet to fetch (and settle) the finished result."
             ),
             504,
-            {"id": job_id, "last_status": last_status},
+            {"id": job_id, "last_status": last_status, "poll_url": poll_url},
         )
 
     # ── Prediction Markets (Powered by Predexon) ────────────────────────────
