@@ -16,8 +16,19 @@ from unittest import mock
 import httpx
 import pytest
 
-from blockrun_llm.solana_client import SolanaLLMClient, _assert_same_payment_terms
-from blockrun_llm.types import (
+# Solana x402 extras (x402[svm]) require Python >= 3.10; skip the whole module
+# on 3.9, where they aren't installed and the codec stubs below have nothing to
+# patch. Mirrors test_solana_timeout_routing.py.
+pytest.importorskip("x402")
+pytest.importorskip("solders")
+
+from blockrun_llm.solana_client import (  # noqa: E402
+    AsyncSolanaLLMClient,
+    SolanaLLMClient,
+    _assert_same_payment_terms,
+)
+from blockrun_llm.types import (  # noqa: E402
+    APIError,
     MusicResponse,
     PaymentError,
     SpeechResponse,
@@ -234,3 +245,161 @@ class TestPathSegmentGuard:
         client = _make_client(lambda r: httpx.Response(500))
         with pytest.raises(ValueError, match="network"):
             client.rpc("../evil", "eth_blockNumber")
+
+
+# ---------------------------------------------------------------------------
+# poll_url host pinning — the signed PAYMENT-SIGNATURE must not go off-host
+# ---------------------------------------------------------------------------
+
+
+class TestPollUrlHostPin:
+    def test_relative_poll_url_resolved_to_api_host(self) -> None:
+        client = _make_client(lambda r: httpx.Response(500))
+        assert (
+            client._absolute_url("/api/v1/videos/generations/JOB")
+            == "https://sol.blockrun.ai/api/v1/videos/generations/JOB"
+        )
+
+    def test_absolute_same_host_passes(self) -> None:
+        client = _make_client(lambda r: httpx.Response(500))
+        url = "https://sol.blockrun.ai/api/v1/videos/generations/JOB"
+        assert client._absolute_url(url) == url
+
+    def test_absolute_cross_host_rejected(self) -> None:
+        client = _make_client(lambda r: httpx.Response(500))
+        with pytest.raises(APIError, match="off-host"):
+            client._absolute_url("https://evil.example.com/api/v1/videos/generations/JOB")
+
+    def test_absolute_http_downgrade_rejected(self) -> None:
+        client = _make_client(lambda r: httpx.Response(500))
+        with pytest.raises(APIError, match="off-host"):
+            client._absolute_url("http://sol.blockrun.ai/api/v1/videos/generations/JOB")
+
+
+# ---------------------------------------------------------------------------
+# Mid-poll re-sign — end-to-end through the poll loop (sync + async parity)
+# ---------------------------------------------------------------------------
+
+
+def _make_async_client(handler: Any) -> AsyncSolanaLLMClient:
+    with (
+        mock.patch("blockrun_llm.solana_client.register_exact_svm_client"),
+        mock.patch("blockrun_llm.solana_client._create_signer"),
+    ):
+        client = AsyncSolanaLLMClient(
+            private_key="bogus_signer_is_patched",
+            api_url="https://sol.blockrun.ai/api",
+            rpc_url="http://test",
+        )
+
+    class _FakePayload:
+        class accepted:
+            amount = "1000000"
+            pay_to = "GsbwXfJraMomNxBcpR3DBNxnKwZbyq7YCoDdSLDwzxdV"
+
+    client._x402_client = mock.MagicMock()
+    # Async _sign_payment awaits create_payment_payload — must return a coroutine.
+    client._x402_client.create_payment_payload = mock.AsyncMock(return_value=_FakePayload())
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    client._address = "11111111111111111111111111111111"
+    return client
+
+
+def _resign_handler(signed_poll_codes: List[int]):
+    """Drive a video job through the mid-poll re-sign path.
+
+    probe → 402; signed POST → 202 + poll_url; each *signed* GET poll returns
+    the next code from ``signed_poll_codes`` (402 = settlement failed, 200 =
+    completed); an *unsigned* GET is the re-challenge and always hands back a
+    fresh 402 payment-required so the client re-signs.
+    """
+    pr = {"content-type": "application/json", "payment-required": "stub"}
+    completed = {
+        "status": "completed",
+        "created": 1,
+        "model": "xai/grok-imagine-video",
+        "data": [{"url": "https://cdn/v.mp4"}],
+    }
+    state = {"i": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        has_sig = "PAYMENT-SIGNATURE" in request.headers
+        if request.method == "POST":
+            if not has_sig:  # unsigned probe
+                return httpx.Response(402, headers=pr, json={"error": "Payment Required"})
+            return httpx.Response(  # signed submit
+                202,
+                json={
+                    "id": "JOB",
+                    "poll_url": "/api/v1/videos/generations/JOB",
+                    "status": "queued",
+                },
+            )
+        if not has_sig:  # unsigned re-challenge → trigger a re-sign
+            return httpx.Response(402, headers=pr, json={"error": "Payment Required"})
+        code = signed_poll_codes[min(state["i"], len(signed_poll_codes) - 1)]
+        state["i"] += 1
+        if code == 200:
+            return httpx.Response(200, json=completed, headers={"content-type": "application/json"})
+        return httpx.Response(402, headers=pr, json={"error": "settlement failed"})
+
+    return handler
+
+
+_HELPER_KW: Dict[str, Any] = {
+    "poll_budget_seconds": 5.0,
+    "poll_interval_seconds": 0.001,
+    "max_resigns": 2,
+    "label": "Video generation",
+}
+_VIDEO_BODY = {"model": "xai/grok-imagine-video", "prompt": "a cat"}
+
+
+class TestResignEndToEnd:
+    def test_sync_resign_same_terms_then_completes(self) -> None:
+        # poll 402 (stale blockhash) → re-challenge → re-sign (same terms, guard
+        # passes) → next poll 200 completed.
+        client = _make_client(_resign_handler([402, 200]))
+        data = client._request_image_with_payment(
+            "/v1/videos/generations", dict(_VIDEO_BODY), **_HELPER_KW
+        )
+        assert data["data"][0]["url"] == "https://cdn/v.mp4"
+
+    def test_sync_resign_reprice_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A guard rejection on the re-signed challenge must propagate, NOT be
+        # swallowed by the re-sign try/except and masked as a generic 402.
+        monkeypatch.setattr(
+            "blockrun_llm.solana_client._assert_same_payment_terms",
+            mock.Mock(side_effect=PaymentError("repriced")),
+        )
+        client = _make_client(_resign_handler([402, 200]))
+        with pytest.raises(PaymentError, match="repriced"):
+            client._request_image_with_payment(
+                "/v1/videos/generations", dict(_VIDEO_BODY), **_HELPER_KW
+            )
+
+    async def test_async_resign_same_terms_then_completes(self) -> None:
+        client = _make_async_client(_resign_handler([402, 200]))
+        try:
+            data = await client._request_image_with_payment(
+                "/v1/videos/generations", dict(_VIDEO_BODY), **_HELPER_KW
+            )
+            assert data["data"][0]["url"] == "https://cdn/v.mp4"
+        finally:
+            await client._client.aclose()
+
+    async def test_async_resign_reprice_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Async parity with the sync guard: a re-price is rejected and the
+        # PaymentError propagates out of the poll loop.
+        monkeypatch.setattr(
+            "blockrun_llm.solana_client._assert_same_payment_terms",
+            mock.Mock(side_effect=PaymentError("repriced")),
+        )
+        client = _make_async_client(_resign_handler([402, 200]))
+        try:
+            with pytest.raises(PaymentError, match="repriced"):
+                await client._request_image_with_payment(
+                    "/v1/videos/generations", dict(_VIDEO_BODY), **_HELPER_KW
+                )
+        finally:
+            await client._client.aclose()
