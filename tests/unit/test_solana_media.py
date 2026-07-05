@@ -16,12 +16,18 @@ from unittest import mock
 import httpx
 import pytest
 
-from blockrun_llm.solana_client import (
+# Solana x402 extras (x402[svm]) require Python >= 3.10; skip the whole module
+# on 3.9, where they aren't installed and the codec stubs below have nothing to
+# patch. Mirrors test_solana_timeout_routing.py.
+pytest.importorskip("x402")
+pytest.importorskip("solders")
+
+from blockrun_llm.solana_client import (  # noqa: E402
     AsyncSolanaLLMClient,
     SolanaLLMClient,
     _assert_same_payment_terms,
 )
-from blockrun_llm.types import (
+from blockrun_llm.types import (  # noqa: E402
     APIError,
     MusicResponse,
     PaymentError,
