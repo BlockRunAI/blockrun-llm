@@ -1391,9 +1391,22 @@ class SolanaLLMClient:
         configured ``api_url`` already includes the trailing ``/api`` so
         we strip it once to avoid ``/api/api/...``.
         """
-        if url.startswith("http://") or url.startswith("https://"):
-            return url
         base = self._api_url[: -len("/api")] if self._api_url.endswith("/api") else self._api_url
+        if url.startswith("http://") or url.startswith("https://"):
+            # The poll loop sends (and re-signs) the wallet's PAYMENT-SIGNATURE
+            # against this URL, so an absolute poll_url is pinned to the API
+            # host+scheme — a gateway response pointing it elsewhere would leak
+            # the signed payment off-host.
+            poll, api = httpx.URL(url), httpx.URL(base)
+            if (poll.scheme, poll.host) != (api.scheme, api.host):
+                raise APIError(
+                    "Refusing an absolute poll_url on a different host/scheme than "
+                    f"the API ({poll.scheme}://{poll.host} != {api.scheme}://{api.host}); "
+                    "the signed payment header must not be sent off-host.",
+                    502,
+                    {"poll_url": url},
+                )
+            return url
         return f"{base}{url}"
 
     def _request_image_with_payment(
@@ -3504,9 +3517,22 @@ class AsyncSolanaLLMClient:
     def _absolute_url(self, url: str) -> str:
         """Resolve a server-supplied relative ``poll_url`` against the API host
         (``api_url`` already includes the trailing ``/api`` — strip it once)."""
-        if url.startswith("http://") or url.startswith("https://"):
-            return url
         base = self._api_url[: -len("/api")] if self._api_url.endswith("/api") else self._api_url
+        if url.startswith("http://") or url.startswith("https://"):
+            # The poll loop sends (and re-signs) the wallet's PAYMENT-SIGNATURE
+            # against this URL, so an absolute poll_url is pinned to the API
+            # host+scheme — a gateway response pointing it elsewhere would leak
+            # the signed payment off-host.
+            poll, api = httpx.URL(url), httpx.URL(base)
+            if (poll.scheme, poll.host) != (api.scheme, api.host):
+                raise APIError(
+                    "Refusing an absolute poll_url on a different host/scheme than "
+                    f"the API ({poll.scheme}://{poll.host} != {api.scheme}://{api.host}); "
+                    "the signed payment header must not be sent off-host.",
+                    502,
+                    {"poll_url": url},
+                )
+            return url
         return f"{base}{url}"
 
     # ── Video / music / speech / enrollment / market data (async) ──────────
@@ -3986,8 +4012,23 @@ class AsyncSolanaLLMClient:
             return probe.json()
 
         # Step 2: sign x402 SVM payload (reuse the encoded signature on polls).
-        payment_headers, cost_usd = await self._sign_payment_from_response(probe)
-        encoded_payment = payment_headers["PAYMENT-SIGNATURE"]
+        # Inlined rather than _sign_payment_from_response so the original payment
+        # terms are captured for the mid-poll re-sign guard below.
+        probe_payment_header = SolanaLLMClient._extract_payment_header(probe)
+        if not probe_payment_header:
+            raise PaymentError("402 response but no payment requirements found")
+        payment_required = decode_payment_required_header(probe_payment_header)
+        payment_payload_obj = await self._sign_payment(payment_required)
+        encoded_payment = encode_payment_signature_header(payment_payload_obj)
+        cost_usd = float(payment_payload_obj.accepted.amount) / 1e6
+        # Terms this job is authorized to pay — any mid-poll re-sign must match.
+        orig_amount = payment_payload_obj.accepted.amount
+        orig_pay_to = payment_payload_obj.accepted.pay_to
+        payment_headers = {
+            "Content-Type": "application/json",
+            "User-Agent": _get_user_agent(),
+            "PAYMENT-SIGNATURE": encoded_payment,
+        }
 
         # Step 3: submit with signature.
         submit_resp = await self._client.post(
@@ -4075,20 +4116,32 @@ class AsyncSolanaLLMClient:
                 # Base VideoClient.
                 if resigns_left > 0:
                     resigns_left -= 1
+                    resign_payload = None
                     try:
                         challenge = await self._client.get(
                             poll_url,
                             headers={"User-Agent": _get_user_agent()},
                             timeout=eff_timeout,
                         )
-                        if challenge.status_code == 402:
-                            resign_headers, _ = await self._sign_payment_from_response(challenge)
-                            poll_headers["PAYMENT-SIGNATURE"] = resign_headers["PAYMENT-SIGNATURE"]
-                            continue
+                        resign_header = SolanaLLMClient._extract_payment_header(challenge)
+                        if challenge.status_code == 402 and resign_header:
+                            resign_required = decode_payment_required_header(resign_header)
+                            resign_payload = await self._sign_payment(resign_required)
                     except (PaymentError, httpx.HTTPError):
                         # Challenge GET or re-sign failed — surface the gateway's
                         # real 402 reason, not a network/signing error.
-                        pass
+                        resign_payload = None
+                    if resign_payload is not None:
+                        # Refuse a re-challenge that reprices or redirects the
+                        # payment vs. what this job originally authorized. This
+                        # PaymentError must propagate (NOT fall through to the
+                        # generic 402); the guard also pins the amount, so the
+                        # submit-time cost_usd stays correct for the ledger.
+                        _assert_same_payment_terms(resign_payload, orig_amount, orig_pay_to)
+                        poll_headers["PAYMENT-SIGNATURE"] = encode_payment_signature_header(
+                            resign_payload
+                        )
+                        continue
                 raise build_payment_rejected_error(poll_resp)
 
             if last_status == "failed":
