@@ -500,3 +500,57 @@ class TestProactiveResign:
             assert len(set(poll_sigs)) == 4, poll_sigs
         finally:
             await client._client.aclose()
+
+    # max_resigns == 0 (the image path) must NOT proactively re-sign, even with a
+    # 0s freshness window: every poll reuses the single submit-time signature so
+    # the image flow is provably untouched by the video-only fix.
+    _IMAGE_KW: Dict[str, Any] = {
+        "poll_budget_seconds": 5.0,
+        "poll_interval_seconds": 0.001,
+        "max_resigns": 0,
+        "label": "Image generation",
+    }
+
+    def test_sync_image_path_never_resigns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import itertools
+
+        counter = itertools.count()
+        monkeypatch.setattr(
+            "blockrun_llm.solana_client.encode_payment_signature_header",
+            lambda payload: f"sig-{next(counter)}",
+        )
+        monkeypatch.setattr(SolanaLLMClient, "MEDIA_RESIGN_FRESH_SECONDS", 0.0)
+
+        poll_sigs: List[str] = []
+        client = _make_client(_fresh_sig_handler(3, poll_sigs))
+        data = client._request_image_with_payment(
+            "/v1/images/generations", dict(_VIDEO_BODY), **self._IMAGE_KW
+        )
+        assert data["data"][0]["url"] == "https://cdn/v.mp4"
+        # 3 in-progress + 1 completed, every poll carrying the SAME submit-time
+        # signature — the proactive re-sign never fired for max_resigns == 0.
+        assert len(poll_sigs) == 4
+        assert len(set(poll_sigs)) == 1, poll_sigs
+
+    @pytest.mark.asyncio
+    async def test_async_image_path_never_resigns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import itertools
+
+        counter = itertools.count()
+        monkeypatch.setattr(
+            "blockrun_llm.solana_client.encode_payment_signature_header",
+            lambda payload: f"sig-{next(counter)}",
+        )
+        monkeypatch.setattr(SolanaLLMClient, "MEDIA_RESIGN_FRESH_SECONDS", 0.0)
+
+        poll_sigs: List[str] = []
+        client = _make_async_client(_fresh_sig_handler(3, poll_sigs))
+        try:
+            data = await client._request_image_with_payment(
+                "/v1/images/generations", dict(_VIDEO_BODY), **self._IMAGE_KW
+            )
+            assert data["data"][0]["url"] == "https://cdn/v.mp4"
+            assert len(poll_sigs) == 4
+            assert len(set(poll_sigs)) == 1, poll_sigs
+        finally:
+            await client._client.aclose()

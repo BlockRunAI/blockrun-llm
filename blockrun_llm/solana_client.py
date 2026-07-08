@@ -1579,8 +1579,8 @@ class SolanaLLMClient:
         while _time.monotonic() < deadline:
             _time.sleep(interval)
 
-            # Keep the settlement blockhash fresh (async media path only, gated on
-            # max_resigns). Re-sign the ORIGINAL challenge — same amount/pay_to,
+            # Keep the settlement blockhash fresh (poll-based media path only,
+            # gated on max_resigns). Re-sign the ORIGINAL challenge — same amount/pay_to,
             # only a freshly-fetched blockhash — so that whenever upstream flips to
             # "completed" the signature is <MEDIA_RESIGN_FRESH_SECONDS old and
             # settlement can't hit a stale-blockhash transaction_simulation_failed.
@@ -4130,8 +4130,9 @@ class AsyncSolanaLLMClient:
         while _time.monotonic() < deadline:
             await asyncio.sleep(interval)
 
-            # Keep the settlement blockhash fresh (async media path only) — mirror
-            # of the sync helper. Re-sign the ORIGINAL challenge (same amount/
+            # Keep the settlement blockhash fresh (poll-based media path only,
+            # gated on max_resigns) — mirror of the sync helper. Re-sign the
+            # ORIGINAL challenge (same amount/
             # pay_to, fresh blockhash) every MEDIA_RESIGN_FRESH_SECONDS so a slow /
             # flaky-status model (1080p Seedance) can't age the signature out
             # before the settling "completed" poll lands. Only completed settles.
