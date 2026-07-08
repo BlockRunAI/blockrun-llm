@@ -393,6 +393,13 @@ class SolanaLLMClient:
     # to refresh an expired blockhash, and every fresh signature is validated
     # against the original payment terms before use.
     MEDIA_POLL_MAX_RESIGNS = 2
+    # Proactively re-sign the settlement authorization every N seconds during the
+    # poll loop so its recent-blockhash never ages out. The gateway settles only
+    # when upstream flips to "completed", and slow/flaky-status models (1080p
+    # Seedance) can bounce completed<->in_progress for minutes — long enough that
+    # a signature made earlier goes stale (blockhash lifetime ~60-90s) before the
+    # settling poll lands. 25s keeps every signature comfortably fresh.
+    MEDIA_RESIGN_FRESH_SECONDS = 25.0
 
     # Media generation defaults (mirror the Base MusicClient/SpeechClient).
     MUSIC_DEFAULT_MODEL = "minimax/music-2.5+"
@@ -1567,9 +1574,33 @@ class SolanaLLMClient:
         deadline = _time.monotonic() + budget
         last_status = submit_data.get("status", "queued")
         resigns_left = max_resigns
+        last_resign_at = _time.monotonic()
 
         while _time.monotonic() < deadline:
             _time.sleep(interval)
+
+            # Keep the settlement blockhash fresh (async media path only, gated on
+            # max_resigns). Re-sign the ORIGINAL challenge — same amount/pay_to,
+            # only a freshly-fetched blockhash — so that whenever upstream flips to
+            # "completed" the signature is <MEDIA_RESIGN_FRESH_SECONDS old and
+            # settlement can't hit a stale-blockhash transaction_simulation_failed.
+            # Only the completed poll actually settles; in-progress polls ignore
+            # the header, so re-signing here never double-charges.
+            if (
+                max_resigns > 0
+                and _time.monotonic() - last_resign_at >= self.MEDIA_RESIGN_FRESH_SECONDS
+            ):
+                try:
+                    fresh_payload = self._sign_payment(payment_required)
+                    poll_headers["PAYMENT-SIGNATURE"] = encode_payment_signature_header(
+                        fresh_payload
+                    )
+                    last_resign_at = _time.monotonic()
+                except Exception:
+                    # Best-effort only: a failed proactive re-sign (RPC hiccup,
+                    # SolanaRpcException, etc.) must never abort the poll loop —
+                    # we simply keep the prior signature (pre-fix behaviour).
+                    pass
 
             poll_resp = self._client.get(poll_url, headers=poll_headers, timeout=eff_timeout)
             try:
@@ -4094,9 +4125,28 @@ class AsyncSolanaLLMClient:
         deadline = _time.monotonic() + budget
         last_status = submit_data.get("status", "queued")
         resigns_left = max_resigns
+        last_resign_at = _time.monotonic()
 
         while _time.monotonic() < deadline:
             await asyncio.sleep(interval)
+
+            # Keep the settlement blockhash fresh (async media path only) — mirror
+            # of the sync helper. Re-sign the ORIGINAL challenge (same amount/
+            # pay_to, fresh blockhash) every MEDIA_RESIGN_FRESH_SECONDS so a slow /
+            # flaky-status model (1080p Seedance) can't age the signature out
+            # before the settling "completed" poll lands. Only completed settles.
+            if (
+                max_resigns > 0
+                and _time.monotonic() - last_resign_at >= SolanaLLMClient.MEDIA_RESIGN_FRESH_SECONDS
+            ):
+                try:
+                    fresh_payload = await self._sign_payment(payment_required)
+                    poll_headers["PAYMENT-SIGNATURE"] = encode_payment_signature_header(
+                        fresh_payload
+                    )
+                    last_resign_at = _time.monotonic()
+                except Exception:
+                    pass
 
             poll_resp = await self._client.get(poll_url, headers=poll_headers, timeout=eff_timeout)
             try:
