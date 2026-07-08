@@ -403,3 +403,154 @@ class TestResignEndToEnd:
                 )
         finally:
             await client._client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Proactive per-poll re-sign — keeps the settlement blockhash fresh even when
+# NO poll ever 402s (the 1080p Seedance case: upstream status flaps
+# completed<->in_progress for minutes and would otherwise settle a stale
+# signature). Distinct from the on-402 re-sign guard tested above.
+# ---------------------------------------------------------------------------
+
+
+def _fresh_sig_handler(n_in_progress: int, poll_sigs: List[str]):
+    """Video job that NEVER 402s on a poll: n_in_progress in-progress polls,
+    then completed. Records the PAYMENT-SIGNATURE seen on every signed poll so a
+    test can assert the proactive re-sign refreshed it each time."""
+    completed = {
+        "status": "completed",
+        "created": 1,
+        "model": "xai/grok-imagine-video",
+        "data": [{"url": "https://cdn/v.mp4"}],
+    }
+    state = {"i": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            if "PAYMENT-SIGNATURE" not in request.headers:
+                return httpx.Response(
+                    402,
+                    headers={"content-type": "application/json", "payment-required": "stub"},
+                    json={"error": "Payment Required"},
+                )
+            return httpx.Response(
+                202,
+                json={
+                    "id": "JOB",
+                    "poll_url": "/api/v1/videos/generations/JOB",
+                    "status": "queued",
+                },
+            )
+        poll_sigs.append(request.headers.get("PAYMENT-SIGNATURE"))
+        state["i"] += 1
+        if state["i"] <= n_in_progress:
+            return httpx.Response(
+                202, json={"status": "in_progress"}, headers={"content-type": "application/json"}
+            )
+        return httpx.Response(200, json=completed, headers={"content-type": "application/json"})
+
+    return handler
+
+
+class TestProactiveResign:
+    def test_sync_refreshes_signature_every_poll(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import itertools
+
+        counter = itertools.count()
+        monkeypatch.setattr(
+            "blockrun_llm.solana_client.encode_payment_signature_header",
+            lambda payload: f"sig-{next(counter)}",
+        )
+        # Fire the proactive re-sign on every poll (0s freshness window).
+        monkeypatch.setattr(SolanaLLMClient, "MEDIA_RESIGN_FRESH_SECONDS", 0.0)
+
+        poll_sigs: List[str] = []
+        client = _make_client(_fresh_sig_handler(3, poll_sigs))
+        data = client._request_image_with_payment(
+            "/v1/videos/generations", dict(_VIDEO_BODY), **_HELPER_KW
+        )
+        assert data["data"][0]["url"] == "https://cdn/v.mp4"
+        # 3 in-progress + 1 completed, and every signed poll carried a DISTINCT
+        # (freshly re-signed) signature — the completed poll never reused the
+        # stale submit-time one.
+        assert len(poll_sigs) == 4
+        assert len(set(poll_sigs)) == 4, poll_sigs
+
+    @pytest.mark.asyncio
+    async def test_async_refreshes_signature_every_poll(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import itertools
+
+        counter = itertools.count()
+        monkeypatch.setattr(
+            "blockrun_llm.solana_client.encode_payment_signature_header",
+            lambda payload: f"sig-{next(counter)}",
+        )
+        monkeypatch.setattr(SolanaLLMClient, "MEDIA_RESIGN_FRESH_SECONDS", 0.0)
+
+        poll_sigs: List[str] = []
+        client = _make_async_client(_fresh_sig_handler(3, poll_sigs))
+        try:
+            data = await client._request_image_with_payment(
+                "/v1/videos/generations", dict(_VIDEO_BODY), **_HELPER_KW
+            )
+            assert data["data"][0]["url"] == "https://cdn/v.mp4"
+            assert len(poll_sigs) == 4
+            assert len(set(poll_sigs)) == 4, poll_sigs
+        finally:
+            await client._client.aclose()
+
+    # max_resigns == 0 (the image path) must NOT proactively re-sign, even with a
+    # 0s freshness window: every poll reuses the single submit-time signature so
+    # the image flow is provably untouched by the video-only fix.
+    _IMAGE_KW: Dict[str, Any] = {
+        "poll_budget_seconds": 5.0,
+        "poll_interval_seconds": 0.001,
+        "max_resigns": 0,
+        "label": "Image generation",
+    }
+
+    def test_sync_image_path_never_resigns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import itertools
+
+        counter = itertools.count()
+        monkeypatch.setattr(
+            "blockrun_llm.solana_client.encode_payment_signature_header",
+            lambda payload: f"sig-{next(counter)}",
+        )
+        monkeypatch.setattr(SolanaLLMClient, "MEDIA_RESIGN_FRESH_SECONDS", 0.0)
+
+        poll_sigs: List[str] = []
+        client = _make_client(_fresh_sig_handler(3, poll_sigs))
+        data = client._request_image_with_payment(
+            "/v1/images/generations", dict(_VIDEO_BODY), **self._IMAGE_KW
+        )
+        assert data["data"][0]["url"] == "https://cdn/v.mp4"
+        # 3 in-progress + 1 completed, every poll carrying the SAME submit-time
+        # signature — the proactive re-sign never fired for max_resigns == 0.
+        assert len(poll_sigs) == 4
+        assert len(set(poll_sigs)) == 1, poll_sigs
+
+    @pytest.mark.asyncio
+    async def test_async_image_path_never_resigns(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import itertools
+
+        counter = itertools.count()
+        monkeypatch.setattr(
+            "blockrun_llm.solana_client.encode_payment_signature_header",
+            lambda payload: f"sig-{next(counter)}",
+        )
+        monkeypatch.setattr(SolanaLLMClient, "MEDIA_RESIGN_FRESH_SECONDS", 0.0)
+
+        poll_sigs: List[str] = []
+        client = _make_async_client(_fresh_sig_handler(3, poll_sigs))
+        try:
+            data = await client._request_image_with_payment(
+                "/v1/images/generations", dict(_VIDEO_BODY), **self._IMAGE_KW
+            )
+            assert data["data"][0]["url"] == "https://cdn/v.mp4"
+            assert len(poll_sigs) == 4
+            assert len(set(poll_sigs)) == 1, poll_sigs
+        finally:
+            await client._client.aclose()
