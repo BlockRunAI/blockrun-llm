@@ -170,7 +170,7 @@ from .cache import (
 )
 from .tx_log import TransactionLogger, decode_settlement_header, format_row
 
-__version__ = "1.5.1"
+__version__ = "1.6.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
