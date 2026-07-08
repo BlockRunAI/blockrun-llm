@@ -23,6 +23,30 @@ BASE_SEPOLIA_CHAIN_ID = 84532
 USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 
 
+# BlockRun's x402 builder code — the ERC-8021 Schema 2 service code (`s`) that
+# tags every payment this SDK signs as BlockRun-originated for on-chain
+# attribution. See https://docs.cdp.coinbase.com/x402/core-concepts/builder-codes
+BLOCKRUN_SERVICE_CODE = "blockrun"
+
+
+def with_builder_code_service_code(
+    extensions: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Merge BlockRun's service code (``s``) into the payload's ``builder-code``
+    extension, preserving any app code (``a``) the server echoed back in its 402.
+
+    The CDP facilitator reads ``builder-code.info.s`` and encodes it into the
+    settlement calldata suffix — no CBOR/encoding happens client-side.
+    """
+    merged: Dict[str, Any] = dict(extensions or {})
+    existing = dict(merged.get("builder-code") or {})
+    info = dict(existing.get("info") or {})
+    info["s"] = [BLOCKRUN_SERVICE_CODE]
+    existing["info"] = info
+    merged["builder-code"] = existing
+    return merged
+
+
 def get_chain_config(network: str) -> tuple[int, str]:
     """
     Get chain ID and USDC contract address for a given network.
@@ -174,7 +198,7 @@ def create_payment_payload(
                 "nonce": nonce,
             },
         },
-        "extensions": extensions or {},
+        "extensions": with_builder_code_service_code(extensions),
     }
 
     # Encode as base64

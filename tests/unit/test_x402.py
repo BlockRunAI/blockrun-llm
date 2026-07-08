@@ -72,6 +72,31 @@ class TestCreatePaymentPayload:
         assert "validBefore" in auth
         assert "nonce" in auth
 
+    def test_payload_attaches_builder_code_service_code(self):
+        """Should tag every payment with the BlockRun service code (s)."""
+        payload = create_payment_payload(
+            account=TEST_ACCOUNT,
+            recipient=TEST_RECIPIENT,
+            amount="1000000",
+        )
+
+        decoded = json.loads(base64.b64decode(payload))
+        assert decoded["extensions"]["builder-code"]["info"]["s"] == ["blockrun"]
+
+    def test_payload_preserves_echoed_app_code(self):
+        """Should keep the server-echoed app code (a) when adding service code (s)."""
+        payload = create_payment_payload(
+            account=TEST_ACCOUNT,
+            recipient=TEST_RECIPIENT,
+            amount="1000000",
+            extensions={"builder-code": {"info": {"a": "blockrun"}}},
+        )
+
+        decoded = json.loads(base64.b64decode(payload))
+        info = decoded["extensions"]["builder-code"]["info"]
+        assert info["a"] == "blockrun"
+        assert info["s"] == ["blockrun"]
+
     def test_payload_includes_resource_info(self):
         """Should include resource information."""
         payload = create_payment_payload(
