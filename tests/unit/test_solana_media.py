@@ -557,7 +557,11 @@ class TestProactiveResign:
 
 
 _IMAGE_OK = {"created": 1, "model": "openai/gpt-image-2", "data": [{"url": "https://cdn/x.png"}]}
-_VIDEO_OK = {"created": 1, "model": "xai/grok-imagine-video", "data": [{"url": "https://cdn/x.mp4"}]}
+_VIDEO_OK = {
+    "created": 1,
+    "model": "xai/grok-imagine-video",
+    "data": [{"url": "https://cdn/x.mp4"}],
+}
 _DATA_URI = "data:image/png;base64,AA=="
 
 
