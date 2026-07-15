@@ -166,6 +166,32 @@ _UNRECOVERABLE_PAYMENT_PATTERNS = (
     "denied",  # payer denylisted
 )
 
+# The gateway's `invalidMessage` (x402 VerifyResponse) names the simulation-level
+# cause that `invalidReason` collapses into transaction_simulation_failed — which
+# is deliberately absent above because it usually IS recoverable. These messages
+# are the exception: the payer's USDC token account does not exist, so no fresh
+# nonce/probe/blockhash will ever make the payment pass. Without them a wallet
+# that can never pay burned all _MAX_PAYMENT_RETRIES + 1 attempts, every one of
+# which cost the gateway its own verify retries.
+#
+# NOTE the asymmetry with the gateway's list (blockrun-sol x402-solana.ts): it
+# ALSO fails fast on BlockhashNotFound, because retrying the SAME dead header is
+# futile there. Here the opposite holds — re-signing with a FRESH blockhash is
+# precisely what this retry does, and it fixes it — so blockhash messages must
+# stay OUT of this list.
+_UNRECOVERABLE_INVALID_MESSAGES = (
+    "invalidaccountdata",
+    "accountnotfound",
+    "couldnotfindaccount",
+)
+
+
+def _normalize_reason(reason: str) -> str:
+    """Lowercase and strip non-alphanumerics so one pattern matches every
+    spelling of a cause ("InvalidAccountData", "invalid account data",
+    "invalid_account_data"). Mirrors NORMALIZE in blockrun-sol x402-solana.ts."""
+    return re.sub(r"[^a-z0-9]", "", reason.lower())
+
 
 def _is_unrecoverable_payment_error(reason: str) -> bool:
     """True iff retrying with a brand-new payment cannot possibly succeed.
@@ -174,12 +200,15 @@ def _is_unrecoverable_payment_error(reason: str) -> bool:
     :func:`_is_permanent_payment_error` (which classifies re-signing the SAME
     authorization), a fresh nonce/probe/blockhash recovers replay, amount-
     mismatch, expiry and blockhash-window failures, so only truly terminal
-    conditions (no funds, bad key, denylisted) short-circuit the retry.
+    conditions (no funds, bad key, denylisted, no token account) short-circuit
+    the retry.
     """
     if not reason:
         return False
     low = reason.lower()
-    return any(p in low for p in _UNRECOVERABLE_PAYMENT_PATTERNS)
+    if any(p in low for p in _UNRECOVERABLE_PAYMENT_PATTERNS):
+        return True
+    return any(p in _normalize_reason(reason) for p in _UNRECOVERABLE_INVALID_MESSAGES)
 
 
 def _get_user_agent() -> str:

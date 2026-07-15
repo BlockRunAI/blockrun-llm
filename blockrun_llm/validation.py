@@ -289,7 +289,20 @@ def build_payment_rejected_error(response: Any) -> "PaymentError":
     raw_details = body.get("details")
     if isinstance(raw_details, str) and 0 < len(raw_details) < 256:
         sanitized["details"] = raw_details
+    # The x402 facilitator's `invalidMessage` — the simulation-level cause that
+    # the coarse `invalidReason` enum collapses away (an unfunded wallet and a
+    # stale blockhash both arrive as transaction_simulation_failed). Same
+    # provenance and safety rationale as `details` above: a facilitator error
+    # string, not upstream text, so it's safe to surface verbatim — bounded
+    # defensively all the same. Folded into the message because the retry
+    # classifiers in solana_client only ever see `str(exc)`.
+    raw_invalid_message = body.get("invalidMessage")
+    if isinstance(raw_invalid_message, str) and 0 < len(raw_invalid_message) < 256:
+        sanitized["invalidMessage"] = raw_invalid_message
     detail_part = sanitized.get("details") or sanitized.get("message") or ""
+    invalid_message = sanitized.get("invalidMessage")
+    if invalid_message:
+        detail_part = f"{detail_part} ({invalid_message})" if detail_part else invalid_message
     msg = (
         f"Payment rejected by gateway: {detail_part}"
         if detail_part
