@@ -2,6 +2,59 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.7.0 — 2026-07-15
+
+### Added
+- **`input_type` on video generation** (`VideoClient.generate`, `SolanaLLMClient.video`,
+  `AsyncSolanaLLMClient.video`). Declares the intended seed mode — `text` /
+  `image` / `first_last_frame` / `reference`. The gateway infers the mode from
+  the seed fields and rejects with 400 **before charging** when the declared
+  value disagrees, turning an expensive silent failure into a loud one: a
+  dropped `image_url` otherwise yields a text-to-video clip you still pay for.
+  Accepted on both chains.
+- **`quality` on Solana image generation + editing** (`SolanaLLMClient.image` /
+  `image_edit`, sync and async). `low` / `medium` / `high` / `auto` for
+  `openai/gpt-image-*`; `low` meaningfully cuts generation time.
+
+  **Solana only, by design.** The Base gateway defines no `quality` field and
+  strips unknown keys, so a value sent there would be silently dropped —
+  `ImageClient.generate`/`edit` therefore keep rejecting it, now with a hint
+  pointing at the Solana client.
+
+### Notes
+- Reference-to-video (`reference_videos` / `reference_audios`) is **not** exposed.
+  Both gateways gate it behind `R2V_ENABLED`, which is currently off, so every
+  call would return 503. It slots in once that flips.
+- Validation covers spelling only. Whether a declared mode matches the seed
+  fields, and which models accept `quality`, stay the gateway's call — it
+  answers both before billing, so a second copy here would only drift.
+
+## 1.6.1 — 2026-07-15
+
+### Fixed
+- Fail fast when the payer has no USDC token account (#23). Below this an
+  unfunded wallet burned all 5 payment retries, each costing the gateway 4
+  verify retries — 20 facilitator calls per doomed request.
+
+## 1.6.0 — 2026-07-08
+
+### Added
+- Attach the BlockRun builder-code service code to Base-chain x402 payments (#21).
+
+## 1.5.1 — 2026-07-08
+
+### Fixed
+- Keep Solana video settlement blockhash fresh via proactive re-sign (#22).
+  Seedance 2.0 jobs could run long enough to exhaust the older two-retry
+  settlement loop and surface `transaction_simulation_failed`.
+
+## 1.5.0 — 2026-07-06
+
+### Added
+- Solana media surface: video / music / speech / portrait / realface / price /
+  rpc (#16), plus the `rpc_batch` cache fix (#17), a `solana<0.40` pin (#18),
+  and media hardening (#19).
+
 ## 1.4.7 — 2026-06-26
 
 ### Added

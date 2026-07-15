@@ -554,3 +554,174 @@ class TestProactiveResign:
             assert len(set(poll_sigs)) == 1, poll_sigs
         finally:
             await client._client.aclose()
+
+
+_IMAGE_OK = {"created": 1, "model": "openai/gpt-image-2", "data": [{"url": "https://cdn/x.png"}]}
+_VIDEO_OK = {
+    "created": 1,
+    "model": "xai/grok-imagine-video",
+    "data": [{"url": "https://cdn/x.mp4"}],
+}
+_DATA_URI = "data:image/png;base64,AA=="
+
+
+class TestSolanaImageQuality:
+    """`quality` is a Solana-only latency/fidelity knob (openai/gpt-image-* on
+    the gateway). The Base gateway has no such field and zod would silently
+    strip it, which is why ImageClient deliberately rejects it — see
+    test_image_parameter_validation.test_generate_rejects_quality_parameter.
+    """
+
+    def test_image_forwards_quality(self) -> None:
+        import json
+
+        calls: List[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _IMAGE_OK))
+        client.image("a cat", model="openai/gpt-image-2", quality="low")
+        sent = json.loads(calls[-1].content)
+        assert sent["quality"] == "low"
+
+    def test_image_omits_quality_when_unset(self) -> None:
+        import json
+
+        calls: List[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _IMAGE_OK))
+        client.image("a cat")
+        assert "quality" not in json.loads(calls[-1].content)
+
+    def test_image_edit_forwards_quality(self) -> None:
+        import json
+
+        calls: List[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _IMAGE_OK))
+        client.image_edit("make it green", _DATA_URI, quality="high")
+        sent = json.loads(calls[-1].content)
+        assert sent["quality"] == "high"
+        assert calls[-1].url.path == "/api/v1/images/image2image"
+
+    @pytest.mark.parametrize("value", ["low", "medium", "high", "auto"])
+    def test_image_accepts_every_gateway_quality(self, value: str) -> None:
+        import json
+
+        calls: List[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _IMAGE_OK))
+        client.image("a cat", model="openai/gpt-image-2", quality=value)
+        assert json.loads(calls[-1].content)["quality"] == value
+
+    def test_image_rejects_unknown_quality_before_paying(self) -> None:
+        calls: List[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _IMAGE_OK))
+        with pytest.raises(ValueError, match="quality must be one of"):
+            client.image("a cat", model="openai/gpt-image-2", quality="hd")
+        assert calls == []  # rejected locally — no request, no payment
+
+    def test_image_edit_rejects_unknown_quality_before_paying(self) -> None:
+        calls: List[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _IMAGE_OK))
+        with pytest.raises(ValueError, match="quality must be one of"):
+            client.image_edit("make it green", _DATA_URI, quality="ultra")
+        assert calls == []
+
+
+class TestSolanaVideoInputType:
+    def test_video_forwards_input_type(self) -> None:
+        import json
+
+        calls: List[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _VIDEO_OK))
+        client.video(
+            "the flower blooms",
+            image_url="https://example.com/bud.jpg",
+            last_frame_url="https://example.com/bloom.jpg",
+            input_type="first_last_frame",
+        )
+        assert json.loads(calls[-1].content)["input_type"] == "first_last_frame"
+
+    def test_video_omits_input_type_when_unset(self) -> None:
+        import json
+
+        calls: List[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _VIDEO_OK))
+        client.video("a calm lake")
+        assert "input_type" not in json.loads(calls[-1].content)
+
+    def test_video_rejects_unknown_input_type_before_paying(self) -> None:
+        calls: List[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _VIDEO_OK))
+        with pytest.raises(ValueError, match="input_type must be one of"):
+            client.video("x", input_type="img")
+        assert calls == []
+
+
+class TestSharedVideoBodyBuilder:
+    """Sync and async video() share _build_video_body so they can't drift."""
+
+    def test_input_type_reaches_body(self) -> None:
+        body = SolanaLLMClient._build_video_body(
+            "x",
+            model=None,
+            image_url=None,
+            last_frame_url=None,
+            reference_image_urls=None,
+            real_face_asset_id=None,
+            duration_seconds=None,
+            aspect_ratio=None,
+            resolution=None,
+            generate_audio=None,
+            seed=None,
+            watermark=None,
+            return_last_frame=None,
+            input_type="text",
+        )
+        assert body["input_type"] == "text"
+
+
+class TestAsyncMediaParamParity:
+    """The async client duplicates the sync call shape, so it needs the same
+    body assertions. A signature check would pass even if the param were
+    accepted and then never forwarded — the regression worth catching.
+    """
+
+    @pytest.mark.asyncio
+    async def test_async_video_forwards_input_type(self) -> None:
+        import json
+
+        calls: List[httpx.Request] = []
+        client = _make_async_client(_paid_flow(calls, _VIDEO_OK))
+        await client.video("a calm lake", input_type="text")
+        assert json.loads(calls[-1].content)["input_type"] == "text"
+
+    @pytest.mark.asyncio
+    async def test_async_video_rejects_unknown_input_type_before_paying(self) -> None:
+        calls: List[httpx.Request] = []
+        client = _make_async_client(_paid_flow(calls, _VIDEO_OK))
+        with pytest.raises(ValueError, match="input_type must be one of"):
+            await client.video("x", input_type="img")
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_async_image_forwards_quality(self) -> None:
+        import json
+
+        calls: List[httpx.Request] = []
+        client = _make_async_client(_paid_flow(calls, _IMAGE_OK))
+        await client.image("a cat", model="openai/gpt-image-2", quality="low")
+        assert json.loads(calls[-1].content)["quality"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_async_image_edit_forwards_quality(self) -> None:
+        import json
+
+        calls: List[httpx.Request] = []
+        client = _make_async_client(_paid_flow(calls, _IMAGE_OK))
+        await client.image_edit("make it green", _DATA_URI, quality="high")
+        assert json.loads(calls[-1].content)["quality"] == "high"
+        assert calls[-1].url.path == "/api/v1/images/image2image"
+
+    @pytest.mark.asyncio
+    async def test_async_image_rejects_unknown_quality_before_paying(self) -> None:
+        calls: List[httpx.Request] = []
+        client = _make_async_client(_paid_flow(calls, _IMAGE_OK))
+        with pytest.raises(ValueError, match="quality must be one of"):
+            await client.image("a cat", quality="hd")
+        assert calls == []

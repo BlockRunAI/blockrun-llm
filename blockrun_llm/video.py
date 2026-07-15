@@ -41,6 +41,7 @@ from .validation import (
     validate_private_key,
     validate_api_url,
     sanitize_error_response,
+    validate_video_input_type,
 )
 
 load_dotenv()
@@ -147,6 +148,7 @@ class VideoClient:
         seed: Optional[int] = None,
         watermark: Optional[bool] = None,
         return_last_frame: Optional[bool] = None,
+        input_type: Optional[str] = None,
         budget_seconds: Optional[float] = None,
     ) -> VideoResponse:
         """
@@ -190,6 +192,15 @@ class VideoClient:
             watermark: Add the provider watermark (Seedance only).
             return_last_frame: Also return the final frame as an image
                 (Seedance only).
+            input_type: Optional assertion of the seed mode you intend —
+                `text` / `image` / `first_last_frame` / `reference`. Purely a
+                guard: the gateway infers the mode from the seed fields above
+                and rejects with 400 (before charging) if your declared value
+                disagrees. Use it when a caller builds the seed fields
+                dynamically and a silently-wrong mode would be expensive — a
+                dropped `image_url` yields a text-to-video clip you still pay
+                for, whereas declaring `input_type="image"` turns that into an
+                error. Leave unset to accept whatever the inputs imply.
             budget_seconds: Overall polling budget (default 900s).
 
         Returns:
@@ -199,7 +210,8 @@ class VideoClient:
         Raises:
             ValueError: If mutually-exclusive image inputs are combined
                 (see above), `last_frame_url` is passed without `image_url`,
-                or `real_face_asset_id` is malformed.
+                `real_face_asset_id` is malformed, or `input_type` is not one
+                of the four accepted values.
             PaymentError: If wallet balance is insufficient.
             APIError: If upstream fails, the job times out, or any transport
                 error occurs.
@@ -233,6 +245,7 @@ class VideoClient:
                 "enroll via PortraitClient / POST /v1/portrait/enroll or "
                 "RealFaceClient / POST /v1/realface/enroll)"
             )
+        validate_video_input_type(input_type)
 
         body: Dict[str, Any] = {
             "model": model or self.DEFAULT_MODEL,
@@ -260,6 +273,8 @@ class VideoClient:
             body["watermark"] = watermark
         if return_last_frame is not None:
             body["return_last_frame"] = return_last_frame
+        if input_type is not None:
+            body["input_type"] = input_type
 
         budget = (
             budget_seconds if budget_seconds is not None else self.DEFAULT_GENERATE_BUDGET_SECONDS

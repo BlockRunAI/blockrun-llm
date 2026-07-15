@@ -36,6 +36,15 @@ KNOWN_PROVIDERS = {
     "zai",
 }
 
+# Seed modes a caller may assert via `input_type` on /v1/videos/generations.
+# Mirrors the gateway enum; the gateway stays the authority on whether the
+# declared mode matches the seed fields actually sent.
+VIDEO_INPUT_TYPES = ("text", "image", "first_last_frame", "reference")
+
+# Latency/fidelity levels for `quality` on Solana image generation + editing.
+# Mirrors the gateway enum, which accepts the field for openai/gpt-image-* only.
+IMAGE_QUALITY_LEVELS = ("low", "medium", "high", "auto")
+
 
 # Base58 alphabet characters that never appear in a hex string. Their presence
 # is a strong signal that a key is a base58-encoded Solana key, not an EVM key.
@@ -145,6 +154,57 @@ def validate_model(model: str) -> None:
         if provider not in KNOWN_PROVIDERS:
             # Just log, don't fail (allows new providers)
             pass
+
+
+def validate_video_input_type(input_type: Optional[str]) -> None:
+    """
+    Validate the optional `input_type` seed-mode assertion on video generation.
+
+    Only the spelling is checked. Whether the declared mode agrees with the
+    seed fields actually sent is the gateway's call — it infers the mode and
+    rejects with 400 *before* charging, so re-deriving that inference here
+    would add a second copy to keep in sync for no benefit.
+
+    Args:
+        input_type: One of VIDEO_INPUT_TYPES, or None to leave it unset.
+
+    Raises:
+        ValueError: If input_type is not one of the accepted values.
+
+    Example:
+        >>> validate_video_input_type("first_last_frame")
+    """
+    if input_type is None:
+        return
+    if input_type not in VIDEO_INPUT_TYPES:
+        raise ValueError(
+            f"input_type must be one of {', '.join(VIDEO_INPUT_TYPES)}; got {input_type!r}."
+        )
+
+
+def validate_image_quality(quality: Optional[str]) -> None:
+    """
+    Validate the optional `quality` knob on Solana image generation/editing.
+
+    Model compatibility is left to the gateway, which accepts `quality` only
+    for openai/gpt-image-* and returns a clear error otherwise — encoding that
+    model list here would go stale every time the catalog changes.
+
+    Args:
+        quality: One of IMAGE_QUALITY_LEVELS, or None to leave it unset.
+
+    Raises:
+        ValueError: If quality is not one of the accepted values.
+
+    Example:
+        >>> validate_image_quality("low")
+    """
+    if quality is None:
+        return
+    if quality not in IMAGE_QUALITY_LEVELS:
+        raise ValueError(
+            f"quality must be one of {', '.join(IMAGE_QUALITY_LEVELS)}; got {quality!r}."
+        )
 
 
 def validate_max_tokens(max_tokens: Optional[int]) -> None:
