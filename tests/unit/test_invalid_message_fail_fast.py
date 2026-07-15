@@ -56,9 +56,7 @@ class TestInvalidMessageReachesTheClassifier:
 
     def test_oversized_invalid_message_is_dropped(self) -> None:
         exc = build_payment_rejected_error(
-            _FakeResponse(
-                {"error": "Payment verification failed", "invalidMessage": "x" * 500}
-            )
+            _FakeResponse({"error": "Payment verification failed", "invalidMessage": "x" * 500})
         )
         assert exc.response is not None
         assert "invalidMessage" not in exc.response
