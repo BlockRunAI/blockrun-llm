@@ -111,3 +111,46 @@ def test_image_url_and_real_face_still_exclusive(client):
             image_url="https://example.com/a.jpg",
             real_face_asset_id="ta_abc123",
         )
+
+
+# --- input_type ------------------------------------------------------------
+# A declared seed mode the gateway cross-checks against the fields actually
+# sent. Only the spelling is validated locally; the match is the gateway's
+# call (400, unbilled) so the two can't drift.
+
+
+def test_input_type_forwarded(client, captured):
+    client.generate(
+        "the flower blooms",
+        model="bytedance/seedance-1.5-pro",
+        image_url="https://example.com/bud.jpg",
+        last_frame_url="https://example.com/bloom.jpg",
+        input_type="first_last_frame",
+    )
+    assert captured["body"]["input_type"] == "first_last_frame"
+
+
+def test_input_type_omitted_when_unset(client, captured):
+    client.generate("a calm lake at dawn")
+    assert "input_type" not in captured["body"]
+
+
+@pytest.mark.parametrize("value", ["text", "image", "first_last_frame", "reference"])
+def test_input_type_accepts_every_gateway_mode(client, captured, value):
+    client.generate("x", input_type=value)
+    assert captured["body"]["input_type"] == value
+
+
+def test_input_type_rejects_unknown_value(client):
+    with pytest.raises(ValueError, match="input_type must be one of"):
+        client.generate("x", input_type="img")
+
+
+def test_input_type_mismatch_is_left_to_the_gateway(client, captured):
+    """Declaring a mode that contradicts the seed fields must still be sent.
+
+    The gateway owns that check and answers 400 before charging; rejecting it
+    here would fork the inference into a second copy that drifts.
+    """
+    client.generate("x", input_type="image")  # no image_url — gateway's call
+    assert captured["body"]["input_type"] == "image"
