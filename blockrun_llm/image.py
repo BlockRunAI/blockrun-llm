@@ -155,9 +155,15 @@ class ImageClient:
         """
         if kwargs:
             unsupported = ", ".join(sorted(kwargs.keys()))
+            hint = (
+                " `quality` is Solana-only (SolanaLLMClient.image) — the Base gateway "
+                "has no such field and would silently ignore it."
+                if "quality" in kwargs
+                else ""
+            )
             raise TypeError(
                 f"generate() got unexpected keyword argument(s): {unsupported}. "
-                f"Valid parameters are: prompt, model, size, n"
+                f"Valid parameters are: prompt, model, size, n.{hint}"
             )
 
         # Build request body
@@ -223,9 +229,15 @@ class ImageClient:
         """
         if kwargs:
             unsupported = ", ".join(sorted(kwargs.keys()))
+            hint = (
+                " `quality` is Solana-only (SolanaLLMClient.image_edit) — the Base "
+                "gateway has no such field and would silently ignore it."
+                if "quality" in kwargs
+                else ""
+            )
             raise TypeError(
                 f"edit() got unexpected keyword argument(s): {unsupported}. "
-                f"Valid parameters are: prompt, image, model, mask, size, n"
+                f"Valid parameters are: prompt, image, model, mask, size, n.{hint}"
             )
 
         body: Dict[str, Any] = {

@@ -418,6 +418,19 @@ automatically.
 
 Image editing (`client.edit` / `client.image_edit`) hits the `/v1/images/image2image` endpoint and supports `openai/gpt-image-1`, `openai/gpt-image-2`, `google/nano-banana`, and `google/nano-banana-pro`. Pass a list of source images to fuse multiple inputs (openai/* up to 4, google/* up to 3).
 
+**`quality` (Solana only).** On Solana, `image` and `image_edit` accept
+`quality="low" | "medium" | "high" | "auto"` for `openai/gpt-image-*` — `low`
+meaningfully cuts generation time:
+
+```python
+sol = SolanaLLMClient()
+result = sol.image("a red apple", model="openai/gpt-image-2", quality="low")
+```
+
+This is deliberately absent from the Base `ImageClient`: the Base gateway has
+no `quality` field and would silently ignore the value, so passing it there
+raises `TypeError` rather than quietly doing nothing.
+
 ### Video Generation
 | Model | Price | Default 5s 720p |
 |-------|-------|-----------------|
@@ -479,6 +492,20 @@ result = client.generate(
         "https://example.com/character.jpg",
         "https://example.com/city.jpg",
     ],
+)
+
+# input_type — declare the seed mode you intend, and get an error instead of
+# a surprise. The gateway infers the mode from the seed fields above; if your
+# declared value disagrees it returns 400 WITHOUT charging.
+#
+# Worth it when the seed fields are built dynamically: if `image_url` comes
+# back empty, the request quietly degrades to text-to-video and you still pay
+# for the clip. Declaring input_type="image" turns that into a 400 instead.
+result = client.generate(
+    "the portrait turns to face the camera",
+    model="bytedance/seedance-2.0",
+    image_url=maybe_empty_url,   # if this is falsy...
+    input_type="image",          # ...you get a 400, not a text-to-video bill
 )
 ```
 

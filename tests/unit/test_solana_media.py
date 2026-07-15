@@ -671,7 +671,53 @@ class TestSharedVideoBodyBuilder:
         )
         assert body["input_type"] == "text"
 
-    def test_async_video_exposes_input_type(self) -> None:
-        import inspect
 
-        assert "input_type" in inspect.signature(AsyncSolanaLLMClient.video).parameters
+class TestAsyncMediaParamParity:
+    """The async client duplicates the sync call shape, so it needs the same
+    body assertions. A signature check would pass even if the param were
+    accepted and then never forwarded — the regression worth catching.
+    """
+
+    @pytest.mark.asyncio
+    async def test_async_video_forwards_input_type(self) -> None:
+        import json
+
+        calls: List[httpx.Request] = []
+        client = _make_async_client(_paid_flow(calls, _VIDEO_OK))
+        await client.video("a calm lake", input_type="text")
+        assert json.loads(calls[-1].content)["input_type"] == "text"
+
+    @pytest.mark.asyncio
+    async def test_async_video_rejects_unknown_input_type_before_paying(self) -> None:
+        calls: List[httpx.Request] = []
+        client = _make_async_client(_paid_flow(calls, _VIDEO_OK))
+        with pytest.raises(ValueError, match="input_type must be one of"):
+            await client.video("x", input_type="img")
+        assert calls == []
+
+    @pytest.mark.asyncio
+    async def test_async_image_forwards_quality(self) -> None:
+        import json
+
+        calls: List[httpx.Request] = []
+        client = _make_async_client(_paid_flow(calls, _IMAGE_OK))
+        await client.image("a cat", model="openai/gpt-image-2", quality="low")
+        assert json.loads(calls[-1].content)["quality"] == "low"
+
+    @pytest.mark.asyncio
+    async def test_async_image_edit_forwards_quality(self) -> None:
+        import json
+
+        calls: List[httpx.Request] = []
+        client = _make_async_client(_paid_flow(calls, _IMAGE_OK))
+        await client.image_edit("make it green", _DATA_URI, quality="high")
+        assert json.loads(calls[-1].content)["quality"] == "high"
+        assert calls[-1].url.path == "/api/v1/images/image2image"
+
+    @pytest.mark.asyncio
+    async def test_async_image_rejects_unknown_quality_before_paying(self) -> None:
+        calls: List[httpx.Request] = []
+        client = _make_async_client(_paid_flow(calls, _IMAGE_OK))
+        with pytest.raises(ValueError, match="quality must be one of"):
+            await client.image("a cat", quality="hd")
+        assert calls == []

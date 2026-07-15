@@ -1776,8 +1776,8 @@ class SolanaLLMClient:
             "size": size,
             "n": n,
         }
+        validate_image_quality(quality)
         if quality is not None:
-            validate_image_quality(quality)
             body["quality"] = quality
         data = self._request_image_with_payment("/v1/images/generations", body, timeout=timeout)
         return ImageResponse(**data)
@@ -1817,8 +1817,8 @@ class SolanaLLMClient:
         }
         if mask is not None:
             body["mask"] = mask
+        validate_image_quality(quality)
         if quality is not None:
-            validate_image_quality(quality)
             body["quality"] = quality
 
         data = self._request_image_with_payment("/v1/images/image2image", body, timeout=timeout)
@@ -2209,10 +2209,13 @@ class SolanaLLMClient:
         seed: Optional[int],
         watermark: Optional[bool],
         return_last_frame: Optional[bool],
-        input_type: Optional[str] = None,
+        input_type: Optional[str],
     ) -> Dict[str, Any]:
         """Validate video kwargs and build the request body. Shared by the sync
-        and async ``video()`` so their validation and payload never drift."""
+        and async ``video()`` so their validation and payload never drift.
+
+        Every param is required (pass None to omit) precisely so a caller can't
+        silently drop one — the drift this builder exists to prevent."""
         if image_url and real_face_asset_id:
             raise ValueError(
                 "image_url and real_face_asset_id are mutually exclusive; pass at most one."
@@ -3586,8 +3589,8 @@ class AsyncSolanaLLMClient:
             "size": size,
             "n": n,
         }
+        validate_image_quality(quality)
         if quality is not None:
-            validate_image_quality(quality)
             body["quality"] = quality
         data = await self._request_image_with_payment(
             "/v1/images/generations", body, timeout=timeout
@@ -3627,8 +3630,8 @@ class AsyncSolanaLLMClient:
         }
         if mask is not None:
             body["mask"] = mask
+        validate_image_quality(quality)
         if quality is not None:
-            validate_image_quality(quality)
             body["quality"] = quality
 
         data = await self._request_image_with_payment(
