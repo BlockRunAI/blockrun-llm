@@ -60,6 +60,8 @@ from .validation import (
     build_payment_rejected_error,
     sanitize_error_response,
     validate_api_url,
+    validate_image_quality,
+    validate_video_input_type,
 )
 
 try:
@@ -1741,6 +1743,7 @@ class SolanaLLMClient:
         model: str = "google/nano-banana",
         size: str = "1024x1024",
         n: int = 1,
+        quality: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> ImageResponse:
         """Generate an image from a text prompt (Solana payment).
@@ -1756,6 +1759,16 @@ class SolanaLLMClient:
         and only settles on the final completed poll. If the poll budget
         (``IMAGE_POLL_BUDGET_SECONDS``, 5 min) is exhausted, an
         :class:`APIError` 504 is raised and **no payment is taken**.
+
+        Args:
+            quality: ``low`` / ``medium`` / ``high`` / ``auto`` — latency vs
+                fidelity, ``openai/gpt-image-*`` only. ``low`` meaningfully
+                cuts generation time. Solana only: the Base gateway has no
+                such field, so ``ImageClient`` deliberately omits it rather
+                than accept a value that would be silently dropped.
+
+        Raises:
+            ValueError: If ``quality`` is not one of the four accepted values.
         """
         body: Dict[str, Any] = {
             "model": model,
@@ -1763,6 +1776,9 @@ class SolanaLLMClient:
             "size": size,
             "n": n,
         }
+        validate_image_quality(quality)
+        if quality is not None:
+            body["quality"] = quality
         data = self._request_image_with_payment("/v1/images/generations", body, timeout=timeout)
         return ImageResponse(**data)
 
@@ -1775,6 +1791,7 @@ class SolanaLLMClient:
         mask: Optional[str] = None,
         size: str = "1024x1024",
         n: int = 1,
+        quality: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> ImageResponse:
         """Edit an image using img2img (Solana payment). ``image`` may be a
@@ -1783,6 +1800,13 @@ class SolanaLLMClient:
 
         Like :meth:`image`, this handles the gateway's async 202 + poll
         slow path transparently — settlement only happens on completion.
+
+        Args:
+            quality: ``low`` / ``medium`` / ``high`` / ``auto``, as in
+                :meth:`image` — ``openai/gpt-image-*`` only, Solana only.
+
+        Raises:
+            ValueError: If ``quality`` is not one of the four accepted values.
         """
         body: Dict[str, Any] = {
             "model": model,
@@ -1793,6 +1817,9 @@ class SolanaLLMClient:
         }
         if mask is not None:
             body["mask"] = mask
+        validate_image_quality(quality)
+        if quality is not None:
+            body["quality"] = quality
 
         data = self._request_image_with_payment("/v1/images/image2image", body, timeout=timeout)
         return ImageResponse(**data)
@@ -1817,6 +1844,7 @@ class SolanaLLMClient:
         seed: Optional[int] = None,
         watermark: Optional[bool] = None,
         return_last_frame: Optional[bool] = None,
+        input_type: Optional[str] = None,
         budget_seconds: Optional[float] = None,
         timeout: Optional[float] = None,
     ) -> VideoResponse:
@@ -1827,6 +1855,13 @@ class SolanaLLMClient:
         happens on the first completed poll, so a poll-budget timeout takes
         **no payment** and leaves the job claimable ~48h. Default model is
         ``xai/grok-imagine-video``.
+
+        Args:
+            input_type: Optional assertion of the seed mode — ``text`` /
+                ``image`` / ``first_last_frame`` / ``reference``. The gateway
+                rejects (400, unbilled) if it disagrees with the seed fields
+                sent, turning a silent wrong-mode clip into an error. See
+                ``VideoClient.generate``.
         """
         body = self._build_video_body(
             prompt,
@@ -1842,6 +1877,7 @@ class SolanaLLMClient:
             seed=seed,
             watermark=watermark,
             return_last_frame=return_last_frame,
+            input_type=input_type,
         )
 
         data = self._request_image_with_payment(
@@ -2173,9 +2209,13 @@ class SolanaLLMClient:
         seed: Optional[int],
         watermark: Optional[bool],
         return_last_frame: Optional[bool],
+        input_type: Optional[str],
     ) -> Dict[str, Any]:
         """Validate video kwargs and build the request body. Shared by the sync
-        and async ``video()`` so their validation and payload never drift."""
+        and async ``video()`` so their validation and payload never drift.
+
+        Every param is required (pass None to omit) precisely so a caller can't
+        silently drop one — the drift this builder exists to prevent."""
         if image_url and real_face_asset_id:
             raise ValueError(
                 "image_url and real_face_asset_id are mutually exclusive; pass at most one."
@@ -2203,6 +2243,7 @@ class SolanaLLMClient:
                 "real_face_asset_id must start with 'ta_' "
                 "(a Virtual Portrait or RealFace asset id, e.g. 'ta_abc123xyz')"
             )
+        validate_video_input_type(input_type)
 
         body: Dict[str, Any] = {
             "model": model or SolanaLLMClient.VIDEO_DEFAULT_MODEL,
@@ -2230,6 +2271,8 @@ class SolanaLLMClient:
             body["watermark"] = watermark
         if return_last_frame is not None:
             body["return_last_frame"] = return_last_frame
+        if input_type is not None:
+            body["input_type"] = input_type
         return body
 
     @staticmethod
@@ -3522,6 +3565,7 @@ class AsyncSolanaLLMClient:
         model: str = "google/nano-banana",
         size: str = "1024x1024",
         n: int = 1,
+        quality: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> ImageResponse:
         """Generate an image from a text prompt (Solana payment).
@@ -3531,6 +3575,13 @@ class AsyncSolanaLLMClient:
         completion and only settles on the final completed poll. If the poll
         budget is exhausted an :class:`APIError` 504 is raised and **no payment
         is taken**.
+
+        Args:
+            quality: ``low`` / ``medium`` / ``high`` / ``auto``,
+                ``openai/gpt-image-*`` only. See :meth:`SolanaLLMClient.image`.
+
+        Raises:
+            ValueError: If ``quality`` is not one of the four accepted values.
         """
         body: Dict[str, Any] = {
             "model": model,
@@ -3538,6 +3589,9 @@ class AsyncSolanaLLMClient:
             "size": size,
             "n": n,
         }
+        validate_image_quality(quality)
+        if quality is not None:
+            body["quality"] = quality
         data = await self._request_image_with_payment(
             "/v1/images/generations", body, timeout=timeout
         )
@@ -3552,12 +3606,20 @@ class AsyncSolanaLLMClient:
         mask: Optional[str] = None,
         size: str = "1024x1024",
         n: int = 1,
+        quality: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> ImageResponse:
         """Edit an image using img2img (Solana payment). ``image`` may be a
         single data URI or a list of 1-4 data URIs for multi-image fusion
         (openai/* up to 4, google/* up to 3). Handles the async 202 + poll
         slow path transparently — settlement only happens on completion.
+
+        Args:
+            quality: ``low`` / ``medium`` / ``high`` / ``auto``,
+                ``openai/gpt-image-*`` only. See :meth:`SolanaLLMClient.image`.
+
+        Raises:
+            ValueError: If ``quality`` is not one of the four accepted values.
         """
         body: Dict[str, Any] = {
             "model": model,
@@ -3568,6 +3630,9 @@ class AsyncSolanaLLMClient:
         }
         if mask is not None:
             body["mask"] = mask
+        validate_image_quality(quality)
+        if quality is not None:
+            body["quality"] = quality
 
         data = await self._request_image_with_payment(
             "/v1/images/image2image", body, timeout=timeout
@@ -3613,6 +3678,7 @@ class AsyncSolanaLLMClient:
         seed: Optional[int] = None,
         watermark: Optional[bool] = None,
         return_last_frame: Optional[bool] = None,
+        input_type: Optional[str] = None,
         budget_seconds: Optional[float] = None,
         timeout: Optional[float] = None,
     ) -> VideoResponse:
@@ -3632,6 +3698,7 @@ class AsyncSolanaLLMClient:
             seed=seed,
             watermark=watermark,
             return_last_frame=return_last_frame,
+            input_type=input_type,
         )
 
         data = await self._request_image_with_payment(
