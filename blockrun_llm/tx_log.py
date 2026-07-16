@@ -44,12 +44,42 @@ LOG_NAME = "transactions.log"
 
 
 # ---------------------------------------------------------------------------
-# Settlement header decoding (X-PAYMENT-RESPONSE → on-chain dict)
+# Settlement header decoding (PAYMENT-RESPONSE → on-chain dict)
 # ---------------------------------------------------------------------------
+
+# The settlement header has two names on the wire, and the one our gateways
+# actually send is NOT the one this SDK was written against. Both BlockRun
+# gateways emit ``PAYMENT-RESPONSE`` (the x402 v2 spec name) and neither ever
+# emits ``X-PAYMENT-RESPONSE``; reading only the legacy name decodes nothing at
+# all against production. The sidecar hit exactly this and fixed it in
+# blockrun-litellm 0.6.0, live-verified against a real paid call.
+#
+# The legacy name stays accepted: other x402 facilitators still send it, and an
+# unknown header costs nothing to check. Order matters only if both are present,
+# in which case the spec name wins.
+_SETTLEMENT_HEADER_NAMES = ("PAYMENT-RESPONSE", "X-PAYMENT-RESPONSE")
+
+
+def read_settlement_header(headers: Any) -> Optional[str]:
+    """Pull the raw settlement header out of a response, under either name.
+
+    Single source of truth for the header name — call sites must not hand-roll
+    the fallback, which is how the SDK ended up reading only the legacy name in
+    four separate places. Never raises: a header mapping that doesn't behave
+    like one yields ``None`` rather than exploding on an error path.
+    """
+    try:
+        for name in _SETTLEMENT_HEADER_NAMES:
+            value = headers.get(name)
+            if value:
+                return value
+    except Exception:
+        return None
+    return None
 
 
 def decode_settlement_header(header_value: Optional[str]) -> Optional[Dict[str, Any]]:
-    """Decode an ``X-PAYMENT-RESPONSE`` header into a settlement dict.
+    """Decode a ``PAYMENT-RESPONSE`` header into a settlement dict.
 
     The x402 facilitator returns a base64-encoded JSON describing what
     landed on chain. Field names vary by chain — EVM uses ``transaction``,
@@ -88,33 +118,51 @@ def paid_request_error_prefix(headers: Any) -> str:
     """Error prefix for a failed request that carried a payment header.
 
     This used to be the flat string "API error after payment", which reads as
-    *your money is gone* — and that is usually false. Gateways settle **on
-    success**: the settle call sits after the upstream work, so a failed paid
-    request normally moves no funds at all. The old wording claimed otherwise on
-    every failure.
+    *your money is gone* — usually false, and it cost real time: a 500 from an
+    image edit was read as a lost payment by two separate readers and reported
+    as real spend before anyone checked the gateway. The wording manufactured
+    the false alarm.
 
-    Not hypothetical: a 500 from an image edit was read as a lost payment by two
-    separate readers and reported as real spend, before anyone checked the
-    gateway's settle ordering. The wording alone manufactured the false alarm.
-
-    So report only what is known. ``X-PAYMENT-RESPONSE`` carries the on-chain
-    settlement, and its absence is the ordinary shape of a failure that cost
-    nothing:
+    The fix is to report only what is known, which is less than it looks:
 
     * settlement present → funds **did** move; say so, and name the tx.
-    * settlement absent  → the paid attempt failed with nothing settled.
+    * settlement absent  → **unknown**, and it must not be read as "free".
 
-    Absence isn't proof (a gateway could settle and omit the header), so the
-    wording stays hedged rather than promising a refund that isn't ours to give.
+    Absence is genuinely uninformative, in two ways that bite:
+
+    1. Base settles synchronously after the upstream call, so absence there
+       usually does mean nothing moved. Solana's paid chat path settles
+       *in parallel* with the upstream call and re-raises immediately
+       (``logChargedButFailed(...); throw primaryError``) — the response is on
+       the wire before settlement lands. So on the one path where the caller is
+       charged for a 5xx and the gateway logs ``CHARGED BUT REQUEST FAILED —
+       refund manually``, the error carries **no header at all**. Absence and
+       "you were charged" co-occur *systematically*, not by chance.
+    2. A gateway could always settle and omit the header.
+
+    Hence the hedge names the usual case without asserting it. Claiming "payment
+    likely not taken" would replace a false alarm with a false all-clear, on
+    exactly the requests that need a manual refund — the worse of the two errors
+    for anyone reconciling spend.
+
+    Gated on ``tx_hash``, never on the header's ``success`` field: our gateways
+    hard-code ``success: true`` even when settle didn't land, so that clients
+    parsing the header don't surface a spurious error. A tx hash is the only
+    thing in there that means money moved — the gateways gate their own revenue
+    accounting on exactly the same field.
     """
     settlement = None
     try:
-        settlement = decode_settlement_header(headers.get("X-PAYMENT-RESPONSE"))
+        settlement = decode_settlement_header(read_settlement_header(headers))
     except Exception:
         settlement = None
     if settlement and settlement.get("tx_hash"):
         return f"API error after settlement (payment SETTLED, tx {settlement['tx_hash']})"
-    return "API error on the paid request (no settlement recorded — payment likely not taken)"
+    return (
+        "API error on the paid request (no settlement reported — a failed call "
+        "usually moves no funds, but settlement can land after the error; check "
+        "your wallet history before assuming nothing was charged)"
+    )
 
 
 # ---------------------------------------------------------------------------

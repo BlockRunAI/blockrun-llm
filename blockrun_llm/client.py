@@ -65,6 +65,7 @@ from .tx_log import (
     TransactionLogger,
     decode_settlement_header,
     paid_request_error_prefix,
+    read_settlement_header,
     _resolve_log_dir,
 )
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
@@ -315,7 +316,7 @@ class LLMClient:
         self._model_pricing_cache: Optional[Dict[str, Dict[str, float]]] = None
 
         # Opt-in transaction log + last on-chain settlement payload. The
-        # settlement is populated from X-PAYMENT-RESPONSE on every paid retry
+        # settlement is populated from PAYMENT-RESPONSE on every paid retry
         # and cleared right before save_to_cache fires so it can't bleed
         # across calls when logging is disabled.
         log_dir = _resolve_log_dir(transaction_log)
@@ -332,9 +333,7 @@ class LLMClient:
         ``save_to_cache``. ``None`` when the facilitator didn't include a
         settlement header — older facilitators / cached free responses.
         """
-        header = response.headers.get("x-payment-response") or response.headers.get(
-            "X-PAYMENT-RESPONSE"
-        )
+        header = read_settlement_header(response.headers)
         settlement = decode_settlement_header(header)
         self._last_settlement = settlement
         return settlement
@@ -2087,7 +2086,7 @@ class LLMClient:
         """Append one row to the project-local transaction log, if enabled.
 
         Pulls the on-chain settlement out of ``self._last_settlement``
-        (captured from ``X-PAYMENT-RESPONSE`` on the paid retry) and
+        (captured from ``PAYMENT-RESPONSE`` on the paid retry) and
         consumes it — so a subsequent free / cached call right after a
         paid one cannot reuse stale tx fields. No-op when the logger is
         disabled; never raises (best-effort logging by design)."""
@@ -2276,9 +2275,7 @@ class AsyncLLMClient:
 
     def _capture_settlement(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
         """Async-client twin of :meth:`LLMClient._capture_settlement`."""
-        header = response.headers.get("x-payment-response") or response.headers.get(
-            "X-PAYMENT-RESPONSE"
-        )
+        header = read_settlement_header(response.headers)
         settlement = decode_settlement_header(header)
         self._last_settlement = settlement
         return settlement

@@ -57,6 +57,7 @@ from .tx_log import (
     TransactionLogger,
     decode_settlement_header,
     paid_request_error_prefix,
+    read_settlement_header,
     _resolve_log_dir,
 )
 from .price import Category, Market, Resolution, Session
@@ -564,12 +565,15 @@ class SolanaLLMClient:
         """Decode the x402 settlement header on a Solana paid response.
 
         Solana facilitators put the on-chain transaction signature in the
-        same ``X-PAYMENT-RESPONSE`` header EVM does — different chain id,
-        same wire format. ``None`` when no header is returned.
+        same ``PAYMENT-RESPONSE`` header EVM does — different chain id, same
+        wire format. ``None`` when no header is returned.
+
+        Absence does NOT mean the call was free: this gateway's paid chat
+        path settles in parallel with the upstream call and re-raises at
+        once, so a charged-but-failed request answers before settlement
+        lands. See ``paid_request_error_prefix``.
         """
-        header = response.headers.get("x-payment-response") or response.headers.get(
-            "X-PAYMENT-RESPONSE"
-        )
+        header = read_settlement_header(response.headers)
         settlement = decode_settlement_header(header)
         self._last_settlement = settlement
         return settlement
@@ -2845,9 +2849,7 @@ class AsyncSolanaLLMClient:
 
     def _capture_settlement(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
         """Async-Solana twin of :meth:`SolanaLLMClient._capture_settlement`."""
-        header = response.headers.get("x-payment-response") or response.headers.get(
-            "X-PAYMENT-RESPONSE"
-        )
+        header = read_settlement_header(response.headers)
         settlement = decode_settlement_header(header)
         self._last_settlement = settlement
         return settlement

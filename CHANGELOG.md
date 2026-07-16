@@ -2,6 +2,45 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.7.1 — 2026-07-16
+
+### Fixed
+
+- **The settlement header was read under a name no gateway sends.** Both
+  gateways emit `PAYMENT-RESPONSE` (the x402 v2 spec name) — `blockrun` at 36
+  call sites, `blockrun-sol` at 25 — and neither emits `X-PAYMENT-RESPONSE`
+  even once. The SDK read only the legacy name, in four hand-rolled places, so
+  `_last_settlement` decoded nothing against production: no tx hash, no
+  settlement on any paid call. The sidecar hit this exact bug and fixed it in
+  blockrun-litellm 0.6.0, live-verified against a real paid call; the SDK half
+  was never done. Both names now go through one helper
+  (`tx_log.read_settlement_header`) so they can't drift apart again. The legacy
+  name stays accepted for other facilitators.
+
+- **The paid-request error no longer claims your money is gone.**
+  `"API error after payment"` reads as *funds are lost*, which is usually false
+  — a real image-edit 500 was reported as lost USDC by two readers before
+  anyone checked the gateway. It now reports only what the settlement header
+  proves: a tx hash means SETTLED and is named; absence means unknown.
+
+  Absence is **not** reported as "payment likely not taken", which the first cut
+  of this change did. That trades a false alarm for a false all-clear, and the
+  all-clear lands on precisely the wrong requests: Solana's paid chat path
+  settles *in parallel* with the upstream call and re-raises immediately
+  (`logChargedButFailed(...); throw primaryError`), so a request the gateway
+  logs as `CHARGED BUT REQUEST FAILED — refund manually` answers *before*
+  settlement lands, and therefore carries no header at all. Absence and "you
+  were charged" co-occur systematically on the one path where it costs money.
+  Base settles after the upstream call and does match the optimistic reading,
+  but a set of headers doesn't tell the SDK which gateway produced it. So the
+  wording names the usual case without asserting it, and points at wallet
+  history.
+
+  Gated on `tx_hash`, never the header's `success` field: the gateways hard-code
+  `success: true` even when settle didn't land, so older clients don't surface a
+  spurious error. A tx hash is the only field that means money moved — the same
+  field the gateways gate their own revenue accounting on.
+
 ## 1.7.0 — 2026-07-15
 
 ### Added
