@@ -53,7 +53,13 @@ from .types import (
     chunk_usage_dict,
 )
 from .solana_wallet import get_solana_public_key
-from .tx_log import TransactionLogger, decode_settlement_header, _resolve_log_dir
+from .tx_log import (
+    TransactionLogger,
+    decode_settlement_header,
+    paid_request_error_prefix,
+    read_settlement_header,
+    _resolve_log_dir,
+)
 from .price import Category, Market, Resolution, Session
 from .realface import _GROUP_ID_RE
 from .validation import (
@@ -559,12 +565,15 @@ class SolanaLLMClient:
         """Decode the x402 settlement header on a Solana paid response.
 
         Solana facilitators put the on-chain transaction signature in the
-        same ``X-PAYMENT-RESPONSE`` header EVM does — different chain id,
-        same wire format. ``None`` when no header is returned.
+        same ``PAYMENT-RESPONSE`` header EVM does — different chain id, same
+        wire format. ``None`` when no header is returned.
+
+        Absence does NOT mean the call was free: this gateway's paid chat
+        path settles in parallel with the upstream call and re-raises at
+        once, so a charged-but-failed request answers before settlement
+        lands. See ``paid_request_error_prefix``.
         """
-        header = response.headers.get("x-payment-response") or response.headers.get(
-            "X-PAYMENT-RESPONSE"
-        )
+        header = read_settlement_header(response.headers)
         settlement = decode_settlement_header(header)
         self._last_settlement = settlement
         return settlement
@@ -1067,7 +1076,7 @@ class SolanaLLMClient:
             error_body = response.json()
         except Exception:
             error_body = {"error": "Stream request failed"}
-        prefix = "API error after payment" if after_payment else "API error"
+        prefix = paid_request_error_prefix(response.headers) if after_payment else "API error"
         raise APIError(
             f"{prefix}: {response.status_code}",
             response.status_code,
@@ -1177,7 +1186,7 @@ class SolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
@@ -1301,7 +1310,7 @@ class SolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
@@ -1408,7 +1417,7 @@ class SolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
@@ -1567,7 +1576,7 @@ class SolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"Image request after payment: HTTP {submit_resp.status_code}",
+                f"Image request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
                 submit_resp.status_code,
                 sanitize_error_response(error_body),
             )
@@ -2840,9 +2849,7 @@ class AsyncSolanaLLMClient:
 
     def _capture_settlement(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
         """Async-Solana twin of :meth:`SolanaLLMClient._capture_settlement`."""
-        header = response.headers.get("x-payment-response") or response.headers.get(
-            "X-PAYMENT-RESPONSE"
-        )
+        header = read_settlement_header(response.headers)
         settlement = decode_settlement_header(header)
         self._last_settlement = settlement
         return settlement
@@ -3347,7 +3354,7 @@ class AsyncSolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
@@ -3414,7 +3421,7 @@ class AsyncSolanaLLMClient:
                 except Exception:
                     error_body = {"error": "Request failed"}
                 raise APIError(
-                    f"API error after payment: {retry_response.status_code}",
+                    f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                     retry_response.status_code,
                     sanitize_error_response(error_body),
                 )
@@ -3483,7 +3490,7 @@ class AsyncSolanaLLMClient:
                 except Exception:
                     error_body = {"error": "Request failed"}
                 raise APIError(
-                    f"API error after payment: {retry_response.status_code}",
+                    f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                     retry_response.status_code,
                     sanitize_error_response(error_body),
                 )
@@ -4187,7 +4194,7 @@ class AsyncSolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"Image request after payment: HTTP {submit_resp.status_code}",
+                f"Image request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
                 submit_resp.status_code,
                 sanitize_error_response(error_body),
             )
