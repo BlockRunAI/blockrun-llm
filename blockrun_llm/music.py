@@ -42,6 +42,7 @@ from .validation import (
     validate_api_url,
     sanitize_error_response,
 )
+from .tx_log import paid_request_error_prefix
 
 load_dotenv()
 
@@ -238,7 +239,7 @@ class MusicClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )

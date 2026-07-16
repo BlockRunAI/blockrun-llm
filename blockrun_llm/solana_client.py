@@ -53,7 +53,12 @@ from .types import (
     chunk_usage_dict,
 )
 from .solana_wallet import get_solana_public_key
-from .tx_log import TransactionLogger, decode_settlement_header, _resolve_log_dir
+from .tx_log import (
+    TransactionLogger,
+    decode_settlement_header,
+    paid_request_error_prefix,
+    _resolve_log_dir,
+)
 from .price import Category, Market, Resolution, Session
 from .realface import _GROUP_ID_RE
 from .validation import (
@@ -1067,7 +1072,7 @@ class SolanaLLMClient:
             error_body = response.json()
         except Exception:
             error_body = {"error": "Stream request failed"}
-        prefix = "API error after payment" if after_payment else "API error"
+        prefix = paid_request_error_prefix(response.headers) if after_payment else "API error"
         raise APIError(
             f"{prefix}: {response.status_code}",
             response.status_code,
@@ -1177,7 +1182,7 @@ class SolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
@@ -1301,7 +1306,7 @@ class SolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
@@ -1408,7 +1413,7 @@ class SolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
@@ -1567,7 +1572,7 @@ class SolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"Image request after payment: HTTP {submit_resp.status_code}",
+                f"Image request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
                 submit_resp.status_code,
                 sanitize_error_response(error_body),
             )
@@ -3347,7 +3352,7 @@ class AsyncSolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
@@ -3414,7 +3419,7 @@ class AsyncSolanaLLMClient:
                 except Exception:
                     error_body = {"error": "Request failed"}
                 raise APIError(
-                    f"API error after payment: {retry_response.status_code}",
+                    f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                     retry_response.status_code,
                     sanitize_error_response(error_body),
                 )
@@ -3483,7 +3488,7 @@ class AsyncSolanaLLMClient:
                 except Exception:
                     error_body = {"error": "Request failed"}
                 raise APIError(
-                    f"API error after payment: {retry_response.status_code}",
+                    f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                     retry_response.status_code,
                     sanitize_error_response(error_body),
                 )
@@ -4187,7 +4192,7 @@ class AsyncSolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"Image request after payment: HTTP {submit_resp.status_code}",
+                f"Image request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
                 submit_resp.status_code,
                 sanitize_error_response(error_body),
             )

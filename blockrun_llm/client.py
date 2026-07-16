@@ -61,7 +61,12 @@ from .types import (
     chunk_usage_dict,
 )
 from .router import route as route_request
-from .tx_log import TransactionLogger, decode_settlement_header, _resolve_log_dir
+from .tx_log import (
+    TransactionLogger,
+    decode_settlement_header,
+    paid_request_error_prefix,
+    _resolve_log_dir,
+)
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
 from .validation import (
     validate_private_key,
@@ -1050,7 +1055,7 @@ class LLMClient:
             error_body = response.json()
         except Exception:
             error_body = {"error": "Stream request failed"}
-        prefix = "API error after payment" if after_payment else "API error"
+        prefix = paid_request_error_prefix(response.headers) if after_payment else "API error"
         raise APIError(
             f"{prefix}: {response.status_code}",
             response.status_code,
@@ -1199,7 +1204,7 @@ class LLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
@@ -1366,7 +1371,7 @@ class LLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
@@ -1504,7 +1509,7 @@ class LLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
@@ -2765,7 +2770,7 @@ class AsyncLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
@@ -2920,7 +2925,7 @@ class AsyncLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )
@@ -3044,7 +3049,7 @@ class AsyncLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry_response.status_code}",
+                f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
             )

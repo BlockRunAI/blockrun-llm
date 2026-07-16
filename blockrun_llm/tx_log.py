@@ -84,6 +84,39 @@ def decode_settlement_header(header_value: Optional[str]) -> Optional[Dict[str, 
     }
 
 
+def paid_request_error_prefix(headers: Any) -> str:
+    """Error prefix for a failed request that carried a payment header.
+
+    This used to be the flat string "API error after payment", which reads as
+    *your money is gone* — and that is usually false. Gateways settle **on
+    success**: the settle call sits after the upstream work, so a failed paid
+    request normally moves no funds at all. The old wording claimed otherwise on
+    every failure.
+
+    Not hypothetical: a 500 from an image edit was read as a lost payment by two
+    separate readers and reported as real spend, before anyone checked the
+    gateway's settle ordering. The wording alone manufactured the false alarm.
+
+    So report only what is known. ``X-PAYMENT-RESPONSE`` carries the on-chain
+    settlement, and its absence is the ordinary shape of a failure that cost
+    nothing:
+
+    * settlement present → funds **did** move; say so, and name the tx.
+    * settlement absent  → the paid attempt failed with nothing settled.
+
+    Absence isn't proof (a gateway could settle and omit the header), so the
+    wording stays hedged rather than promising a refund that isn't ours to give.
+    """
+    settlement = None
+    try:
+        settlement = decode_settlement_header(headers.get("X-PAYMENT-RESPONSE"))
+    except Exception:
+        settlement = None
+    if settlement and settlement.get("tx_hash"):
+        return f"API error after settlement (payment SETTLED, tx {settlement['tx_hash']})"
+    return "API error on the paid request (no settlement recorded — payment likely not taken)"
+
+
 # ---------------------------------------------------------------------------
 # Path resolution
 # ---------------------------------------------------------------------------

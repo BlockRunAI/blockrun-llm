@@ -56,6 +56,7 @@ from .x402 import (
     extract_payment_details,
     parse_payment_required,
 )
+from .tx_log import paid_request_error_prefix
 
 load_dotenv()
 
@@ -300,7 +301,7 @@ class PhoneClient:
             error_body = response.json()
         except Exception:
             error_body = {"error": "Request failed"}
-        prefix = "API error after payment" if after_payment else "API error"
+        prefix = paid_request_error_prefix(response.headers) if after_payment else "API error"
         raise APIError(
             f"{prefix}: {response.status_code}",
             response.status_code,
