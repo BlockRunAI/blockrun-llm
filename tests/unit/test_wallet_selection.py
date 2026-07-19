@@ -160,6 +160,83 @@ def test_provider_wallet_cannot_hijack_even_when_written_last(monkeypatch, tmp_p
     assert is_new is False
 
 
+def test_import_wallet_adopts_by_derived_address(monkeypatch, tmp_path):
+    """The deliberate migration path: opt in to a discovered wallet's funds."""
+    monkeypatch.delenv("BLOCKRUN_WALLET_KEY", raising=False)
+    monkeypatch.delenv("BASE_CHAIN_WALLET_KEY", raising=False)
+    _fake_home(monkeypatch, tmp_path)
+    blockrun_dir = _blockrun_dir(tmp_path)
+    (blockrun_dir / ".session").write_text(CANONICAL_KEY)
+    _write_provider_wallet(tmp_path)
+
+    monkeypatch.setattr(wallet, "WALLET_DIR", blockrun_dir)
+    monkeypatch.setattr(wallet, "WALLET_FILE", blockrun_dir / ".session")
+
+    provider_address = Account.from_key(PROVIDER_KEY).address
+    adopted = wallet.import_wallet(provider_address)
+
+    assert adopted == provider_address
+    # It is now the active wallet, through the normal selection path.
+    address, key, is_new = wallet.get_or_create_wallet()
+    assert key == PROVIDER_KEY
+    assert address == provider_address
+    assert is_new is False
+
+
+def test_import_wallet_backs_up_the_replaced_wallet(monkeypatch, tmp_path):
+    """Adopting must not strand funds sitting in the outgoing wallet."""
+    _fake_home(monkeypatch, tmp_path)
+    blockrun_dir = _blockrun_dir(tmp_path)
+    (blockrun_dir / ".session").write_text(CANONICAL_KEY)
+    _write_provider_wallet(tmp_path)
+
+    monkeypatch.setattr(wallet, "WALLET_DIR", blockrun_dir)
+    monkeypatch.setattr(wallet, "WALLET_FILE", blockrun_dir / ".session")
+
+    wallet.import_wallet(Account.from_key(PROVIDER_KEY).address)
+
+    backups = list(blockrun_dir.glob(".session.backup-*"))
+    assert len(backups) == 1
+    assert backups[0].read_text() == CANONICAL_KEY
+
+
+def test_import_wallet_rejects_an_address_no_discovered_key_controls(monkeypatch, tmp_path):
+    """A wallet file claiming someone else's address cannot be adopted by it.
+
+    This is the whole point of matching on the derived address: a planted file
+    that names an attacker's receiving address must not be selectable by it.
+    """
+    _fake_home(monkeypatch, tmp_path)
+    blockrun_dir = _blockrun_dir(tmp_path)
+    (blockrun_dir / ".session").write_text(CANONICAL_KEY)
+    _write_provider_wallet(tmp_path)  # claims "0xNotTheRealAddress"
+
+    monkeypatch.setattr(wallet, "WALLET_DIR", blockrun_dir)
+    monkeypatch.setattr(wallet, "WALLET_FILE", blockrun_dir / ".session")
+
+    with pytest.raises(ValueError, match="No discovered wallet controls"):
+        wallet.import_wallet("0xNotTheRealAddress")
+
+    # The active wallet is untouched.
+    assert (blockrun_dir / ".session").read_text() == CANONICAL_KEY
+    assert not list(blockrun_dir.glob(".session.backup-*"))
+
+
+def test_list_discovered_wallets_never_returns_secrets(monkeypatch, tmp_path):
+    """Safe to print: derived addresses and provenance, no keys."""
+    _fake_home(monkeypatch, tmp_path)
+    _blockrun_dir(tmp_path)
+    _write_provider_wallet(tmp_path)
+
+    listed = wallet.list_discovered_wallets()
+
+    assert len(listed) == 1
+    assert listed[0]["address"] == Account.from_key(PROVIDER_KEY).address
+    assert ".agentcash" in listed[0]["source"]
+    assert "private_key" not in listed[0]
+    assert PROVIDER_KEY not in str(listed)
+
+
 def test_migration_notice_derives_address_from_key_not_file_claim(monkeypatch, tmp_path):
     """The notice must name the address the discovered key actually controls."""
     _fake_home(monkeypatch, tmp_path)

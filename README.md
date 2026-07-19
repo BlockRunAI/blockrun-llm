@@ -1576,10 +1576,29 @@ belonging to other applications on this system:
 ...
 ```
 
-Import it deliberately with `export BLOCKRUN_WALLET_KEY=<private-key>`, or by
-writing the key to `~/.blockrun/.session`. Addresses in that notice are derived
-from the discovered key itself, so a wallet file cannot claim an address it
-cannot sign for.
+Adopt one deliberately:
+
+```python
+from blockrun_llm import list_discovered_wallets, import_wallet
+
+for w in list_discovered_wallets():
+    print(w["address"], "from", w["source"])
+
+import_wallet("0x88f9B82462f6C4bf4a0Fb15e5c3971559a316e7f")
+```
+
+`import_wallet()` writes your current wallet to
+`~/.blockrun/.session.backup-<timestamp>` before switching, so adopting a wallet
+never strands funds in the old one. Solana: `list_discovered_solana_wallets()`
+and `import_solana_wallet()`.
+
+Addresses shown are derived from the discovered key itself, and `import_wallet()`
+matches on that derived address — so a wallet file cannot claim an address it
+cannot sign for, nor be adopted by one. `list_discovered_wallets()` never returns
+private keys.
+
+For a single run without changing anything, use
+`export BLOCKRUN_WALLET_KEY=<private-key>`.
 
 ## Response Caching
 
