@@ -101,7 +101,7 @@ answer = client.chat("deepseek/deepseek-chat", "Explain Solana consensus", tempe
 ```python
 from blockrun_llm import setup_agent_solana_wallet
 
-client = setup_agent_solana_wallet()   # scans ~/.*/solana-wallet.json, env, or creates one
+client = setup_agent_solana_wallet()   # uses ~/.blockrun/.solana-session, env, or creates one
 client.chat("openai/gpt-5.2", "gm Solana")
 ```
 
@@ -1540,9 +1540,10 @@ status()
 # Balance: $5.30 USDC
 ```
 
-## Wallet Scanning
+## Wallet Discovery and Migration
 
-The SDK auto-detects wallets from any provider on your system:
+The SDK can discover compatible wallets for an explicit, user-confirmed
+migration. It never automatically makes a discovered provider wallet active:
 
 ```python
 from blockrun_llm.wallet import scan_wallets
@@ -1555,7 +1556,9 @@ base_wallets = scan_wallets()
 sol_wallets = scan_solana_wallets()
 ```
 
-`get_or_create_wallet()` checks scanned wallets first, so if you already have a wallet from another BlockRun tool, it will be reused automatically.
+`get_or_create_wallet()` always uses `~/.blockrun/.session` (or an explicit
+wallet environment variable). Review the discovered addresses and import one
+explicitly if you intend to switch wallets.
 
 ## Response Caching
 

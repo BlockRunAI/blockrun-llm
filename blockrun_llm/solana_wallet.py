@@ -145,10 +145,11 @@ def _expand_solana_seed(private_key: str) -> str:
 
 def scan_solana_wallets() -> List[Dict[str, str]]:
     """
-    Scan ~/.<dir>/solana-wallet.json files from any provider (agentcash, etc.).
+    Discover ~/.<dir>/solana-wallet.json files from other providers.
 
     Each file should contain JSON with "privateKey" and "address" fields.
-    Results are sorted by modification time (most recent first).
+    Results are sorted by modification time (most recent first). Discovery is
+    opt-in and must never replace the canonical BlockRun wallet automatically.
     32-byte seeds are automatically converted to 64-byte keypairs.
 
     Returns:
@@ -191,15 +192,9 @@ def load_solana_wallet() -> Optional[str]:
     Load Solana wallet private key.
 
     Priority:
-    1. Scan ~/.*/solana-wallet.json (any provider)
-    2. Legacy ~/.blockrun/.solana-session
+    1. ~/.blockrun/.solana-session
     """
-    # Scan provider wallet files
-    wallets = scan_solana_wallets()
-    if wallets:
-        return wallets[0]["private_key"]
-
-    # Legacy session file
+    # The canonical BlockRun wallet always wins over a discovered provider key.
     if SOLANA_WALLET_FILE.exists():
         try:
             key = SOLANA_WALLET_FILE.read_text().strip()
@@ -216,9 +211,8 @@ def get_or_create_solana_wallet() -> Dict[str, object]:
 
     Priority:
     1. SOLANA_WALLET_KEY env var
-    2. Scan ~/.*/solana-wallet.json (any provider)
-    3. ~/.blockrun/.solana-session
-    4. Create new
+    2. ~/.blockrun/.solana-session
+    3. Create new
 
     Returns:
         Dict with 'address', 'private_key', 'is_new'
@@ -228,16 +222,8 @@ def get_or_create_solana_wallet() -> Dict[str, object]:
     if env_key:
         return {"private_key": env_key, "address": get_solana_public_key(env_key), "is_new": False}
 
-    # 2. Scan provider wallets
-    wallets = scan_solana_wallets()
-    if wallets:
-        return {
-            "private_key": wallets[0]["private_key"],
-            "address": wallets[0]["address"],
-            "is_new": False,
-        }
-
-    # 3. Legacy session file
+    # 2. Canonical BlockRun session file. scan_solana_wallets() is exposed
+    # only for an explicit migration flow.
     if SOLANA_WALLET_FILE.exists():
         file_key = SOLANA_WALLET_FILE.read_text().strip()
         if file_key:
@@ -247,7 +233,7 @@ def get_or_create_solana_wallet() -> Dict[str, object]:
                 "is_new": False,
             }
 
-    # 4. Create new
+    # 3. Create new
     wallet = create_solana_wallet()
     save_solana_wallet(wallet["private_key"])
     return {**wallet, "is_new": True}

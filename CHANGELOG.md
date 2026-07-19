@@ -2,6 +2,15 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.7.1 — 2026-07-19
+
+### Security
+- **Keep the canonical BlockRun wallet authoritative.** Automatic wallet
+  resolution no longer adopts a newer `wallet.json` or `solana-wallet.json`
+  found in another application's dot-directory. The SDK now uses the user's
+  own `~/.blockrun/.session` or `~/.blockrun/.solana-session`; provider-wallet
+  discovery remains available only for an explicit, user-confirmed migration.
+
 ## 1.7.0 — 2026-07-15
 
 ### Added
