@@ -239,6 +239,58 @@ def get_or_create_solana_wallet() -> Dict[str, object]:
     return {**wallet, "is_new": True}
 
 
+def format_solana_wallet_migration_notice(new_address: str) -> Optional[str]:
+    """
+    Warn when a new Solana wallet was created while provider wallets exist.
+
+    Solana counterpart of ``wallet.format_wallet_migration_notice``. Addresses
+    are derived from the discovered secret key rather than trusted from the
+    file's "address" field.
+
+    Args:
+        new_address: Address of the wallet that was just created
+
+    Returns:
+        Formatted notice, or None if nothing was discovered
+    """
+    try:
+        discovered = scan_solana_wallets()
+    except Exception:
+        return None
+
+    addresses = []
+    for entry in discovered:
+        try:
+            addresses.append(get_solana_public_key(entry["private_key"]))
+        except Exception:
+            continue
+
+    if not addresses:
+        return None
+
+    found = "\n".join(f"  {addr}" for addr in addresses)
+    return f"""
+NOTICE: BlockRun created a new Solana wallet, but also found existing
+wallet(s) belonging to other applications on this system:
+
+{found}
+
+BlockRun now uses only its own wallet:
+
+  {new_address}
+
+Discovered wallets are never adopted automatically — one may belong to a
+different application, or have been planted to make you fund an address you
+do not control.
+
+If an address above is yours and holds your USDC, import it deliberately:
+
+  export SOLANA_WALLET_KEY=<private-key>
+
+or write that key to ~/.blockrun/.solana-session
+"""
+
+
 def setup_agent_solana_wallet(silent: bool = False) -> "SolanaLLMClient":
     """
     Set up Solana wallet for agent use and return a SolanaLLMClient.
@@ -262,8 +314,16 @@ def setup_agent_solana_wallet(silent: bool = False) -> "SolanaLLMClient":
 
     result = get_or_create_solana_wallet()
 
-    if result["is_new"] and not silent:
-        print(f"New Solana wallet created: {result['address']}", file=sys.stderr)
+    if result["is_new"]:
+        # Printed even when silent: `silent` suppresses the welcome message,
+        # and losing sight of a funded wallet is not something to stay quiet
+        # about.
+        notice = format_solana_wallet_migration_notice(str(result["address"]))
+        if notice:
+            print(notice, file=sys.stderr)
+
+        if not silent:
+            print(f"New Solana wallet created: {result['address']}", file=sys.stderr)
 
     from .solana_client import SolanaLLMClient
 

@@ -131,7 +131,8 @@ def get_or_create_wallet() -> Tuple[str, str, bool]:
     Priority:
     1. BLOCKRUN_WALLET_KEY / BASE_CHAIN_WALLET_KEY environment variable
     2. ~/.blockrun/.session file
-    3. Create new wallet
+    3. ~/.blockrun/wallet.key (legacy)
+    4. Create new wallet
 
     Returns:
         Tuple of (address, private_key, is_new)
@@ -143,15 +144,16 @@ def get_or_create_wallet() -> Tuple[str, str, bool]:
         account = Account.from_key(key)
         return account.address, key, False
 
-    # 2. Canonical BlockRun session file. scan_wallets() is exposed for an
-    # explicit migration flow only and must not affect automatic selection.
-    if WALLET_FILE.exists():
-        file_key = WALLET_FILE.read_text().strip()
-        if file_key:
-            account = Account.from_key(file_key)
-            return account.address, file_key, False
+    # 2-3. Canonical BlockRun wallet, then the legacy wallet.key. Delegating to
+    # load_wallet() keeps this in step with the TypeScript SDK, which resolves
+    # the same two files. scan_wallets() is exposed for an explicit migration
+    # flow only and must not affect automatic selection.
+    file_key = load_wallet()
+    if file_key:
+        account = Account.from_key(file_key)
+        return account.address, file_key, False
 
-    # 3. Create new wallet
+    # 4. Create new wallet
     address, key = create_wallet()
     save_wallet(key)
     return address, key, True
@@ -365,6 +367,64 @@ def get_payment_links(address: str) -> dict:
     }
 
 
+def format_wallet_migration_notice(new_address: str) -> Optional[str]:
+    """
+    Warn when a new wallet was created while other provider wallets exist.
+
+    Automatic selection deliberately ignores wallets discovered in other
+    applications' directories, so a user who previously relied on that
+    discovery would otherwise land on an empty wallet with no explanation of
+    where their funds went. This notice names the discovered addresses and
+    tells them how to import one on purpose.
+
+    Addresses are derived from the discovered private key rather than read
+    from the file's "address" field, so a file claiming an address it cannot
+    sign for cannot trick the user into importing it.
+
+    Args:
+        new_address: Address of the wallet that was just created
+
+    Returns:
+        Formatted notice, or None if nothing was discovered
+    """
+    try:
+        discovered = scan_wallets()
+    except Exception:
+        return None
+
+    addresses = []
+    for entry in discovered:
+        try:
+            addresses.append(Account.from_key(entry["private_key"]).address)
+        except Exception:
+            continue
+
+    if not addresses:
+        return None
+
+    found = "\n".join(f"  {addr}" for addr in addresses)
+    return f"""
+NOTICE: BlockRun created a new wallet, but also found existing wallet(s)
+belonging to other applications on this system:
+
+{found}
+
+BlockRun now uses only its own wallet:
+
+  {new_address}
+
+Discovered wallets are never adopted automatically — one may belong to a
+different application, or have been planted to make you fund an address you
+do not control.
+
+If an address above is yours and holds your USDC, import it deliberately:
+
+  export BLOCKRUN_WALLET_KEY=<private-key>
+
+or write that key to ~/.blockrun/.session
+"""
+
+
 def format_wallet_created_message(address: str, open_qr: bool = True) -> str:
     """
     Format the message shown when a new wallet is created.
@@ -491,8 +551,15 @@ def setup_agent_wallet(silent: bool = False) -> "LLMClient":
 
     address, key, is_new = get_or_create_wallet()
 
-    if is_new and not silent:
-        print(format_wallet_created_message(address), file=sys.stderr)
+    if is_new:
+        # Printed even when silent: `silent` suppresses the welcome banner, and
+        # losing sight of a funded wallet is not something to stay quiet about.
+        notice = format_wallet_migration_notice(address)
+        if notice:
+            print(notice, file=sys.stderr)
+
+        if not silent:
+            print(format_wallet_created_message(address), file=sys.stderr)
 
     # Import here to avoid circular import
     from .client import LLMClient

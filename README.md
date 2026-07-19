@@ -1557,8 +1557,29 @@ sol_wallets = scan_solana_wallets()
 ```
 
 `get_or_create_wallet()` always uses `~/.blockrun/.session` (or an explicit
-wallet environment variable). Review the discovered addresses and import one
-explicitly if you intend to switch wallets.
+wallet environment variable, or the legacy `~/.blockrun/wallet.key`). Review
+the discovered addresses and import one explicitly if you intend to switch
+wallets.
+
+### Upgrading from a provider wallet
+
+Earlier versions adopted the most recently written provider wallet
+automatically. If you relied on that, the first run after upgrading creates a
+fresh BlockRun wallet and prints the addresses it found, so you can import the
+one you actually own:
+
+```
+NOTICE: BlockRun created a new wallet, but also found existing wallet(s)
+belonging to other applications on this system:
+
+  0x88f9B82462f6C4bf4a0Fb15e5c3971559a316e7f
+...
+```
+
+Import it deliberately with `export BLOCKRUN_WALLET_KEY=<private-key>`, or by
+writing the key to `~/.blockrun/.session`. Addresses in that notice are derived
+from the discovered key itself, so a wallet file cannot claim an address it
+cannot sign for.
 
 ## Response Caching
 

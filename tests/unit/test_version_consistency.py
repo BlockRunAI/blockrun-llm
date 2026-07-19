@@ -31,3 +31,19 @@ def test_version_matches_pyproject():
         f"version drift: __init__.py={blockrun_llm.__version__!r} "
         f"!= pyproject.toml={_pyproject_version()!r} — bump BOTH on release"
     )
+
+
+_VERSION_FILE = Path(__file__).resolve().parents[2] / "VERSION"
+
+
+def test_version_matches_version_file():
+    """The VERSION file is the third declaration and drifts the most quietly.
+
+    It sat at 1.4.0 while pyproject.toml and __init__.py were both on 1.7.0,
+    because the two-way check above cannot see it.
+    """
+    declared = _VERSION_FILE.read_text(encoding="utf-8").strip()
+    assert declared == _pyproject_version(), (
+        f"version drift: VERSION={declared!r} "
+        f"!= pyproject.toml={_pyproject_version()!r} — bump ALL THREE on release"
+    )
