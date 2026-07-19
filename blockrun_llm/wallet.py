@@ -60,10 +60,11 @@ def save_wallet(private_key: str) -> Path:
 
 def scan_wallets() -> List[Dict[str, str]]:
     """
-    Scan ~/.<dir>/wallet.json files from any provider (agentcash, etc.).
+    Discover ~/.<dir>/wallet.json files from other providers.
 
     Each file should contain JSON with "privateKey" and "address" fields.
-    Results are sorted by modification time (most recent first).
+    Results are sorted by modification time (most recent first). Discovery is
+    opt-in and must never replace the canonical BlockRun wallet automatically.
 
     Returns:
         List of dicts with 'private_key' and 'address', most recent first
@@ -100,19 +101,14 @@ def load_wallet() -> Optional[str]:
     Load wallet private key from file.
 
     Priority:
-    1. Scan ~/.*/wallet.json (any provider)
-    2. Legacy ~/.blockrun/.session
-    3. Legacy ~/.blockrun/wallet.key
+    1. ~/.blockrun/.session
+    2. ~/.blockrun/wallet.key (legacy)
 
     Returns:
         Private key string or None if not found
     """
-    # Scan provider wallet files
-    wallets = scan_wallets()
-    if wallets:
-        return wallets[0]["private_key"]
-
-    # Check .session (legacy)
+    # The canonical BlockRun wallet always wins. Do not implicitly adopt a
+    # wallet discovered in another application's private storage.
     if WALLET_FILE.exists():
         key = WALLET_FILE.read_text().strip()
         if key:
@@ -134,9 +130,8 @@ def get_or_create_wallet() -> Tuple[str, str, bool]:
 
     Priority:
     1. BLOCKRUN_WALLET_KEY / BASE_CHAIN_WALLET_KEY environment variable
-    2. Scan ~/.*/wallet.json (any provider)
-    3. ~/.blockrun/.session file
-    4. Create new wallet
+    2. ~/.blockrun/.session file
+    3. Create new wallet
 
     Returns:
         Tuple of (address, private_key, is_new)
@@ -148,20 +143,15 @@ def get_or_create_wallet() -> Tuple[str, str, bool]:
         account = Account.from_key(key)
         return account.address, key, False
 
-    # 2. Scan provider wallets
-    wallets = scan_wallets()
-    if wallets:
-        account = Account.from_key(wallets[0]["private_key"])
-        return account.address, wallets[0]["private_key"], False
-
-    # 3. Legacy session file
+    # 2. Canonical BlockRun session file. scan_wallets() is exposed for an
+    # explicit migration flow only and must not affect automatic selection.
     if WALLET_FILE.exists():
         file_key = WALLET_FILE.read_text().strip()
         if file_key:
             account = Account.from_key(file_key)
             return account.address, file_key, False
 
-    # 4. Create new wallet
+    # 3. Create new wallet
     address, key = create_wallet()
     save_wallet(key)
     return address, key, True
