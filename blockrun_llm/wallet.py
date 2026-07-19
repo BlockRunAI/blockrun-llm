@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
@@ -67,10 +68,12 @@ def scan_wallets() -> List[Dict[str, str]]:
     opt-in and must never replace the canonical BlockRun wallet automatically.
 
     Returns:
-        List of dicts with 'private_key' and 'address', most recent first
+        List of dicts with 'private_key', 'address' and 'source', most recent
+        first. 'address' is the file's own claim — use list_discovered_wallets()
+        for an address derived from the key.
     """
     home = Path.home()
-    results: List[tuple] = []  # (mtime, private_key, address)
+    results: List[tuple] = []  # (mtime, private_key, address, source)
 
     try:
         for entry in home.iterdir():
@@ -85,7 +88,7 @@ def scan_wallets() -> List[Dict[str, str]]:
                 addr = data.get("address", "")
                 if pk and addr:
                     mtime = wallet_file.stat().st_mtime
-                    results.append((mtime, pk, addr))
+                    results.append((mtime, pk, addr, str(wallet_file)))
             except (json.JSONDecodeError, OSError):
                 continue
     except OSError:
@@ -93,7 +96,80 @@ def scan_wallets() -> List[Dict[str, str]]:
 
     # Sort by modification time, most recent first
     results.sort(key=lambda x: x[0], reverse=True)
-    return [{"private_key": pk, "address": addr} for _, pk, addr in results]
+    return [{"private_key": pk, "address": addr, "source": src} for _, pk, addr, src in results]
+
+
+def list_discovered_wallets() -> List[Dict[str, str]]:
+    """
+    List wallets from other applications, safe to show to a user.
+
+    Unlike scan_wallets(), the private key is not returned and the address is
+    derived from the key rather than read from the file, so a wallet file
+    cannot claim an address it has no key for.
+
+    Nothing here is active. Adopt one deliberately with import_wallet().
+
+    Returns:
+        List of dicts with 'address' and 'source', most recent first
+    """
+    listed = []
+    for entry in scan_wallets():
+        try:
+            address = Account.from_key(entry["private_key"]).address
+        except Exception:
+            continue
+        listed.append({"address": address, "source": entry.get("source", "")})
+    return listed
+
+
+def import_wallet(address: str) -> str:
+    """
+    Adopt a discovered wallet by address, making it the active BlockRun wallet.
+
+    This is the deliberate migration path: automatic selection never adopts a
+    discovered wallet, but you can choose one whose funds you want to spend.
+    Matching is done against the address *derived from each discovered key*, so
+    a wallet file claiming someone else's address can never be selected by it.
+
+    The current ~/.blockrun/.session is backed up beside itself before being
+    overwritten, so adopting a wallet can't strand the funds in the old one.
+
+    Args:
+        address: Address to adopt, as shown by list_discovered_wallets()
+
+    Returns:
+        The adopted address
+
+    Raises:
+        ValueError: If no discovered wallet derives to that address
+    """
+    wanted = address.strip().lower()
+
+    for entry in scan_wallets():
+        try:
+            derived = Account.from_key(entry["private_key"]).address
+        except Exception:
+            continue
+
+        if derived.lower() != wanted:
+            continue
+
+        # Preserve the outgoing wallet — it may hold funds.
+        if WALLET_FILE.exists():
+            current = WALLET_FILE.read_text().strip()
+            if current and current != entry["private_key"]:
+                backup = WALLET_FILE.with_name(f".session.backup-{int(time.time())}")
+                backup.write_text(current)
+                backup.chmod(0o600)
+
+        save_wallet(entry["private_key"])
+        return derived
+
+    available = [w["address"] for w in list_discovered_wallets()]
+    raise ValueError(
+        f"No discovered wallet controls {address}. "
+        f"Available: {', '.join(available) if available else 'none'}"
+    )
 
 
 def load_wallet() -> Optional[str]:
@@ -417,11 +493,13 @@ Discovered wallets are never adopted automatically — one may belong to a
 different application, or have been planted to make you fund an address you
 do not control.
 
-If an address above is yours and holds your USDC, import it deliberately:
+If an address above is yours and holds your USDC, adopt it deliberately:
 
-  export BLOCKRUN_WALLET_KEY=<private-key>
+  from blockrun_llm import import_wallet
+  import_wallet("<address-from-the-list-above>")
 
-or write that key to ~/.blockrun/.session
+Your current wallet is backed up first. You can also set
+BLOCKRUN_WALLET_KEY=<private-key> for a single run without changing anything.
 """
 
 

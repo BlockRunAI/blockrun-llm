@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
@@ -153,10 +154,12 @@ def scan_solana_wallets() -> List[Dict[str, str]]:
     32-byte seeds are automatically converted to 64-byte keypairs.
 
     Returns:
-        List of dicts with 'private_key' and 'address', most recent first
+        List of dicts with 'private_key', 'address' and 'source', most recent
+        first. 'address' is the file's own claim — use
+        list_discovered_solana_wallets() for an address derived from the key.
     """
     home = Path.home()
-    results: List[tuple] = []  # (mtime, private_key, address)
+    results: List[tuple] = []  # (mtime, private_key, address, source)
 
     try:
         for entry in home.iterdir():
@@ -176,7 +179,7 @@ def scan_solana_wallets() -> List[Dict[str, str]]:
                     except Exception:
                         pass
                     mtime = wallet_file.stat().st_mtime
-                    results.append((mtime, pk, addr))
+                    results.append((mtime, pk, addr, str(wallet_file)))
             except (json.JSONDecodeError, OSError):
                 continue
     except OSError:
@@ -184,7 +187,74 @@ def scan_solana_wallets() -> List[Dict[str, str]]:
 
     # Sort by modification time, most recent first
     results.sort(key=lambda x: x[0], reverse=True)
-    return [{"private_key": pk, "address": addr} for _, pk, addr in results]
+    return [{"private_key": pk, "address": addr, "source": src} for _, pk, addr, src in results]
+
+
+def list_discovered_solana_wallets() -> List[Dict[str, str]]:
+    """
+    List Solana wallets from other applications, safe to show to a user.
+
+    Solana counterpart of ``wallet.list_discovered_wallets``: no secret key is
+    returned and the address is derived from the key rather than trusted from
+    the file. Nothing here is active — adopt one with import_solana_wallet().
+
+    Returns:
+        List of dicts with 'address' and 'source', most recent first
+    """
+    listed = []
+    for entry in scan_solana_wallets():
+        try:
+            address = get_solana_public_key(entry["private_key"])
+        except Exception:
+            continue
+        listed.append({"address": address, "source": entry.get("source", "")})
+    return listed
+
+
+def import_solana_wallet(address: str) -> str:
+    """
+    Adopt a discovered Solana wallet, making it the active BlockRun wallet.
+
+    Solana counterpart of ``wallet.import_wallet``. Matching is done against the
+    address derived from each discovered key, and the current
+    ~/.blockrun/.solana-session is backed up before being overwritten.
+
+    Args:
+        address: Address to adopt, as shown by list_discovered_solana_wallets()
+
+    Returns:
+        The adopted address
+
+    Raises:
+        ValueError: If no discovered wallet derives to that address
+    """
+    wanted = address.strip()
+
+    for entry in scan_solana_wallets():
+        try:
+            derived = get_solana_public_key(entry["private_key"])
+        except Exception:
+            continue
+
+        # Base58 is case-sensitive — compare exactly, unlike EVM hex.
+        if derived != wanted:
+            continue
+
+        if SOLANA_WALLET_FILE.exists():
+            current = SOLANA_WALLET_FILE.read_text().strip()
+            if current and current != entry["private_key"]:
+                backup = SOLANA_WALLET_FILE.with_name(f".solana-session.backup-{int(time.time())}")
+                backup.write_text(current)
+                backup.chmod(0o600)
+
+        save_solana_wallet(entry["private_key"])
+        return derived
+
+    available = [w["address"] for w in list_discovered_solana_wallets()]
+    raise ValueError(
+        f"No discovered wallet controls {address}. "
+        f"Available: {', '.join(available) if available else 'none'}"
+    )
 
 
 def load_solana_wallet() -> Optional[str]:
@@ -283,11 +353,13 @@ Discovered wallets are never adopted automatically — one may belong to a
 different application, or have been planted to make you fund an address you
 do not control.
 
-If an address above is yours and holds your USDC, import it deliberately:
+If an address above is yours and holds your USDC, adopt it deliberately:
 
-  export SOLANA_WALLET_KEY=<private-key>
+  from blockrun_llm import import_solana_wallet
+  import_solana_wallet("<address-from-the-list-above>")
 
-or write that key to ~/.blockrun/.solana-session
+Your current wallet is backed up first. You can also set
+SOLANA_WALLET_KEY=<private-key> for a single run without changing anything.
 """
 
 

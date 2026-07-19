@@ -148,6 +148,10 @@ from .wallet import (
     save_wallet_qr,
     open_wallet_qr,
     load_wallet,
+    scan_wallets,
+    list_discovered_wallets,
+    import_wallet,
+    format_wallet_migration_notice,
     create_wallet as generate_wallet,  # User-friendly alias
     WALLET_FILE,
     WALLET_DIR,
@@ -160,6 +164,10 @@ from .solana_wallet import (
     get_or_create_solana_wallet,
     create_solana_wallet,
     load_solana_wallet,
+    scan_solana_wallets,
+    list_discovered_solana_wallets,
+    import_solana_wallet,
+    format_solana_wallet_migration_notice,
     get_solana_public_key,
 )
 from .cache import (
@@ -170,7 +178,7 @@ from .cache import (
 )
 from .tx_log import TransactionLogger, decode_settlement_header, format_row
 
-__version__ = "1.7.2"
+__version__ = "1.8.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -264,6 +272,10 @@ __all__ = [
     "save_wallet_qr",
     "open_wallet_qr",
     "load_wallet",
+    "scan_wallets",
+    "list_discovered_wallets",
+    "import_wallet",
+    "format_wallet_migration_notice",
     "WALLET_FILE",
     "WALLET_DIR",
     # Solana wallet utilities
@@ -274,6 +286,10 @@ __all__ = [
     "get_or_create_solana_wallet",
     "create_solana_wallet",
     "load_solana_wallet",
+    "scan_solana_wallets",
+    "list_discovered_solana_wallets",
+    "import_solana_wallet",
+    "format_solana_wallet_migration_notice",
     "get_solana_public_key",
     # Cache + billing utilities
     "clear_cache",
