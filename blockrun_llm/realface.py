@@ -82,6 +82,7 @@ from .validation import (
     sanitize_error_response,
     validate_resource_url,
 )
+from .tx_log import paid_request_error_prefix
 
 load_dotenv()
 
@@ -443,7 +444,9 @@ class RealFaceClient:
             )
 
         if retry.status_code != 200:
-            self._raise_api_error(retry, "RealFace enrollment failed after payment")
+            self._raise_api_error(
+                retry, f"RealFace enrollment: {paid_request_error_prefix(retry.headers)}"
+            )
 
         return RealFaceEnrollment(**retry.json())
 
