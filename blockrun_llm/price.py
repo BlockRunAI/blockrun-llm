@@ -46,6 +46,7 @@ from .validation import (
     validate_api_url,
     sanitize_error_response,
 )
+from .tx_log import paid_request_error_prefix
 
 
 load_dotenv()
@@ -285,7 +286,7 @@ class PriceClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                f"API error after payment: {retry.status_code}",
+                f"{paid_request_error_prefix(retry.headers)}: {retry.status_code}",
                 retry.status_code,
                 sanitize_error_response(error_body),
             )

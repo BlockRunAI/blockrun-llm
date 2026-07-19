@@ -41,6 +41,7 @@ from .validation import (
     validate_private_key,
     validate_resource_url,
 )
+from .tx_log import paid_request_error_prefix
 
 
 # Load environment variables
@@ -365,7 +366,7 @@ class ImageClient:
         except Exception:
             error_body = {"error": "Request failed"}
         raise APIError(
-            f"API error after payment: {retry_response.status_code}",
+            f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
             retry_response.status_code,
             sanitize_error_response(error_body),
         )
