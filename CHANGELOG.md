@@ -2,7 +2,7 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
-## 1.7.1 — 2026-07-19
+## 1.7.1 — 2026-07-18
 
 ### Security
 - **Keep the canonical BlockRun wallet authoritative.** Automatic wallet
@@ -10,6 +10,18 @@ All notable changes to blockrun-llm will be documented in this file.
   found in another application's dot-directory. The SDK now uses the user's
   own `~/.blockrun/.session` or `~/.blockrun/.solana-session`; provider-wallet
   discovery remains available only for an explicit, user-confirmed migration.
+- **Migration notice on first run after the lockdown.** When a new wallet is
+  created and other providers' wallets exist on the system, the SDK now names
+  those addresses and explains how to import one deliberately, instead of
+  silently leaving the user on an empty wallet. Addresses are derived from the
+  discovered key, so a wallet file claiming an address it cannot sign for
+  cannot trick you into funding it.
+
+### Fixed
+- **`get_or_create_wallet()` again honours the legacy `~/.blockrun/wallet.key`.**
+  It resolved only `.session`, so a user holding the legacy file was issued a
+  brand new wallet and lost sight of their funds. It now delegates to
+  `load_wallet()`, matching the TypeScript SDK.
 
 ## 1.7.0 — 2026-07-15
 
