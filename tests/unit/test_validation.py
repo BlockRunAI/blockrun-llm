@@ -132,8 +132,8 @@ class TestValidateMaxTokens:
         validate_max_tokens(100000)
         # Real ceilings the gateway serves — these were rejected before the
         # sanity bound was raised, despite every provider accepting them.
-        validate_max_tokens(128000)   # opus-4.8 / sonnet-5 / gpt-5.6 / glm-5
-        validate_max_tokens(262144)   # zai/glm-5.2
+        validate_max_tokens(128000)  # opus-4.8 / sonnet-5 / gpt-5.6 / glm-5
+        validate_max_tokens(262144)  # zai/glm-5.2
 
     def test_accept_none(self):
         """Should accept None."""
