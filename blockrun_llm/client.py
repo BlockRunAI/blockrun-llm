@@ -174,6 +174,15 @@ def _mark_settled(exc: BaseException) -> BaseException:
     a live outcome class ("CHARGED BUT REQUEST FAILED"). The tag is an
     attribute rather than a new exception type so callers catching
     ``httpx.TimeoutException`` keep working unchanged.
+
+    Applied to every exception escaping the paid leg, not just timeouts. The
+    dominant post-settlement failure is a paid 5xx, which surfaces as
+    ``APIError(status_code=503)`` — precisely a status :func:`_should_fallback`
+    treats as retriable, so tagging only timeouts left the six-settlement path
+    fully open. Over-tagging is the safe direction here: the handlers begin at an
+    already-read 402 response and ``create_payment_payload`` is local signing
+    with no network I/O, so the only exceptions that can be tagged without a
+    settlement are ones :func:`_should_fallback` already refuses.
     """
     setattr(exc, _SETTLED_ATTR, True)
     return exc
@@ -204,7 +213,20 @@ def _should_fallback(exc: Exception) -> bool:
 
 # The gateway states the output-token ceiling it actually quoted in the 402's
 # ``resource.description``, e.g. "claude-opus-4.8 ... 128000 max output tokens".
-_QUOTED_MAX_TOKENS_RE = re.compile(r"(\d[\d,]*)\s*max output tokens", re.IGNORECASE)
+#
+# The alternation is bounded on both branches and the leading lookbehind stops a
+# match from starting mid-number, so there is no super-linear backtracking. The
+# earlier `(\d[\d,]*)` was quadratic on a digit run: 8k digits took 1.07s and 16k
+# took 11.88s, and this runs on a server-controlled string inside the payment
+# path, so a long description would have stalled every paid call.
+_QUOTED_MAX_TOKENS_RE = re.compile(
+    r"(?<![\d,])(\d{1,3}(?:,\d{3})*|\d{1,9})\s{0,4}max output tokens",
+    re.IGNORECASE,
+)
+
+# Cap what we hand the regex. The ceiling always appears near the start of the
+# description; anything beyond this is not a ceiling, it is a payload.
+_DESCRIPTION_SCAN_LIMIT = 512
 
 
 def _warn_if_clamped(body: Dict[str, Any], resource_description: Optional[str]) -> None:
@@ -217,31 +239,40 @@ def _warn_if_clamped(body: Dict[str, Any], resource_description: Optional[str]) 
     passed straight into the signature and discarded. Surfacing it here is the
     caller's one chance to learn their value was dropped before they pay.
 
-    Best-effort by construction: if the description doesn't carry a recognizable
-    ceiling, stay silent rather than guess. A missed warning costs the caller
-    nothing beyond today's behavior; a wrong one would erode trust in all of them.
+    Best-effort by construction: if the description doesn't carry exactly one
+    recognizable ceiling, stay silent rather than guess. A missed warning costs
+    the caller nothing beyond today's behavior; a wrong one would erode trust in
+    all of them. The whole body is guarded because this runs on server-controlled
+    text immediately before signing, and a diagnostic must never be the reason a
+    paid request fails.
     """
-    requested = body.get("max_tokens")
-    # bool is an int subclass; a stray True is not a token count.
-    if not isinstance(requested, int) or isinstance(requested, bool):
-        return
-    if not resource_description:
-        return
-
-    match = _QUOTED_MAX_TOKENS_RE.search(resource_description)
-    if not match:
-        return
     try:
-        quoted = int(match.group(1).replace(",", ""))
-    except ValueError:
-        return
+        requested = body.get("max_tokens")
+        # bool is an int subclass; a stray True is not a token count.
+        if not isinstance(requested, int) or isinstance(requested, bool):
+            return
+        # The gateway sends a string here, but the field is server-controlled and
+        # JSON allows anything; a non-string must not reach re.search.
+        if not isinstance(resource_description, str) or not resource_description:
+            return
 
-    if quoted < requested:
-        sys.stderr.write(
-            f"[blockrun_llm] max_tokens clamped by the gateway: you asked for "
-            f"{requested}, {body.get('model', 'this model')} tops out at {quoted}. "
-            f"You are being quoted for {quoted} output tokens, not {requested}.\n"
-        )
+        matches = _QUOTED_MAX_TOKENS_RE.findall(resource_description[:_DESCRIPTION_SCAN_LIMIT])
+        # Two candidates means the format is not what we think it is (a rate like
+        # "per 1000 max output tokens" would otherwise read as the ceiling).
+        if len(matches) != 1:
+            return
+        quoted = int(matches[0].replace(",", ""))
+
+        if quoted < requested:
+            sys.stderr.write(
+                f"[blockrun_llm] max_tokens clamped by the gateway: you asked for "
+                f"{requested}, {body.get('model', 'this model')} tops out at {quoted}. "
+                f"You are being quoted for {quoted} output tokens, not {requested}.\n"
+            )
+    except Exception:
+        # A warning that breaks the request it is warning about is worse than no
+        # warning. Includes a closed/broken stderr.
+        return
 
 
 def _detect_network(api_url: str) -> str:
@@ -922,7 +953,7 @@ class LLMClient:
         assert payment_headers is not None  # break implies signing succeeded
         try:
             yield from self._stream_paid_phase(url, body, payment_headers, cost_usd, timeout)
-        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        except Exception as exc:
             raise _mark_settled(exc) from None
 
     def _stream_paid_phase(
@@ -1177,7 +1208,7 @@ class LLMClient:
             # Tag it so the fallback chain doesn't settle again on the next model.
             try:
                 return self._handle_payment_and_retry(url, body, response)
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            except Exception as exc:
                 raise _mark_settled(exc) from None
 
         # Handle other errors
@@ -1365,7 +1396,7 @@ class LLMClient:
         if response.status_code == 402:
             try:
                 result = self._handle_payment_and_retry_raw(url, body, response)
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            except Exception as exc:
                 raise _mark_settled(exc) from None
             # Save paid response to cache
             save_to_cache(
@@ -2635,7 +2666,7 @@ class AsyncLLMClient:
                 url, body, payment_headers, cost_usd, timeout
             ):
                 yield chunk
-        except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        except Exception as exc:
             raise _mark_settled(exc) from None
 
     async def _astream_paid_phase(
@@ -2791,7 +2822,7 @@ class AsyncLLMClient:
             # See the sync path: past this point the payment is settled.
             try:
                 return await self._handle_payment_and_retry(url, body, response)
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            except Exception as exc:
                 raise _mark_settled(exc) from None
 
         if response.status_code != 200:
@@ -2955,7 +2986,7 @@ class AsyncLLMClient:
         if response.status_code == 402:
             try:
                 result = await self._handle_payment_and_retry_raw(url, body, response)
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            except Exception as exc:
                 raise _mark_settled(exc) from None
             save_to_cache(
                 endpoint,

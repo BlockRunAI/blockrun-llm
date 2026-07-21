@@ -11,8 +11,19 @@ All notable changes to blockrun-llm will be documented in this file.
   transient one, so the chain advanced to the next model and signed again —
   `smart_chat` on the premium complex tier could settle six payments and return
   no tokens, the "CHARGED BUT REQUEST FAILED" outcome this file already
-  documents under 1.7.1. Callers catching `httpx.TimeoutException` are
-  unaffected; the marker is an attribute, not a new exception type.
+  documents under 1.7.1. This covers every error escaping the paid leg, not
+  only timeouts: the dominant post-settlement failure is a paid 5xx, which
+  arrives as `APIError(503)` — exactly a status the fallback logic treats as
+  retriable. Callers catching `httpx.TimeoutException` are unaffected; the
+  marker is an attribute, not a new exception type.
+- **The clamp warning cannot break the request it warns about.** Its parse ran
+  on `resource.description`, a server-controlled string, immediately before
+  signing. A non-string value raised `TypeError` and aborted the call, and the
+  pattern backtracked super-linearly on a long digit run (2.78s at 16k digits,
+  and it grows). The number is now matched by a bounded pattern against a
+  length-capped slice, an ambiguous description (a per-unit rate alongside the
+  ceiling) stays silent instead of naming the wrong number, and the whole helper
+  swallows its own failures.
 - **Removed a documented payment guard that does not exist.**
   `chat_completion()` advertised `PaymentError: If budget is set and would be
   exceeded`. There is no `budget` parameter anywhere in the SDK and no
