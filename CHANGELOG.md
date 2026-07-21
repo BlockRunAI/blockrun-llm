@@ -2,6 +2,36 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.9.0 — 2026-07-21
+
+### Added
+- **Client-side spend limits.** `max_cost_per_call` and `max_session_cost` on
+  every client (Base and Solana, sync and async) refuse a quote that costs more
+  than you allowed:
+
+  ```python
+  client = LLMClient(max_cost_per_call=0.25, max_session_cost=10.00)
+  ```
+
+  Also settable per-deployment without code changes, via
+  `BLOCKRUN_MAX_COST_PER_CALL` and `BLOCKRUN_MAX_SESSION_COST`. An explicit
+  argument wins over the env var; a malformed env value is ignored rather than
+  raising, so a bad deploy variable cannot brick every client.
+
+  The refusal happens **before the paid request is sent**, so nothing settles
+  and nothing is charged — signing alone moves no money, the gateway submitting
+  the signed authorization does. The new `SpendLimitError` carries `quoted_usd`,
+  `limit_usd` and `scope` (`"call"` or `"session"`), and subclasses
+  `PaymentError` so existing handlers keep working and the model fallback chain
+  refuses it rather than shopping for a cheaper model.
+
+  Both limits are **opt-in and unset by default**, so nothing changes for
+  existing callers. Until now the SDK had no ceiling anywhere: it computed
+  `cost_usd` and signed the quote in the next statement, with nothing compared
+  against anything — while `chat_completion` documented a
+  `PaymentError: If budget is set and would be exceeded` for a `budget`
+  parameter that did not exist. That docstring is now true.
+
 ## 1.8.2 — 2026-07-21
 
 Supersedes 1.8.1, which was published from a tree where `VERSION` and
