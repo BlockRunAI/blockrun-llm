@@ -52,6 +52,17 @@ file. Install 1.8.2 to get a package whose self-reported version is truthful.
   Both now describe clamping.
 
 ### Fixed
+- **`max_tokens` is validated on Solana too.** `validate_max_tokens` was called
+  from the Base client and nowhere else; the Solana client put the caller's
+  value straight into paid request bodies at all four chat entry points, so
+  `max_tokens=2_000_000` raised on Base and was signed and sent on Solana. With
+  the gateway clamping rather than rejecting, nothing on either side caught it.
+- **`bool` no longer passes as a number.** `bool` is an `int` subclass, so
+  `isinstance(True, int)` is `True` and `max_tokens=True`, `temperature=True`
+  and `top_p=False` all sailed through and reached the wire as JSON `true` /
+  `false`. All three numeric validators now reject it, naming `bool` rather
+  than saying "must be a number" — which reads as wrong to anyone who knows
+  `bool` is one.
 - Line endings are normalized repo-wide via `.gitattributes` (`* text=auto`).
   17 tracked files were CRLF against an otherwise-LF tree, which turned a
   51-line change into a 1045-line diff in #27.
