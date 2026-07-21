@@ -2,16 +2,23 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
-## Unreleased
+## 1.8.2 — 2026-07-21
+
+Supersedes 1.8.1, which was published from a tree where `VERSION` and
+`__init__.py` still read 1.8.0. That wheel reports `__version__ == "1.8.0"` and
+cannot be corrected in place, since PyPI does not allow overwriting a published
+file. Install 1.8.2 to get a package whose self-reported version is truthful.
 
 ### Security
-- **A timed-out paid request no longer triggers a second payment.** Any error
-  raised after the `PAYMENT-SIGNATURE` went out is now refused for model
-  fallback. Previously a post-settlement timeout was indistinguishable from a
-  transient one, so the chain advanced to the next model and signed again —
-  `smart_chat` on the premium complex tier could settle six payments and return
-  no tokens, the "CHARGED BUT REQUEST FAILED" outcome this file already
-  documents under 1.7.1. This covers every error escaping the paid leg, not
+- **A failed paid request no longer triggers a second payment, on either
+  chain.** Any error raised after the `PAYMENT-SIGNATURE` went out is now
+  refused for model fallback, for both Base (`_should_fallback`) and Solana
+  (`_should_fallback_solana`). Previously a post-settlement failure was
+  indistinguishable from a transient one, so the chain advanced to the next
+  model and signed again — `smart_chat` on the premium complex tier could
+  settle six payments and return no tokens, the "CHARGED BUT REQUEST FAILED"
+  outcome this file already documents under 1.7.1. This covers every error
+  escaping the paid leg, not
   only timeouts: the dominant post-settlement failure is a paid 5xx, which
   arrives as `APIError(503)` — exactly a status the fallback logic treats as
   retriable. Callers catching `httpx.TimeoutException` are unaffected; the
