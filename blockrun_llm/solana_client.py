@@ -1147,7 +1147,13 @@ class SolanaLLMClient:
             response = self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
-            return self._handle_payment_and_retry(url, body, response, timeout=eff_timeout)
+            # Past this point the SPL USDC transfer has been signed. Tag
+            # anything that escapes so no fallback chain can buy a retry.
+            try:
+                return self._handle_payment_and_retry(url, body, response, timeout=eff_timeout)
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
 
         if not response.is_success:
             try:
@@ -1261,7 +1267,15 @@ class SolanaLLMClient:
             response = self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
-            result = self._handle_payment_and_retry_raw(url, body, response, timeout=eff_timeout)
+            # Past this point the SPL USDC transfer has been signed. Tag
+            # anything that escapes so no fallback chain can buy a retry.
+            try:
+                result = self._handle_payment_and_retry_raw(
+                    url, body, response, timeout=eff_timeout
+                )
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
             save_to_cache(
                 endpoint,
                 body,
@@ -3339,7 +3353,15 @@ class AsyncSolanaLLMClient:
             response = await self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
-            return await self._handle_payment_and_retry(url, body, response, timeout=eff_timeout)
+            # Past this point the SPL USDC transfer has been signed. Tag
+            # anything that escapes so no fallback chain can buy a retry.
+            try:
+                return await self._handle_payment_and_retry(
+                    url, body, response, timeout=eff_timeout
+                )
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
 
         if not response.is_success:
             try:
