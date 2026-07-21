@@ -299,7 +299,10 @@ def validate_temperature(temperature: Optional[float]) -> None:
     if temperature is None:
         return
 
-    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
+    if isinstance(temperature, bool):
+        raise ValueError("temperature must be a number, got a bool")
+
+    if not isinstance(temperature, (int, float)):
         raise ValueError("temperature must be a number")
 
     if temperature < 0 or temperature > 2:
@@ -322,7 +325,10 @@ def validate_top_p(top_p: Optional[float]) -> None:
     if top_p is None:
         return
 
-    if isinstance(top_p, bool) or not isinstance(top_p, (int, float)):
+    if isinstance(top_p, bool):
+        raise ValueError("top_p must be a number, got a bool")
+
+    if not isinstance(top_p, (int, float)):
         raise ValueError("top_p must be a number")
 
     if top_p < 0 or top_p > 1:
