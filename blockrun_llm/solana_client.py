@@ -67,6 +67,7 @@ from .validation import (
     sanitize_error_response,
     validate_api_url,
     validate_image_quality,
+    validate_max_tokens,
     validate_video_input_type,
 )
 
@@ -710,6 +711,7 @@ class SolanaLLMClient:
         client's chat baseline, ``DEFAULT_CHAT_TIMEOUT``). Raise it for
         large ``max_tokens`` runs against slow models.
         """
+        validate_max_tokens(max_tokens)
         body: Dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
             body["temperature"] = temperature
@@ -810,6 +812,7 @@ class SolanaLLMClient:
         Note: ``search_parameters`` is rejected by the BlockRun gateway in
         stream mode (HTTP 400). Codex / GPT-5.4-Pro also can't stream.
         """
+        validate_max_tokens(max_tokens)
         body: Dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -3006,6 +3009,7 @@ class AsyncSolanaLLMClient:
         response_format: Optional[Dict[str, Any]] = None,
         stop: Optional[Union[str, List[str]]] = None,
     ) -> ChatResponse:
+        validate_max_tokens(max_tokens)
         body: Dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
             body["temperature"] = temperature
@@ -3054,6 +3058,7 @@ class AsyncSolanaLLMClient:
         """Async streaming. Same protocol semantics as the sync
         :meth:`SolanaLLMClient.chat_completion_stream`; only the iteration
         protocol differs (``async for``)."""
+        validate_max_tokens(max_tokens)
         body: Dict[str, Any] = {
             "model": model,
             "messages": messages,

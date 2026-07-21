@@ -181,6 +181,14 @@ class TestValidateMaxTokens:
         with pytest.raises(ValueError, match="integer"):
             validate_max_tokens(100.5)  # type: ignore
 
+    def test_reject_bool(self):
+        """bool is an int subclass, so `isinstance(True, int)` is True and a
+        flag threaded into the wrong keyword reached the wire as
+        `"max_tokens": true`. It is not a token count."""
+        for bad in (True, False):
+            with pytest.raises(ValueError, match="bool"):
+                validate_max_tokens(bad)  # type: ignore
+
 
 class TestValidateTemperature:
     def test_accept_valid_values(self):
