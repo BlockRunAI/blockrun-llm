@@ -207,17 +207,20 @@ def validate_image_quality(quality: Optional[str]) -> None:
         )
 
 
-# Client-side typo guard, NOT a model limit. The gateway already enforces the
-# real per-model ceiling and rejects with that model's own number, so anything
-# the SDK hardcodes here can only be wrong in one direction: too low.
+# Client-side typo guard, NOT a model limit.
 #
-# This was 100000, and it silently capped every SDK caller below what models
-# actually support. Verified against the live gateway 2026-07-21 with the guard
-# bypassed: zai/glm-5.2 accepts 262144, and the entire 128000 class accepts
-# 128000 (claude-opus-4.8, claude-sonnet-5, claude-fable-5, gpt-5.6-sol/terra/
-# luna, gpt-5.5, gpt-5.4, gpt-5.3-codex, glm-5/5.1/5-turbo — 19 models, 19
-# accepted, zero rejections). Callers asking for those ceilings got a
-# ValueError that never reached the network and named a limit no provider set.
+# This was 100000, which sat below what models actually serve: zai/glm-5.2
+# serves 262144 and the common ceiling is 128000, so the SDK — not the model —
+# was the binding constraint, and callers got a ValueError naming a limit no
+# provider had set.
+#
+# The gateway does NOT reject an over-ceiling max_tokens. It silently clamps to
+# the model's ceiling and quotes payment for the clamped value (probed against
+# the live 402 leg 2026-07-21: opus-4.8 sent 262144 and 1000000 both quote the
+# 128000 price; gpt-5.2 sent 1e12 returns a quote, not a 400). So there is no
+# server-side rejection to fall back on — whatever passes here gets priced, and
+# anything above the model's ceiling is money spent on tokens you won't get.
+# ``LLMClient`` warns when it sees the gateway clamp; see ``_warn_if_clamped``.
 #
 # Keep a bound so an obvious mistake (1e9, a byte count, a timestamp) fails
 # fast locally instead of becoming a payment quote. Set it far above any real
@@ -250,8 +253,10 @@ def validate_max_tokens(max_tokens: Optional[int]) -> None:
     if max_tokens > MAX_TOKENS_SANITY_LIMIT:
         raise ValueError(
             f"max_tokens implausibly large (client-side sanity limit: "
-            f"{MAX_TOKENS_SANITY_LIMIT}). This is not a model limit — the "
-            f"gateway enforces the real per-model ceiling and reports it."
+            f"{MAX_TOKENS_SANITY_LIMIT}). This is not a model limit — no "
+            f"provider set it. Anything under it is sent to the gateway, "
+            f"which clamps to the model's own ceiling and charges for the "
+            f"clamped value rather than rejecting."
         )
 
 

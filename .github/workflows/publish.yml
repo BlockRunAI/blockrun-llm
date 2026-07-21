@@ -15,8 +15,40 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install build tools
-        run: pip install build
+      # 1.8.1 shipped with VERSION and __init__.py still reading 1.8.0. The
+      # guard test caught it, but only on the push-triggered CI run, after the
+      # release had been cut and published. PyPI does not allow overwriting a
+      # published file, so that artifact is permanently wrong.
+      #
+      # These steps run ci.yml's checks on the 3.11 leg only — black, ruff and
+      # the unit suite. They are NOT full CI: the 3.9 and 3.12 legs still run
+      # only on push, so version-incompatible syntax is caught there, not here.
+      # Extras match the 3.11 CI job so the gate covers the Solana paths; with
+      # the plain extra those tests importorskip and pass silently.
+      - name: Install package and test deps
+        run: pip install -e ".[dev,solana]" build
+
+      # A release tag that disagrees with the package version means the wrong
+      # tree is being published. PyPI would reject a duplicate version, but
+      # only after the release is cut; fail here instead.
+      - name: Verify the release tag matches VERSION
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          declared="v$(tr -d '[:space:]' < VERSION)"
+          if [ "$tag" != "$declared" ]; then
+            echo "Release tag $tag does not match VERSION ($declared)." >&2
+            exit 1
+          fi
+          echo "Release tag $tag matches VERSION."
+
+      - name: Check formatting
+        run: black --check blockrun_llm/ tests/
+
+      - name: Lint
+        run: ruff check blockrun_llm/ tests/
+
+      - name: Verify the release is publishable
+        run: pytest tests/unit -q
 
       - name: Build package
         run: python -m build

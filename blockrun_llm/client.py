@@ -38,6 +38,7 @@ Usage:
 """
 
 import os
+import re
 import sys
 import json as _json
 from typing import AsyncIterator, Iterator, List, Dict, Any, Optional, Tuple, Union
@@ -160,6 +161,33 @@ def list_image_models(api_url: str = "https://blockrun.ai/api") -> List[Dict[str
 # =============================================================================
 
 
+_SETTLED_ATTR = "blockrun_payment_settled"
+
+
+def _mark_settled(exc: BaseException) -> BaseException:
+    """Tag an exception raised after the x402 payment for this call was signed.
+
+    Signing is settlement. Once the PAYMENT-SIGNATURE has gone out, a retry on
+    another model is not a free retry: it triggers a fresh 402, a fresh
+    signature, and a fresh settlement. A six-model fallback chain can therefore
+    settle six times and return nothing, which the CHANGELOG already records as
+    a live outcome class ("CHARGED BUT REQUEST FAILED"). The tag is an
+    attribute rather than a new exception type so callers catching
+    ``httpx.TimeoutException`` keep working unchanged.
+
+    Applied to every exception escaping the paid leg, not just timeouts. The
+    dominant post-settlement failure is a paid 5xx, which surfaces as
+    ``APIError(status_code=503)`` — precisely a status :func:`_should_fallback`
+    treats as retriable, so tagging only timeouts left the six-settlement path
+    fully open. Over-tagging is the safe direction here: the handlers begin at an
+    already-read 402 response and ``create_payment_payload`` is local signing
+    with no network I/O, so the only exceptions that can be tagged without a
+    settlement are ones :func:`_should_fallback` already refuses.
+    """
+    setattr(exc, _SETTLED_ATTR, True)
+    return exc
+
+
 def _should_fallback(exc: Exception) -> bool:
     """Whether ``exc`` is the kind of transient failure that warrants trying
     the next model in a fallback chain.
@@ -167,9 +195,13 @@ def _should_fallback(exc: Exception) -> bool:
     True for: timeouts, network/connection errors, and APIError with 5xx
     status codes typically associated with upstream availability problems.
 
-    False for: 4xx client errors, PaymentError (wallet/balance issues), and
-    everything else — those are not "swap upstream and retry" situations.
+    False for: 4xx client errors, PaymentError (wallet/balance issues),
+    anything that already cost the caller a settled payment (see
+    :func:`_mark_settled`), and everything else — those are not "swap upstream
+    and retry" situations.
     """
+    if getattr(exc, _SETTLED_ATTR, False):
+        return False
     if isinstance(exc, httpx.TimeoutException):
         return True
     if isinstance(exc, httpx.NetworkError):
@@ -177,6 +209,72 @@ def _should_fallback(exc: Exception) -> bool:
     if isinstance(exc, APIError) and exc.status_code in (502, 503, 504, 522, 524):
         return True
     return False
+
+
+# The gateway states the output-token ceiling it actually quoted in the 402's
+# ``resource.description``, e.g. "claude-opus-4.8 ... 128000 max output tokens".
+#
+# The alternation is bounded on both branches and the leading lookbehind stops a
+# match from starting mid-number, so there is no super-linear backtracking. The
+# earlier `(\d[\d,]*)` was quadratic on a digit run — measured on CPython 3.13,
+# a string of N '9's: 4k 0.13s, 8k 0.49s, 16k 1.95s, and it keeps squaring. This
+# runs on a server-controlled string inside the payment path, so a long
+# description would have stalled every paid call. Same input, bounded pattern:
+# 0.0002s. `test_pattern_itself_is_not_backtracking` pins it.
+_QUOTED_MAX_TOKENS_RE = re.compile(
+    r"(?<![\d,])(\d{1,3}(?:,\d{3})*|\d{1,9})\s{0,4}max output tokens",
+    re.IGNORECASE,
+)
+
+# Cap what we hand the regex. The ceiling always appears near the start of the
+# description; anything beyond this is not a ceiling, it is a payload.
+_DESCRIPTION_SCAN_LIMIT = 512
+
+
+def _warn_if_clamped(body: Dict[str, Any], resource_description: Optional[str]) -> None:
+    """Warn when the gateway quoted fewer output tokens than the caller asked for.
+
+    An over-ceiling ``max_tokens`` is not rejected. The gateway silently clamps
+    to the model's ceiling and prices the clamped value, so the caller pays for
+    a ceiling they never asked for and never hears about it. The 402's
+    ``resource.description`` is the only disclosure, and it would otherwise be
+    passed straight into the signature and discarded. Surfacing it here is the
+    caller's one chance to learn their value was dropped before they pay.
+
+    Best-effort by construction: if the description doesn't carry exactly one
+    recognizable ceiling, stay silent rather than guess. A missed warning costs
+    the caller nothing beyond today's behavior; a wrong one would erode trust in
+    all of them. The whole body is guarded because this runs on server-controlled
+    text immediately before signing, and a diagnostic must never be the reason a
+    paid request fails.
+    """
+    try:
+        requested = body.get("max_tokens")
+        # bool is an int subclass; a stray True is not a token count.
+        if not isinstance(requested, int) or isinstance(requested, bool):
+            return
+        # The gateway sends a string here, but the field is server-controlled and
+        # JSON allows anything; a non-string must not reach re.search.
+        if not isinstance(resource_description, str) or not resource_description:
+            return
+
+        matches = _QUOTED_MAX_TOKENS_RE.findall(resource_description[:_DESCRIPTION_SCAN_LIMIT])
+        # Two candidates means the format is not what we think it is (a rate like
+        # "per 1000 max output tokens" would otherwise read as the ceiling).
+        if len(matches) != 1:
+            return
+        quoted = int(matches[0].replace(",", ""))
+
+        if quoted < requested:
+            sys.stderr.write(
+                f"[blockrun_llm] max_tokens clamped by the gateway: you asked for "
+                f"{requested}, {body.get('model', 'this model')} tops out at {quoted}. "
+                f"You are being quoted for {quoted} output tokens, not {requested}.\n"
+            )
+    except Exception:
+        # A warning that breaks the request it is warning about is worse than no
+        # warning. Includes a closed/broken stderr.
+        return
 
 
 def _detect_network(api_url: str) -> str:
@@ -568,7 +666,10 @@ class LLMClient:
             ChatResponse object with choices, usage, and citations (if search enabled)
 
         Raises:
-            PaymentError: If budget is set and would be exceeded
+            PaymentError: If the gateway rejects the signed payment (most often
+                an insufficient USDC balance). Note that the SDK enforces no
+                client-side spend cap: every 402 quote is signed automatically.
+                Check ``get_spending()`` if you need to bound a session yourself.
 
         Example:
             messages = [
@@ -848,7 +949,26 @@ class LLMClient:
             raise APIError("stream probe exhausted retries", 0, None)
 
         # ----- Phase 2: stream with PAYMENT-SIGNATURE -----
+        # Signing above was settlement. A timeout here has already been paid
+        # for, so tag it: the stream fallback chain must not settle again on
+        # the next model just because zero chunks arrived.
         assert payment_headers is not None  # break implies signing succeeded
+        try:
+            yield from self._stream_paid_phase(url, body, payment_headers, cost_usd, timeout)
+        except (httpx.HTTPError, APIError) as exc:
+            _mark_settled(exc)
+            raise
+
+    def _stream_paid_phase(
+        self,
+        url: str,
+        body: Dict[str, Any],
+        payment_headers: Dict[str, str],
+        cost_usd: float,
+        timeout: Optional[float],
+    ) -> Iterator[ChatCompletionChunk]:
+        """Phase 2 of :meth:`_stream_with_payment`: the paid, already-settled leg."""
+        backoffs = self._STREAM_5XX_BACKOFFS
         for attempt in range(len(backoffs) + 1):
             with self._client.stream(
                 "POST", url, json=body, headers=payment_headers, timeout=timeout
@@ -1022,6 +1142,7 @@ class LLMClient:
         )
 
         resource = details.get("resource") or {}
+        _warn_if_clamped(body, resource.get("description"))
         extensions = payment_required.get("extensions", {})
         payment_payload = create_payment_payload(
             account=self.account,
@@ -1085,7 +1206,14 @@ class LLMClient:
 
         # Handle 402 Payment Required
         if response.status_code == 402:
-            return self._handle_payment_and_retry(url, body, response)
+            # Everything inside signs first, then makes the paid request, so a
+            # timeout or network error escaping it already cost a settlement.
+            # Tag it so the fallback chain doesn't settle again on the next model.
+            try:
+                return self._handle_payment_and_retry(url, body, response)
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
 
         # Handle other errors
         if response.status_code != 200:
@@ -1153,6 +1281,7 @@ class LLMClient:
         # Create signed payment payload (v2 format)
         # SECURITY: Signing happens locally - only the signature is sent to server
         resource = details.get("resource") or {}
+        _warn_if_clamped(body, resource.get("description"))
         # Pass through extensions from server (for Bazaar discovery)
         extensions = payment_required.get("extensions", {})
         payment_payload = create_payment_payload(
@@ -1269,7 +1398,11 @@ class LLMClient:
             response = self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
-            result = self._handle_payment_and_retry_raw(url, body, response)
+            try:
+                result = self._handle_payment_and_retry_raw(url, body, response)
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
             # Save paid response to cache
             save_to_cache(
                 endpoint,
@@ -1329,6 +1462,7 @@ class LLMClient:
         )
 
         resource = details.get("resource") or {}
+        _warn_if_clamped(body, resource.get("description"))
         extensions = payment_required.get("extensions", {})
         payment_payload = create_payment_payload(
             account=self.account,
@@ -2481,6 +2615,13 @@ class AsyncLLMClient:
                         f"[blockrun_llm] stream {attempt_model} -> {next_model} "
                         f"({type(exc).__name__}: {str(exc)[:80]})\n"
                     )
+            finally:
+                # `async for` alone does not close `inner` when this generator
+                # is closed or an exception leaves the loop, so an abandoned
+                # stream would strand the paid `async with stream(...)` and its
+                # connection until GC. The sync path gets this from `yield
+                # from`; async has to ask.
+                await inner.aclose()
         assert last_exc is not None
         raise last_exc
 
@@ -2530,7 +2671,34 @@ class AsyncLLMClient:
             raise APIError("stream probe exhausted retries", 0, None)
 
         # ----- Phase 2: stream with PAYMENT-SIGNATURE -----
+        # Settled from here on; see the sync path.
         assert payment_headers is not None
+        # `async for` does NOT close the inner async generator when this one is
+        # closed or an exception leaves the loop, so the paid `async with
+        # self._client.stream(...)` inside it would stay suspended and hold the
+        # connection until GC finalization. The sync path gets this for free:
+        # `yield from` propagates close() into the subgenerator. Close it here.
+        paid = self._astream_paid_phase(url, body, payment_headers, cost_usd, timeout)
+        try:
+            async for chunk in paid:
+                yield chunk
+        except (httpx.HTTPError, APIError) as exc:
+            _mark_settled(exc)
+            raise
+        finally:
+            await paid.aclose()
+
+    async def _astream_paid_phase(
+        self,
+        url: str,
+        body: Dict[str, Any],
+        payment_headers: Dict[str, str],
+        cost_usd: float,
+        timeout: Optional[float],
+    ) -> AsyncIterator[ChatCompletionChunk]:
+        """Phase 2 of the async stream: the paid, already-settled leg."""
+        backoffs = LLMClient._STREAM_5XX_BACKOFFS
+        statuses_5xx = LLMClient._STREAM_5XX_STATUSES
         for attempt in range(len(backoffs) + 1):
             async with self._client.stream(
                 "POST", url, json=body, headers=payment_headers, timeout=timeout
@@ -2670,7 +2838,12 @@ class AsyncLLMClient:
             response = await self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
-            return await self._handle_payment_and_retry(url, body, response)
+            # See the sync path: past this point the payment is settled.
+            try:
+                return await self._handle_payment_and_retry(url, body, response)
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
 
         if response.status_code != 200:
             try:
@@ -2718,6 +2891,7 @@ class AsyncLLMClient:
         # Create signed payment payload (v2 format)
         # SECURITY: Signing happens locally - only the signature is sent to server
         resource = details.get("resource") or {}
+        _warn_if_clamped(body, resource.get("description"))
         # Pass through extensions from server (for Bazaar discovery)
         extensions = payment_required.get("extensions", {})
         payment_payload = create_payment_payload(
@@ -2830,7 +3004,11 @@ class AsyncLLMClient:
             response = await self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
-            result = await self._handle_payment_and_retry_raw(url, body, response)
+            try:
+                result = await self._handle_payment_and_retry_raw(url, body, response)
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
             save_to_cache(
                 endpoint,
                 body,
@@ -2881,6 +3059,7 @@ class AsyncLLMClient:
         details = extract_payment_details(payment_required)
 
         resource = details.get("resource") or {}
+        _warn_if_clamped(body, resource.get("description"))
         extensions = payment_required.get("extensions", {})
         payment_payload = create_payment_payload(
             account=self.account,
