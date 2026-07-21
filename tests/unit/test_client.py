@@ -151,9 +151,14 @@ class TestInputValidation:
         with pytest.raises(ValueError, match="positive"):
             client.chat_completion("gpt-5.2", [{"role": "user", "content": "test"}], max_tokens=-1)
 
-        with pytest.raises(ValueError, match="too large"):
+        # 200000 used to be rejected here. It no longer is, and must not be:
+        # gpt-5.2 advertises 128000 and zai/glm-5.2 serves 262144, so a bound
+        # below those made the SDK the binding constraint instead of the model.
+        # Only implausible values fail locally now; real ceilings go to the
+        # gateway, which rejects with the model's own number.
+        with pytest.raises(ValueError, match="implausibly large"):
             client.chat_completion(
-                "gpt-5.2", [{"role": "user", "content": "test"}], max_tokens=200000
+                "gpt-5.2", [{"role": "user", "content": "test"}], max_tokens=2_000_000
             )
 
     @patch("blockrun_llm.client.httpx.Client")
