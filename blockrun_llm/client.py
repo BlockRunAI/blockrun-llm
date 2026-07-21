@@ -71,15 +71,17 @@ from .tx_log import (
 )
 from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
 from .validation import (
-    validate_private_key,
-    validate_eth_address,
+    check_spend_limits,
+    resolve_spend_limit,
+    sanitize_error_response,
     validate_api_url,
-    validate_model,
+    validate_eth_address,
     validate_max_tokens,
+    validate_model,
+    validate_private_key,
+    validate_resource_url,
     validate_temperature,
     validate_top_p,
-    sanitize_error_response,
-    validate_resource_url,
 )
 
 # Load environment variables
@@ -277,6 +279,26 @@ def _warn_if_clamped(body: Dict[str, Any], resource_description: Optional[str]) 
         return
 
 
+def _enforce_spend_limits(client: Any, cost_usd: float, model: Optional[str] = None) -> None:
+    """Refuse a quote that breaches a limit the caller configured, before the
+    paid request is sent.
+
+    A free function rather than a method because the four client classes (sync
+    and async, Base and Solana) do not share a base class, and a spend limit
+    that applies to three of them is not a spend limit.
+
+    No-op unless the caller opted in. See
+    :func:`blockrun_llm.validation.check_spend_limits`.
+    """
+    check_spend_limits(
+        cost_usd,
+        max_cost_per_call=client._max_cost_per_call,
+        max_session_cost=client._max_session_cost,
+        session_spent_usd=client._session_total_usd,
+        model=model,
+    )
+
+
 def _detect_network(api_url: str) -> str:
     """Map an API URL to the canonical network label used in billing
     records. Returns ``base-mainnet`` / ``base-sepolia`` / ``solana-mainnet``
@@ -335,6 +357,8 @@ class LLMClient:
         timeout: float = DEFAULT_CHAT_TIMEOUT,
         search_timeout: float = 300.0,
         transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
+        max_cost_per_call: Optional[float] = None,
+        max_session_cost: Optional[float] = None,
     ):
         """
         Initialize the BlockRun LLM client.
@@ -407,6 +431,13 @@ class LLMClient:
 
         # Session spending tracking
         self._session_total_usd: float = 0.0
+        # Opt-in spend limits. None (the default) means unlimited, which is the
+        # behavior every release before 1.9.0 had: every 402 quote was signed
+        # automatically with nothing compared against anything.
+        self._max_cost_per_call = resolve_spend_limit(
+            max_cost_per_call, "BLOCKRUN_MAX_COST_PER_CALL"
+        )
+        self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
         self._session_calls: int = 0
         self._last_call_cost: float = 0.0
 
@@ -667,9 +698,13 @@ class LLMClient:
 
         Raises:
             PaymentError: If the gateway rejects the signed payment (most often
-                an insufficient USDC balance). Note that the SDK enforces no
-                client-side spend cap: every 402 quote is signed automatically.
-                Check ``get_spending()`` if you need to bound a session yourself.
+                an insufficient USDC balance).
+            SpendLimitError: If the quote exceeds ``max_cost_per_call`` or would
+                push the client past ``max_session_cost``. Both are opt-in and
+                unset by default; when unset, every 402 quote is signed
+                automatically. Raised before the request is sent, so a refused
+                quote costs nothing. ``SpendLimitError`` subclasses
+                ``PaymentError``.
 
         Example:
             messages = [
@@ -1140,6 +1175,8 @@ class LLMClient:
             if price_info
             else float(details.get("amount", 0)) / 1e6
         )
+        # Before signing: a refused quote is never sent, so nothing settles.
+        _enforce_spend_limits(self, cost_usd, body.get("model") if isinstance(body, dict) else None)
 
         resource = details.get("resource") or {}
         _warn_if_clamped(body, resource.get("description"))
@@ -1277,6 +1314,8 @@ class LLMClient:
             if price_info
             else float(details.get("amount", 0)) / 1e6
         )
+        # Before signing: a refused quote is never sent, so nothing settles.
+        _enforce_spend_limits(self, cost_usd, body.get("model") if isinstance(body, dict) else None)
 
         # Create signed payment payload (v2 format)
         # SECURITY: Signing happens locally - only the signature is sent to server
@@ -1460,6 +1499,8 @@ class LLMClient:
             if price_info
             else float(details.get("amount", 0)) / 1e6
         )
+        # Before signing: a refused quote is never sent, so nothing settles.
+        _enforce_spend_limits(self, cost_usd, body.get("model") if isinstance(body, dict) else None)
 
         resource = details.get("resource") or {}
         _warn_if_clamped(body, resource.get("description"))
@@ -1601,6 +1642,8 @@ class LLMClient:
             if price_info
             else float(details.get("amount", 0)) / 1e6
         )
+        # Before signing: a refused quote is never sent, so nothing settles.
+        _enforce_spend_limits(self, cost_usd)
 
         resource = details.get("resource") or {}
         extensions = payment_required.get("extensions", {})
@@ -2340,6 +2383,8 @@ class AsyncLLMClient:
         timeout: float = DEFAULT_CHAT_TIMEOUT,
         search_timeout: float = 300.0,
         transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
+        max_cost_per_call: Optional[float] = None,
+        max_session_cost: Optional[float] = None,
     ):
         """
         Initialize the async BlockRun LLM client.
@@ -2400,6 +2445,17 @@ class AsyncLLMClient:
             limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
         )
         self._last_call_cost: float = 0.0
+        # This client tracks no session total (see chat_completion), so the
+        # session limit has nothing to accumulate against; the per-call limit
+        # still applies. Kept as an attribute so the shared check is uniform.
+        self._session_total_usd: float = 0.0
+        # Opt-in spend limits. None (the default) means unlimited, which is the
+        # behavior every release before 1.9.0 had: every 402 quote was signed
+        # automatically with nothing compared against anything.
+        self._max_cost_per_call = resolve_spend_limit(
+            max_cost_per_call, "BLOCKRUN_MAX_COST_PER_CALL"
+        )
+        self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
 
         log_dir = _resolve_log_dir(transaction_log)
         self._tx_logger: Optional[TransactionLogger] = (
@@ -2887,6 +2943,15 @@ class AsyncLLMClient:
             payment_required = payment_header
 
         details = extract_payment_details(payment_required)
+
+        # Enforce the spend limit on the QUOTE, before signing. This handler
+        # computes its cost_usd only after the paid POST returns (it prefers the
+        # price echoed on the response), which is far too late to refuse.
+        _enforce_spend_limits(
+            self,
+            float(details.get("amount", 0)) / 1e6,
+            body.get("model") if isinstance(body, dict) else None,
+        )
 
         # Create signed payment payload (v2 format)
         # SECURITY: Signing happens locally - only the signature is sent to server

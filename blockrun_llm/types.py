@@ -332,6 +332,33 @@ class PaymentError(BlockrunError):
         self.response = response
 
 
+class SpendLimitError(PaymentError):
+    """A quote exceeded a spend limit the caller configured, so it was refused.
+
+    Raised *before* the paid request goes out, so nothing settles: the quote is
+    declined locally and no funds move. Subclasses :class:`PaymentError` so
+    existing ``except PaymentError`` handlers keep working, and so the model
+    fallback chain refuses it — retrying another model after declining on cost
+    would defeat the limit.
+
+    ``quoted_usd`` is what the gateway asked for, ``limit_usd`` is the ceiling
+    that refused it, and ``scope`` is ``"call"`` or ``"session"``.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        quoted_usd: float,
+        limit_usd: float,
+        scope: str,
+    ) -> None:
+        super().__init__(message)
+        self.quoted_usd = quoted_usd
+        self.limit_usd = limit_usd
+        self.scope = scope
+
+
 class APIError(BlockrunError):
     """API-related error."""
 

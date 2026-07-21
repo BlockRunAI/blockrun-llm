@@ -535,3 +535,77 @@ def validate_resource_url(url: str, base_url: str) -> str:
     except Exception:
         # Invalid URL format, return safe default
         return f"{base_url}/v1/chat/completions"
+
+
+def resolve_spend_limit(explicit: Optional[float], env_var: str) -> Optional[float]:
+    """Resolve a spend limit from the constructor argument or its env var.
+
+    ``None`` means unlimited, which is the default and the pre-1.9.0 behavior.
+    An unparseable or non-positive env value is ignored rather than raising:
+    a malformed env var must not brick every client in a deployment, and the
+    explicit argument always wins.
+    """
+    if explicit is not None:
+        limit = float(explicit)
+        if limit <= 0:
+            raise ValueError(f"spend limit must be positive; got {explicit!r}")
+        return limit
+
+    import os
+
+    raw = os.environ.get(env_var)
+    if not raw:
+        return None
+    try:
+        limit = float(raw)
+    except ValueError:
+        return None
+    return limit if limit > 0 else None
+
+
+def check_spend_limits(
+    cost_usd: float,
+    *,
+    max_cost_per_call: Optional[float],
+    max_session_cost: Optional[float],
+    session_spent_usd: float,
+    model: Optional[str] = None,
+) -> None:
+    """Refuse a quote that would breach a caller-configured spend limit.
+
+    Call this after the gateway's price is known and BEFORE the paid request is
+    sent. Signing alone moves no money — the gateway submitting the signed
+    authorization does — so declining here means nothing settles.
+
+    Both limits are opt-in. With neither set this is a no-op, which is why
+    adding it changes no existing behavior.
+
+    Raises:
+        SpendLimitError: If the quote exceeds the per-call limit, or if it would
+            push the session past its total.
+    """
+    from .types import SpendLimitError
+
+    where = f" for {model}" if model else ""
+
+    if max_cost_per_call is not None and cost_usd > max_cost_per_call:
+        raise SpendLimitError(
+            f"Refused a ${cost_usd:.6f} quote{where}: it exceeds the per-call "
+            f"limit of ${max_cost_per_call:.6f}. Nothing was sent and nothing "
+            f"was charged. Raise max_cost_per_call to allow it.",
+            quoted_usd=cost_usd,
+            limit_usd=max_cost_per_call,
+            scope="call",
+        )
+
+    if max_session_cost is not None and session_spent_usd + cost_usd > max_session_cost:
+        remaining = max_session_cost - session_spent_usd
+        raise SpendLimitError(
+            f"Refused a ${cost_usd:.6f} quote{where}: this client has spent "
+            f"${session_spent_usd:.6f} of its ${max_session_cost:.6f} session "
+            f"limit, leaving ${remaining:.6f}. Nothing was sent and nothing was "
+            f"charged.",
+            quoted_usd=cost_usd,
+            limit_usd=max_session_cost,
+            scope="session",
+        )
