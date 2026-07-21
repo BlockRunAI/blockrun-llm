@@ -68,6 +68,17 @@ def _looks_like_solana_key(key: str) -> bool:
     return any(c in _BASE58_ONLY_CHARS for c in candidate)
 
 
+# bool is a subclass of int in Python, so `isinstance(True, int)` is True and a
+# bare numeric type check lets booleans straight through. Before this was fixed,
+# validate_max_tokens(True), validate_temperature(True) and validate_top_p(False)
+# all passed — the value then serialized as JSON `true`/`false` and went to the
+# gateway as a request parameter. `max_tokens=False` was caught, but by the
+# positivity check, so a type error was reported as a range error.
+#
+# Every numeric validator below excludes bool explicitly. Keep it that way when
+# adding one.
+
+
 def validate_private_key(key: str) -> None:
     """
     Validate that a private key is properly formatted.
@@ -232,6 +243,11 @@ def validate_max_tokens(max_tokens: Optional[int]) -> None:
     """
     Validate max_tokens parameter.
 
+    Rejects only values no request could have meant. The gateway does not
+    reject an over-ceiling ``max_tokens`` — it clamps to the model's own
+    ceiling and charges for the clamped value — so this guard exists to stop a
+    typo locally, not to enforce any model's limit.
+
     Args:
         max_tokens: Maximum number of tokens to generate
 
@@ -243,6 +259,13 @@ def validate_max_tokens(max_tokens: Optional[int]) -> None:
     """
     if max_tokens is None:
         return
+
+    # bool is an int subclass, so `isinstance(True, int)` is True and a stray
+    # flag threaded into the wrong keyword would sail through and reach the
+    # wire as `"max_tokens": true`. Say so explicitly — "must be an integer"
+    # reads as wrong to anyone who knows bool is one.
+    if isinstance(max_tokens, bool):
+        raise ValueError("max_tokens must be an integer, got a bool")
 
     if not isinstance(max_tokens, int):
         raise ValueError("max_tokens must be an integer")
@@ -276,6 +299,9 @@ def validate_temperature(temperature: Optional[float]) -> None:
     if temperature is None:
         return
 
+    if isinstance(temperature, bool):
+        raise ValueError("temperature must be a number, got a bool")
+
     if not isinstance(temperature, (int, float)):
         raise ValueError("temperature must be a number")
 
@@ -298,6 +324,9 @@ def validate_top_p(top_p: Optional[float]) -> None:
     """
     if top_p is None:
         return
+
+    if isinstance(top_p, bool):
+        raise ValueError("top_p must be a number, got a bool")
 
     if not isinstance(top_p, (int, float)):
         raise ValueError("top_p must be a number")
