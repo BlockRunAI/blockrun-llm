@@ -217,6 +217,19 @@ class TestValidateTemperature:
         with pytest.raises(ValueError, match="number"):
             validate_temperature("0.7")  # type: ignore
 
+    def test_reject_bool(self):
+        """bool is an int subclass, so `isinstance(True, (int, float))` is True
+        and `temperature=True` serialized to the wire as JSON `true`."""
+        for bad in (True, False):
+            with pytest.raises(ValueError, match="bool"):
+                validate_temperature(bad)  # type: ignore
+
+    def test_values_next_to_the_bools_still_pass(self):
+        """The guard must reject the type, not the neighbouring numbers."""
+        validate_temperature(0)
+        validate_temperature(1)
+        validate_temperature(1.5)
+
 
 class TestValidateTopP:
     def test_accept_valid_values(self):
@@ -244,6 +257,18 @@ class TestValidateTopP:
         """Should reject non-numeric."""
         with pytest.raises(ValueError, match="number"):
             validate_top_p("0.9")  # type: ignore
+
+    def test_reject_bool(self):
+        """Same hole as temperature: `top_p=False` reached the gateway as JSON
+        `false` instead of being caught as the wrong type."""
+        for bad in (True, False):
+            with pytest.raises(ValueError, match="bool"):
+                validate_top_p(bad)  # type: ignore
+
+    def test_values_next_to_the_bools_still_pass(self):
+        validate_top_p(0)
+        validate_top_p(1)
+        validate_top_p(0.5)
 
 
 class TestSanitizeErrorResponse:
