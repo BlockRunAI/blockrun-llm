@@ -130,6 +130,10 @@ class TestValidateMaxTokens:
         validate_max_tokens(100)
         validate_max_tokens(1000)
         validate_max_tokens(100000)
+        # Real ceilings the gateway serves — these were rejected before the
+        # sanity bound was raised, despite every provider accepting them.
+        validate_max_tokens(128000)   # opus-4.8 / sonnet-5 / gpt-5.6 / glm-5
+        validate_max_tokens(262144)   # zai/glm-5.2
 
     def test_accept_none(self):
         """Should accept None."""
@@ -145,10 +149,22 @@ class TestValidateMaxTokens:
         with pytest.raises(ValueError, match="positive"):
             validate_max_tokens(0)
 
-    def test_reject_too_large(self):
-        """Should reject values too large."""
-        with pytest.raises(ValueError, match="too large"):
-            validate_max_tokens(200000)
+    def test_reject_implausible(self):
+        """Should reject values no model could mean (typo guard, not a limit)."""
+        with pytest.raises(ValueError, match="implausibly large"):
+            validate_max_tokens(2_000_000)
+
+    def test_does_not_cap_below_real_ceilings(self):
+        """The bound must never be the binding constraint on a real request.
+
+        Regression: this was 100000, which rejected every ceiling above it
+        client-side — the caller saw a ValueError naming a limit no provider
+        had set, and the request never reached the network. Probed against the
+        live gateway 2026-07-21: 19 models advertise more than 100000 and all
+        19 accepted their advertised ceiling.
+        """
+        for real_ceiling in (128_000, 262_144):
+            validate_max_tokens(real_ceiling)
 
     def test_reject_non_integer(self):
         """Should reject non-integer."""
