@@ -2,6 +2,41 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## Unreleased
+
+### Security
+- **A timed-out paid request no longer triggers a second payment.** Any error
+  raised after the `PAYMENT-SIGNATURE` went out is now refused for model
+  fallback. Previously a post-settlement timeout was indistinguishable from a
+  transient one, so the chain advanced to the next model and signed again —
+  `smart_chat` on the premium complex tier could settle six payments and return
+  no tokens, the "CHARGED BUT REQUEST FAILED" outcome this file already
+  documents under 1.7.1. Callers catching `httpx.TimeoutException` are
+  unaffected; the marker is an attribute, not a new exception type.
+- **Removed a documented payment guard that does not exist.**
+  `chat_completion()` advertised `PaymentError: If budget is set and would be
+  exceeded`. There is no `budget` parameter anywhere in the SDK and no
+  client-side spend cap — every 402 quote is signed automatically. The
+  docstring now says that plainly and points at `get_spending()`.
+
+### Changed
+- **`max_tokens` above a model's ceiling is no longer silently absorbed.** The
+  gateway does not reject an over-ceiling value; it clamps to the model's own
+  ceiling and quotes payment for the clamped value. Verified against the live
+  402 leg on 2026-07-21: `claude-opus-4.8` sent 262144 and 1000000 both quote
+  the 128000 price, and `gpt-5.2` sent 1e12 returns a quote rather than a 400.
+  The 402 disclosed the clamp in `resource.description` and the SDK discarded
+  it while signing. Callers now get a warning naming what they asked for and
+  what they are being charged for, before the signature goes out.
+- The comment and `ValueError` around `MAX_TOKENS_SANITY_LIMIT` claimed the
+  gateway "enforces the real per-model ceiling and reports it". It does not.
+  Both now describe clamping.
+
+### Fixed
+- Line endings are normalized repo-wide via `.gitattributes` (`* text=auto`).
+  17 tracked files were CRLF against an otherwise-LF tree, which turned a
+  51-line change into a 1045-line diff in #27.
+
 ## 1.8.1 — 2026-07-21
 
 ### Fixed
