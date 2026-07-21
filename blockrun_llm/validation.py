@@ -207,6 +207,24 @@ def validate_image_quality(quality: Optional[str]) -> None:
         )
 
 
+# Client-side typo guard, NOT a model limit. The gateway already enforces the
+# real per-model ceiling and rejects with that model's own number, so anything
+# the SDK hardcodes here can only be wrong in one direction: too low.
+#
+# This was 100000, and it silently capped every SDK caller below what models
+# actually support. Verified against the live gateway 2026-07-21 with the guard
+# bypassed: zai/glm-5.2 accepts 262144, and the entire 128000 class accepts
+# 128000 (claude-opus-4.8, claude-sonnet-5, claude-fable-5, gpt-5.6-sol/terra/
+# luna, gpt-5.5, gpt-5.4, gpt-5.3-codex, glm-5/5.1/5-turbo — 19 models, 19
+# accepted, zero rejections). Callers asking for those ceilings got a
+# ValueError that never reached the network and named a limit no provider set.
+#
+# Keep a bound so an obvious mistake (1e9, a byte count, a timestamp) fails
+# fast locally instead of becoming a payment quote. Set it far above any real
+# model so it can never be the binding constraint again.
+MAX_TOKENS_SANITY_LIMIT = 1_000_000
+
+
 def validate_max_tokens(max_tokens: Optional[int]) -> None:
     """
     Validate max_tokens parameter.
@@ -229,8 +247,12 @@ def validate_max_tokens(max_tokens: Optional[int]) -> None:
     if max_tokens < 1:
         raise ValueError("max_tokens must be positive (minimum: 1)")
 
-    if max_tokens > 100000:
-        raise ValueError("max_tokens too large (maximum: 100000)")
+    if max_tokens > MAX_TOKENS_SANITY_LIMIT:
+        raise ValueError(
+            f"max_tokens implausibly large (client-side sanity limit: "
+            f"{MAX_TOKENS_SANITY_LIMIT}). This is not a model limit — the "
+            f"gateway enforces the real per-model ceiling and reports it."
+        )
 
 
 def validate_temperature(temperature: Optional[float]) -> None:
