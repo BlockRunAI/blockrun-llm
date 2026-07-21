@@ -26,8 +26,9 @@ file. Install 1.8.2 to get a package whose self-reported version is truthful.
 - **The clamp warning cannot break the request it warns about.** Its parse ran
   on `resource.description`, a server-controlled string, immediately before
   signing. A non-string value raised `TypeError` and aborted the call, and the
-  pattern backtracked super-linearly on a long digit run (2.78s at 16k digits,
-  and it grows). The number is now matched by a bounded pattern against a
+  pattern backtracked super-linearly on a long digit run (measured on CPython
+  3.13: 0.49s at 8k digits, 1.95s at 16k, and it keeps squaring). The number is
+  now matched by a bounded pattern against a
   length-capped slice, an ambiguous description (a per-unit rate alongside the
   ceiling) stays silent instead of naming the wrong number, and the whole helper
   swallows its own failures.

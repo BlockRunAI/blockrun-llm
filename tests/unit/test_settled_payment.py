@@ -9,8 +9,13 @@ import httpx
 import pytest
 
 from blockrun_llm import LLMClient
-from blockrun_llm.client import _mark_settled, _should_fallback, _warn_if_clamped
-from blockrun_llm.types import APIError
+from blockrun_llm.client import (
+    _SETTLED_ATTR,
+    _mark_settled,
+    _should_fallback,
+    _warn_if_clamped,
+)
+from blockrun_llm.types import APIError, PaymentError
 
 from ..helpers import (
     TEST_PRIVATE_KEY,
@@ -49,6 +54,73 @@ class TestSettledTagClassification:
         assert _mark_settled(exc) is exc
         with pytest.raises(httpx.TimeoutException):
             raise exc
+
+
+class TestTagScope:
+    """What must NOT be tagged, driven through the real client. The handlers
+    were once `except Exception`, which labeled rejected payments and SDK bugs
+    as settled payments. These fail if the handlers widen again."""
+
+    def test_payment_rejection_is_not_tagged_as_settled(self):
+        """A paid-leg 402 means the facilitator refused; the funds did not
+        move. Calling that 'settled' is exactly backwards."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                402,
+                json={"error": "Payment Required"},
+                headers={"payment-required": build_payment_required_response()},
+            )
+
+        client = _client(handler)
+        with pytest.raises(PaymentError) as exc:
+            client.chat_completion("a/b", [{"role": "user", "content": "hi"}])
+        assert getattr(exc.value, _SETTLED_ATTR, False) is False
+
+    def test_programming_error_in_paid_leg_is_not_tagged(self, monkeypatch):
+        """An AttributeError raised after the paid response is an SDK bug. It
+        must propagate as itself, not as a settled-payment failure."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "PAYMENT-SIGNATURE" in request.headers:
+                return httpx.Response(200, json=build_chat_response())
+            return httpx.Response(
+                402,
+                json={"error": "Payment Required"},
+                headers={"payment-required": build_payment_required_response()},
+            )
+
+        client = _client(handler)
+
+        def boom(_response):
+            raise AttributeError("SDK bug in settlement capture")
+
+        monkeypatch.setattr(client, "_capture_settlement", boom)
+
+        with pytest.raises(AttributeError) as exc:
+            client.chat_completion("a/b", [{"role": "user", "content": "hi"}])
+        assert getattr(exc.value, _SETTLED_ATTR, False) is False
+
+    def test_tagged_types_are_a_superset_of_fallback_eligible(self):
+        """The handlers catch `(httpx.HTTPError, APIError)`. That must cover
+        everything _should_fallback says yes to, or a settled failure escapes
+        untagged and the chain pays again."""
+        assert issubclass(httpx.TimeoutException, httpx.HTTPError)
+        assert issubclass(httpx.NetworkError, httpx.HTTPError)
+        assert not issubclass(PaymentError, APIError)
+
+    def test_tagging_preserves_traceback_and_context(self):
+        """Handlers re-raise bare rather than `from None`, so an opaque wrapper
+        error keeps the cause that explains it."""
+        try:
+            try:
+                raise ValueError("underlying base64 failure")
+            except ValueError:
+                raise APIError("invalid format", 500, None)
+        except APIError as outer:
+            _mark_settled(outer)
+            assert isinstance(outer.__context__, ValueError)
+            assert outer.__suppress_context__ is False
 
 
 class TestNoSecondSettlement:
@@ -129,6 +201,77 @@ class TestNoSecondSettlement:
         assert "fallback/good" in seen
 
 
+class TestPaidStreamCleanup:
+    """Extracting the paid phase into its own generator changed who is
+    responsible for closing it."""
+
+    def test_abandoned_async_paid_stream_closes_its_inner_generator(self):
+        """Drives the real AsyncLLMClient. `async for` does not aclose the inner
+        generator when the outer is closed, so the paid
+        `async with self._client.stream(...)` would stay suspended and hold the
+        connection until GC finalization. Fails if the explicit
+        `finally: await paid.aclose()` is removed.
+        """
+        import asyncio
+
+        from blockrun_llm import AsyncLLMClient
+
+        closed = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                402,
+                json={"error": "Payment Required"},
+                headers={"payment-required": build_payment_required_response()},
+            )
+
+        async def run():
+            client = AsyncLLMClient(private_key=TEST_PRIVATE_KEY)
+            client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+            async def fake_paid_phase(*_a, **_kw):
+                try:
+                    yield {"chunk": 1}
+                    yield {"chunk": 2}
+                finally:
+                    closed.append(True)
+
+            client._astream_paid_phase = fake_paid_phase
+
+            stream = client.chat_completion_stream("a/b", [{"role": "user", "content": "hi"}])
+            assert await stream.__anext__() == {"chunk": 1}
+            # Abandon mid-stream, exactly like `break` in a caller's loop.
+            await stream.aclose()
+            # Assert HERE, not after asyncio.run(). Without the explicit
+            # aclose, CPython's asyncgen finalizer still closes the inner
+            # generator eventually during loop teardown — which is precisely
+            # the "connection held until GC" behavior being fixed. Only a
+            # synchronous check at the close point tells the two apart.
+            return list(closed)
+
+        assert asyncio.run(run()) == [True], "inner paid generator was not closed at aclose()"
+
+    def test_sync_delegation_closes_via_yield_from(self):
+        """The sync path gets this for free, which is why only the async path
+        needed the explicit close. Recorded so nobody 'fixes' it symmetrically."""
+        closed = []
+
+        def inner():
+            try:
+                yield 1
+                yield 2
+            finally:
+                closed.append(True)
+
+        def outer():
+            yield from inner()
+
+        gen = outer()
+        assert next(gen) == 1
+        gen.close()
+        assert closed == [True]
+
+
 class TestWarnIfClamped:
     def test_warns_when_quoted_below_requested(self, capsys):
         _warn_if_clamped(
@@ -185,7 +328,7 @@ class TestWarnIfClamped:
     def test_pattern_itself_is_not_backtracking(self):
         """Inner defense, pinned separately so removing the scan limit cannot
         silently reintroduce the ReDoS. The old `(\\d[\\d,]*)` pattern took
-        2.78s on this input; the bounded one takes ~0.0003s.
+        ~1.95s on this input; the bounded one takes ~0.0002s.
         """
         import time
 

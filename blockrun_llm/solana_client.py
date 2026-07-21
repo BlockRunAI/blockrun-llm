@@ -960,10 +960,12 @@ class SolanaLLMClient:
                         continue
                     self._raise_stream_error(resp2, after_payment=True)
 
-        except Exception as exc:
+        except (httpx.HTTPError, APIError) as exc:
             # Signed above; SPL USDC is gone. Do not let the fallback
-            # chain buy a retry on the next model.
-            raise _mark_settled(exc) from None
+            # chain buy a retry on the next model. Re-raise bare so the
+            # traceback and __context__ survive.
+            _mark_settled(exc)
+            raise
 
     def _iter_and_archive(
         self,
@@ -3180,10 +3182,12 @@ class AsyncSolanaLLMClient:
                         continue
                     self._raise_stream_error(resp2, after_payment=True)
 
-        except Exception as exc:
+        except (httpx.HTTPError, APIError) as exc:
             # Signed above; SPL USDC is gone. Do not let the fallback
-            # chain buy a retry on the next model.
-            raise _mark_settled(exc) from None
+            # chain buy a retry on the next model. Re-raise bare so the
+            # traceback and __context__ survive.
+            _mark_settled(exc)
+            raise
 
     @staticmethod
     async def _aiter_sse_chunks(response: httpx.Response):

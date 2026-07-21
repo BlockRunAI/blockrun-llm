@@ -216,9 +216,11 @@ def _should_fallback(exc: Exception) -> bool:
 #
 # The alternation is bounded on both branches and the leading lookbehind stops a
 # match from starting mid-number, so there is no super-linear backtracking. The
-# earlier `(\d[\d,]*)` was quadratic on a digit run: 8k digits took 1.07s and 16k
-# took 11.88s, and this runs on a server-controlled string inside the payment
-# path, so a long description would have stalled every paid call.
+# earlier `(\d[\d,]*)` was quadratic on a digit run — measured on CPython 3.13,
+# a string of N '9's: 4k 0.13s, 8k 0.49s, 16k 1.95s, and it keeps squaring. This
+# runs on a server-controlled string inside the payment path, so a long
+# description would have stalled every paid call. Same input, bounded pattern:
+# 0.0002s. `test_pattern_itself_is_not_backtracking` pins it.
 _QUOTED_MAX_TOKENS_RE = re.compile(
     r"(?<![\d,])(\d{1,3}(?:,\d{3})*|\d{1,9})\s{0,4}max output tokens",
     re.IGNORECASE,
@@ -953,8 +955,9 @@ class LLMClient:
         assert payment_headers is not None  # break implies signing succeeded
         try:
             yield from self._stream_paid_phase(url, body, payment_headers, cost_usd, timeout)
-        except Exception as exc:
-            raise _mark_settled(exc) from None
+        except (httpx.HTTPError, APIError) as exc:
+            _mark_settled(exc)
+            raise
 
     def _stream_paid_phase(
         self,
@@ -1208,8 +1211,9 @@ class LLMClient:
             # Tag it so the fallback chain doesn't settle again on the next model.
             try:
                 return self._handle_payment_and_retry(url, body, response)
-            except Exception as exc:
-                raise _mark_settled(exc) from None
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
 
         # Handle other errors
         if response.status_code != 200:
@@ -1396,8 +1400,9 @@ class LLMClient:
         if response.status_code == 402:
             try:
                 result = self._handle_payment_and_retry_raw(url, body, response)
-            except Exception as exc:
-                raise _mark_settled(exc) from None
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
             # Save paid response to cache
             save_to_cache(
                 endpoint,
@@ -2610,6 +2615,13 @@ class AsyncLLMClient:
                         f"[blockrun_llm] stream {attempt_model} -> {next_model} "
                         f"({type(exc).__name__}: {str(exc)[:80]})\n"
                     )
+            finally:
+                # `async for` alone does not close `inner` when this generator
+                # is closed or an exception leaves the loop, so an abandoned
+                # stream would strand the paid `async with stream(...)` and its
+                # connection until GC. The sync path gets this from `yield
+                # from`; async has to ask.
+                await inner.aclose()
         assert last_exc is not None
         raise last_exc
 
@@ -2661,13 +2673,20 @@ class AsyncLLMClient:
         # ----- Phase 2: stream with PAYMENT-SIGNATURE -----
         # Settled from here on; see the sync path.
         assert payment_headers is not None
+        # `async for` does NOT close the inner async generator when this one is
+        # closed or an exception leaves the loop, so the paid `async with
+        # self._client.stream(...)` inside it would stay suspended and hold the
+        # connection until GC finalization. The sync path gets this for free:
+        # `yield from` propagates close() into the subgenerator. Close it here.
+        paid = self._astream_paid_phase(url, body, payment_headers, cost_usd, timeout)
         try:
-            async for chunk in self._astream_paid_phase(
-                url, body, payment_headers, cost_usd, timeout
-            ):
+            async for chunk in paid:
                 yield chunk
-        except Exception as exc:
-            raise _mark_settled(exc) from None
+        except (httpx.HTTPError, APIError) as exc:
+            _mark_settled(exc)
+            raise
+        finally:
+            await paid.aclose()
 
     async def _astream_paid_phase(
         self,
@@ -2822,8 +2841,9 @@ class AsyncLLMClient:
             # See the sync path: past this point the payment is settled.
             try:
                 return await self._handle_payment_and_retry(url, body, response)
-            except Exception as exc:
-                raise _mark_settled(exc) from None
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
 
         if response.status_code != 200:
             try:
@@ -2986,8 +3006,9 @@ class AsyncLLMClient:
         if response.status_code == 402:
             try:
                 result = await self._handle_payment_and_retry_raw(url, body, response)
-            except Exception as exc:
-                raise _mark_settled(exc) from None
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
             save_to_cache(
                 endpoint,
                 body,
