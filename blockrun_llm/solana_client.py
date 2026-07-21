@@ -70,6 +70,12 @@ from .validation import (
     validate_video_input_type,
 )
 
+# Shared with the Base client: signing is settlement on either chain, so the
+# "already paid, do not retry on another model" tag has to mean the same thing
+# in both fallback chains. client.py does not import this module, so there is
+# no cycle.
+from .client import _SETTLED_ATTR, _mark_settled
+
 try:
     from x402 import x402ClientSync
     from x402.mechanisms.svm import KeypairSigner
@@ -344,7 +350,13 @@ def _should_fallback_solana(exc: Exception) -> bool:
     payment classification (``transaction_simulation_failed``, etc.) we
     do NOT fall back — re-signing a fresh request hits the same wall in
     seconds. The first failure surfaces immediately.
+
+    Also refuses anything already tagged by
+    :func:`blockrun_llm.client._mark_settled`: SPL USDC has left the wallet, and
+    the next model would sign a second transfer for the same call.
     """
+    if getattr(exc, _SETTLED_ATTR, False):
+        return False
     # PaymentError always carries the gateway reason now (v0.32.0+).
     if isinstance(exc, PaymentError):
         return False
@@ -925,27 +937,35 @@ class SolanaLLMClient:
 
         # ----- Phase 2: stream with PAYMENT-SIGNATURE -----
         assert payment_headers is not None
-        for attempt in range(len(backoffs) + 1):
-            with self._client.stream(
-                "POST", url, json=body, headers=payment_headers, timeout=eff_timeout
-            ) as resp2:
-                if resp2.status_code == 200:
-                    if cost_usd > 0:
-                        self._session_calls += 1
-                        self._session_total_usd += cost_usd
-                        self._last_call_cost = cost_usd
-                        self._capture_settlement(resp2)
-                    yield from self._iter_and_archive(resp2, body, cost_usd)
-                    return
-                resp2.read()
-                if resp2.status_code == 402:
-                    raise build_payment_rejected_error(resp2)
-                if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
-                    import time
+        try:
+            for attempt in range(len(backoffs) + 1):
+                with self._client.stream(
+                    "POST", url, json=body, headers=payment_headers, timeout=eff_timeout
+                ) as resp2:
+                    if resp2.status_code == 200:
+                        if cost_usd > 0:
+                            self._session_calls += 1
+                            self._session_total_usd += cost_usd
+                            self._last_call_cost = cost_usd
+                            self._capture_settlement(resp2)
+                        yield from self._iter_and_archive(resp2, body, cost_usd)
+                        return
+                    resp2.read()
+                    if resp2.status_code == 402:
+                        raise build_payment_rejected_error(resp2)
+                    if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
+                        import time
 
-                    time.sleep(backoffs[attempt])
-                    continue
-                self._raise_stream_error(resp2, after_payment=True)
+                        time.sleep(backoffs[attempt])
+                        continue
+                    self._raise_stream_error(resp2, after_payment=True)
+
+        except (httpx.HTTPError, APIError) as exc:
+            # Signed above; SPL USDC is gone. Do not let the fallback
+            # chain buy a retry on the next model. Re-raise bare so the
+            # traceback and __context__ survive.
+            _mark_settled(exc)
+            raise
 
     def _iter_and_archive(
         self,
@@ -1127,7 +1147,13 @@ class SolanaLLMClient:
             response = self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
-            return self._handle_payment_and_retry(url, body, response, timeout=eff_timeout)
+            # Past this point the SPL USDC transfer has been signed. Tag
+            # anything that escapes so no fallback chain can buy a retry.
+            try:
+                return self._handle_payment_and_retry(url, body, response, timeout=eff_timeout)
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
 
         if not response.is_success:
             try:
@@ -1241,7 +1267,15 @@ class SolanaLLMClient:
             response = self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
-            result = self._handle_payment_and_retry_raw(url, body, response, timeout=eff_timeout)
+            # Past this point the SPL USDC transfer has been signed. Tag
+            # anything that escapes so no fallback chain can buy a retry.
+            try:
+                result = self._handle_payment_and_retry_raw(
+                    url, body, response, timeout=eff_timeout
+                )
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
             save_to_cache(
                 endpoint,
                 body,
@@ -3138,28 +3172,36 @@ class AsyncSolanaLLMClient:
 
         # ----- Phase 2: stream with PAYMENT-SIGNATURE -----
         assert payment_headers is not None
-        for attempt in range(len(backoffs) + 1):
-            async with self._client.stream(
-                "POST", url, json=body, headers=payment_headers, timeout=eff_timeout
-            ) as resp2:
-                if resp2.status_code == 200:
-                    if cost_usd > 0:
-                        self._session_calls += 1
-                        self._session_total_usd += cost_usd
-                        self._last_call_cost = cost_usd
-                        self._capture_settlement(resp2)
-                    async for chunk in self._aiter_and_archive(resp2, body, cost_usd):
-                        yield chunk
-                    return
-                await resp2.aread()
-                if resp2.status_code == 402:
-                    raise build_payment_rejected_error(resp2)
-                if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
-                    import asyncio
+        try:
+            for attempt in range(len(backoffs) + 1):
+                async with self._client.stream(
+                    "POST", url, json=body, headers=payment_headers, timeout=eff_timeout
+                ) as resp2:
+                    if resp2.status_code == 200:
+                        if cost_usd > 0:
+                            self._session_calls += 1
+                            self._session_total_usd += cost_usd
+                            self._last_call_cost = cost_usd
+                            self._capture_settlement(resp2)
+                        async for chunk in self._aiter_and_archive(resp2, body, cost_usd):
+                            yield chunk
+                        return
+                    await resp2.aread()
+                    if resp2.status_code == 402:
+                        raise build_payment_rejected_error(resp2)
+                    if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
+                        import asyncio
 
-                    await asyncio.sleep(backoffs[attempt])
-                    continue
-                self._raise_stream_error(resp2, after_payment=True)
+                        await asyncio.sleep(backoffs[attempt])
+                        continue
+                    self._raise_stream_error(resp2, after_payment=True)
+
+        except (httpx.HTTPError, APIError) as exc:
+            # Signed above; SPL USDC is gone. Do not let the fallback
+            # chain buy a retry on the next model. Re-raise bare so the
+            # traceback and __context__ survive.
+            _mark_settled(exc)
+            raise
 
     @staticmethod
     async def _aiter_sse_chunks(response: httpx.Response):
@@ -3311,7 +3353,15 @@ class AsyncSolanaLLMClient:
             response = await self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
-            return await self._handle_payment_and_retry(url, body, response, timeout=eff_timeout)
+            # Past this point the SPL USDC transfer has been signed. Tag
+            # anything that escapes so no fallback chain can buy a retry.
+            try:
+                return await self._handle_payment_and_retry(
+                    url, body, response, timeout=eff_timeout
+                )
+            except (httpx.HTTPError, APIError) as exc:
+                _mark_settled(exc)
+                raise
 
         if not response.is_success:
             try:

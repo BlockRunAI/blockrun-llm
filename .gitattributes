@@ -1,0 +1,19 @@
+# Normalize line endings in the repository. Without this the working tree's
+# native endings leak into commits: 3 files were converted CRLF->LF inside an
+# unrelated behavioural fix, inflating that diff from 51 real lines to 1045 and
+# burying the change under formatting noise. 14 other tracked files were still
+# CRLF, so the next contributor would have regenerated it.
+* text=auto
+
+# Binary formats git must not touch.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.mp3 binary
+*.mp4 binary
+*.wav binary

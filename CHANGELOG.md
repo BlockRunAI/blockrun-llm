@@ -2,6 +2,60 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.8.2 — 2026-07-21
+
+Supersedes 1.8.1, which was published from a tree where `VERSION` and
+`__init__.py` still read 1.8.0. That wheel reports `__version__ == "1.8.0"` and
+cannot be corrected in place, since PyPI does not allow overwriting a published
+file. Install 1.8.2 to get a package whose self-reported version is truthful.
+
+### Security
+- **A failed paid request no longer triggers a second payment, on either
+  chain.** Any error raised after the `PAYMENT-SIGNATURE` went out is now
+  refused for model fallback, for both Base (`_should_fallback`) and Solana
+  (`_should_fallback_solana`). Previously a post-settlement failure was
+  indistinguishable from a transient one, so the chain advanced to the next
+  model and signed again — `smart_chat` on the premium complex tier could
+  settle six payments and return no tokens, the "CHARGED BUT REQUEST FAILED"
+  outcome this file already documents under 1.7.1. This covers every error
+  escaping the paid leg, not
+  only timeouts: the dominant post-settlement failure is a paid 5xx, which
+  arrives as `APIError(503)` — exactly a status the fallback logic treats as
+  retriable. Callers catching `httpx.TimeoutException` are unaffected; the
+  marker is an attribute, not a new exception type.
+- **The clamp warning cannot break the request it warns about.** Its parse ran
+  on `resource.description`, a server-controlled string, immediately before
+  signing. A non-string value raised `TypeError` and aborted the call, and the
+  pattern backtracked super-linearly on a long digit run (measured on CPython
+  3.13: 0.49s at 8k digits, 1.95s at 16k, and it keeps squaring). The number is
+  now matched by a bounded pattern against a
+  length-capped slice, an ambiguous description (a per-unit rate alongside the
+  ceiling) stays silent instead of naming the wrong number, and the whole helper
+  swallows its own failures.
+- **Removed a documented payment guard that does not exist.**
+  `chat_completion()` advertised `PaymentError: If budget is set and would be
+  exceeded`. There is no `budget` parameter anywhere in the SDK and no
+  client-side spend cap — every 402 quote is signed automatically. The
+  docstring now says that plainly and points at `get_spending()`.
+
+### Changed
+- **`max_tokens` above a model's ceiling is no longer silently absorbed.** The
+  gateway does not reject an over-ceiling value; it clamps to the model's own
+  ceiling and quotes payment for the clamped value. Verified against the live
+  402 leg on 2026-07-21: `claude-opus-4.8` sent 262144 and 1000000 both quote
+  the 128000 price, and `gpt-5.2` sent 1e12 returns a quote rather than a 400.
+  The 402 disclosed the clamp in `resource.description` and the SDK discarded
+  it while signing. Callers now get a warning naming what they asked for and
+  what they are being charged for, before the signature goes out.
+- The comment and `ValueError` around `MAX_TOKENS_SANITY_LIMIT` claimed the
+  gateway "enforces the real per-model ceiling and reports it". It does not.
+  Both now describe clamping.
+
+### Fixed
+- Line endings are normalized repo-wide via `.gitattributes` (`* text=auto`).
+  17 tracked files were CRLF against an otherwise-LF tree, which turned a
+  51-line change into a 1045-line diff in #27.
+
 ## 1.8.1 — 2026-07-21
 
 ### Fixed
