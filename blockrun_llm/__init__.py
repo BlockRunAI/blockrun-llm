@@ -87,6 +87,7 @@ from .types import (
     Model,
     APIError,
     PaymentError,
+    SpendLimitError,
     ImageResponse,
     ImageData,
     ImageModel,
@@ -178,7 +179,7 @@ from .cache import (
 )
 from .tx_log import TransactionLogger, decode_settlement_header, format_row
 
-__version__ = "1.8.2"
+__version__ = "1.9.0"
 __all__ = [
     "LLMClient",
     "AsyncLLMClient",
@@ -218,6 +219,7 @@ __all__ = [
     "Model",
     "APIError",
     "PaymentError",
+    "SpendLimitError",
     "ImageResponse",
     "ImageData",
     "ImageModel",

@@ -64,6 +64,7 @@ from .price import Category, Market, Resolution, Session
 from .realface import _GROUP_ID_RE
 from .validation import (
     build_payment_rejected_error,
+    resolve_spend_limit,
     sanitize_error_response,
     validate_api_url,
     validate_image_quality,
@@ -75,7 +76,7 @@ from .validation import (
 # "already paid, do not retry on another model" tag has to mean the same thing
 # in both fallback chains. client.py does not import this module, so there is
 # no cycle.
-from .client import _SETTLED_ATTR, _mark_settled
+from .client import _SETTLED_ATTR, _enforce_spend_limits, _mark_settled
 
 try:
     from x402 import x402ClientSync
@@ -466,6 +467,8 @@ class SolanaLLMClient:
         search_timeout: float = DEFAULT_SEARCH_TIMEOUT,
         rpc_headers: Optional[Dict[str, str]] = None,
         transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
+        max_cost_per_call: Optional[float] = None,
+        max_session_cost: Optional[float] = None,
     ) -> None:
         """Initialise the Solana client.
 
@@ -527,6 +530,13 @@ class SolanaLLMClient:
         # search / per-call overrides are applied per request below.
         self._client = httpx.Client(timeout=timeout)
         self._session_total_usd = 0.0
+        # Opt-in spend limits. None (the default) means unlimited, which is the
+        # behavior every release before 1.9.0 had: every 402 quote was signed
+        # automatically with nothing compared against anything.
+        self._max_cost_per_call = resolve_spend_limit(
+            max_cost_per_call, "BLOCKRUN_MAX_COST_PER_CALL"
+        )
+        self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
         self._session_calls = 0
         self._last_call_cost: float = 0.0
         self._address: Optional[str] = None
@@ -1080,6 +1090,10 @@ class SolanaLLMClient:
 
         payment_required = decode_payment_required_header(payment_header)
         payment_payload = self._sign_payment(payment_required)
+        # Before the paid request goes out. Signing alone moves nothing; the
+        # gateway submitting the signed authorization does, so refusing here
+        # means nothing settles.
+        _enforce_spend_limits(self, float(payment_payload.accepted.amount) / 1e6)
         encoded_payment = encode_payment_signature_header(payment_payload)
 
         cost_usd = float(payment_payload.accepted.amount) / 1e6
@@ -1186,6 +1200,10 @@ class SolanaLLMClient:
         # Use x402 SDK to decode 402 response and create signed payment
         payment_required = decode_payment_required_header(payment_header)
         payment_payload = self._sign_payment(payment_required)
+        # Before the paid request goes out. Signing alone moves nothing; the
+        # gateway submitting the signed authorization does, so refusing here
+        # means nothing settles.
+        _enforce_spend_limits(self, float(payment_payload.accepted.amount) / 1e6, body.get("model"))
         encoded_payment = encode_payment_signature_header(payment_payload)
 
         payment_headers = {
@@ -1318,6 +1336,10 @@ class SolanaLLMClient:
         # Use x402 SDK to decode 402 response and create signed payment
         payment_required = decode_payment_required_header(payment_header)
         payment_payload = self._sign_payment(payment_required)
+        # Before the paid request goes out. Signing alone moves nothing; the
+        # gateway submitting the signed authorization does, so refusing here
+        # means nothing settles.
+        _enforce_spend_limits(self, float(payment_payload.accepted.amount) / 1e6, body.get("model"))
         encoded_payment = encode_payment_signature_header(payment_payload)
 
         payment_headers = {
@@ -1427,6 +1449,10 @@ class SolanaLLMClient:
 
         payment_required = decode_payment_required_header(payment_header)
         payment_payload = self._sign_payment(payment_required)
+        # Before the paid request goes out. Signing alone moves nothing; the
+        # gateway submitting the signed authorization does, so refusing here
+        # means nothing settles.
+        _enforce_spend_limits(self, float(payment_payload.accepted.amount) / 1e6)
         encoded_payment = encode_payment_signature_header(payment_payload)
 
         payment_headers = {
@@ -2802,6 +2828,8 @@ class AsyncSolanaLLMClient:
         search_timeout: float = DEFAULT_SEARCH_TIMEOUT,
         rpc_headers: Optional[Dict[str, str]] = None,
         transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
+        max_cost_per_call: Optional[float] = None,
+        max_session_cost: Optional[float] = None,
     ) -> None:
         """Async mirror of :class:`SolanaLLMClient.__init__`. Same env-var
         fallback for ``rpc_url`` / ``rpc_headers`` — see
@@ -2838,6 +2866,13 @@ class AsyncSolanaLLMClient:
         self._search_timeout = search_timeout
         self._client = httpx.AsyncClient(timeout=timeout)
         self._session_total_usd = 0.0
+        # Opt-in spend limits. None (the default) means unlimited, which is the
+        # behavior every release before 1.9.0 had: every 402 quote was signed
+        # automatically with nothing compared against anything.
+        self._max_cost_per_call = resolve_spend_limit(
+            max_cost_per_call, "BLOCKRUN_MAX_COST_PER_CALL"
+        )
+        self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
         self._session_calls = 0
         self._last_call_cost: float = 0.0
         self._address: Optional[str] = None
@@ -3308,6 +3343,8 @@ class AsyncSolanaLLMClient:
             raise PaymentError("402 response but no payment requirements found")
         payment_required = decode_payment_required_header(payment_header)
         payment_payload = await self._sign_payment(payment_required)
+        # See the sync path: refusing here means nothing is ever sent.
+        _enforce_spend_limits(self, float(payment_payload.accepted.amount) / 1e6)
         encoded_payment = encode_payment_signature_header(payment_payload)
         cost_usd = float(payment_payload.accepted.amount) / 1e6
         return (
