@@ -2,6 +2,23 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.8.1 — 2026-07-21
+
+### Fixed
+- **`max_tokens` no longer capped below what models actually serve.** The SDK
+  rejected anything over 100000 client-side. That was not a model limit and not
+  the gateway's — it was an undocumented sanity check that quietly became the
+  binding constraint on every caller. Asking `zai/glm-5.2` for the 262144 it
+  advertises raised a `ValueError` that never reached the network and named a
+  limit no provider had set. The bound is now `MAX_TOKENS_SANITY_LIMIT`
+  (1000000), a typo guard for obviously-wrong values (a byte count, a
+  timestamp, a stray `1e9`) rather than a ceiling any real request can hit.
+- **The rejection message no longer reads like a provider response.**
+  `"max_tokens too large (maximum: 100000)"` was taken for an upstream model
+  ceiling during an investigation and recorded as one, on the strength of 19
+  identical "rejections" that never left the process. The message now says the
+  number is the SDK's own.
+
 ## 1.8.0 — 2026-07-18
 
 ### Added
