@@ -43,3 +43,16 @@ jobs:
           else
             pytest tests/unit --ignore=tests/unit/test_solana_client.py --ignore=tests/unit/test_solana_wallet.py -k "not SolanaX402"
           fi
+
+  # Fails when a number in the docs disagrees with brand-numbers.json.
+  # Offline by design: it reads the committed snapshot and never fetches, so a
+  # blockrun.ai deploy in progress cannot fail this repo's CI. Its own job
+  # rather than a step, so it does not run three times across the Python matrix.
+  brand-numbers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/sync-brand-numbers.mjs --check
