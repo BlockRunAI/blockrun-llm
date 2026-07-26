@@ -38,7 +38,7 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "black==24.10.0",  # Pin version for consistent formatting
     "mypy>=1.0.0",
-    "ruff>=0.1.0",
+    "ruff==0.14.11",  # Pin version: an unpinned linter breaks CI with no code change
 ]
 anthropic = [
     "anthropic>=0.40.0",
