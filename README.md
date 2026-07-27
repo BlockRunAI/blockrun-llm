@@ -797,7 +797,7 @@ Supported stock markets: `us, hk, jp, kr, gb, de, fr, nl, ie, lu, cn, ca`.
 
 ## Multi-chain RPC (`RpcClient`)
 
-Standard JSON-RPC 2.0 access to 40+ chains through one endpoint — Ethereum,
+Standard JSON-RPC 2.0 access to <!-- br:chains.rpc -->40<!-- /br:chains.rpc --> chains through one endpoint — Ethereum,
 Base, Solana, Polygon, BSC, Arbitrum, Optimism, Avalanche, Bitcoin, Sui, and
 more (powered by Tatum's RPC gateway). No API key, no per-chain endpoints:
 flat **$0.002 per call** in USDC; a JSON-RPC batch charges per element.
