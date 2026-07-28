@@ -39,12 +39,14 @@ signatures are sent in the PAYMENT-SIGNATURE header.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 import httpx
 from dotenv import load_dotenv
 from eth_account import Account
+from typing_extensions import Self
 
+from .tx_log import paid_request_error_prefix
 from .types import APIError, PaymentError
 from .validation import (
     sanitize_error_response,
@@ -56,13 +58,12 @@ from .x402 import (
     extract_payment_details,
     parse_payment_required,
 )
-from .tx_log import paid_request_error_prefix
 
 load_dotenv()
 
 
 # Mirrors src/lib/twilio.ts PHONE_PRICES on the backend (settled USDC amount).
-PHONE_PRICES: Dict[str, float] = {
+PHONE_PRICES: dict[str, float] = {
     "lookup": 0.01,
     "lookup/fraud": 0.05,
     "numbers/buy": 5.00,
@@ -86,8 +87,8 @@ class PhoneClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
     ):
         from .wallet import load_wallet
@@ -118,7 +119,7 @@ class PhoneClient:
 
     # ------------------------------------------------------------------ Lookup
 
-    def lookup(self, phone_number: str) -> Dict[str, Any]:
+    def lookup(self, phone_number: str) -> dict[str, Any]:
         """
         Carrier + line-type lookup. ~$0.01.
 
@@ -131,7 +132,7 @@ class PhoneClient:
         self._require_e164(phone_number)
         return self._request("lookup", {"phoneNumber": phone_number.strip()})
 
-    def lookup_fraud(self, phone_number: str) -> Dict[str, Any]:
+    def lookup_fraud(self, phone_number: str) -> dict[str, Any]:
         """
         Lookup + fraud signals (SIM swap, call forwarding). ~$0.05.
 
@@ -149,8 +150,8 @@ class PhoneClient:
     def buy_number(
         self,
         country: str = "US",
-        area_code: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        area_code: str | None = None,
+    ) -> dict[str, Any]:
         """
         Provision a dedicated phone number for 30 days. $5.00.
 
@@ -173,14 +174,14 @@ class PhoneClient:
         """
         if country not in ("US", "CA"):
             raise ValueError("country must be 'US' or 'CA'")
-        body: Dict[str, Any] = {"country": country}
+        body: dict[str, Any] = {"country": country}
         if area_code is not None:
             if not (isinstance(area_code, str) and area_code.isdigit() and len(area_code) == 3):
                 raise ValueError("area_code must be a 3-digit string, e.g. '415'")
             body["areaCode"] = area_code
         return self._request("numbers/buy", body)
 
-    def renew_number(self, phone_number: str) -> Dict[str, Any]:
+    def renew_number(self, phone_number: str) -> dict[str, Any]:
         """
         Extend an existing provisioned number by 30 days. $5.00.
 
@@ -196,7 +197,7 @@ class PhoneClient:
         self._require_e164(phone_number)
         return self._request("numbers/renew", {"phoneNumber": phone_number.strip()})
 
-    def list_numbers(self) -> Dict[str, Any]:
+    def list_numbers(self) -> dict[str, Any]:
         """
         List the wallet's active phone numbers. ~$0.001.
 
@@ -208,7 +209,7 @@ class PhoneClient:
         """
         return self._request("numbers/list", {})
 
-    def release_number(self, phone_number: str) -> Dict[str, Any]:
+    def release_number(self, phone_number: str) -> dict[str, Any]:
         """
         Release a provisioned number back to the Twilio pool. Free, but the
         request still flows through x402 so the backend can verify ownership.
@@ -232,7 +233,7 @@ class PhoneClient:
         if not v.startswith("+") or not v[1:].isdigit() or not (8 <= len(v) <= 16):
             raise ValueError(f"phone_number must be E.164 (e.g. '+14155552671'), got {value!r}")
 
-    def _request(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    def _request(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.api_url}/v1/phone/{path}"
         response = self._client.post(url, json=body, headers={"Content-Type": "application/json"})
         if response.status_code == 402:
@@ -242,9 +243,9 @@ class PhoneClient:
     def _handle_payment_and_retry(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         payment_header: Any = response.headers.get("payment-required")
         if not payment_header:
             try:
@@ -294,7 +295,7 @@ class PhoneClient:
         return data
 
     @staticmethod
-    def _unwrap(response: httpx.Response, *, after_payment: bool = False) -> Dict[str, Any]:
+    def _unwrap(response: httpx.Response, *, after_payment: bool = False) -> dict[str, Any]:
         if response.status_code == 200:
             return response.json()
         try:
@@ -317,7 +318,7 @@ class PhoneClient:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> "PhoneClient":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:

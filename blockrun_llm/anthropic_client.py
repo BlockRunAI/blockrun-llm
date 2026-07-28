@@ -16,16 +16,17 @@ Usage:
     print(response.content[0].text)
 """
 
+from __future__ import annotations
+
 import os
-from typing import Optional
 
 import httpx
-from eth_account import Account
 from dotenv import load_dotenv
+from eth_account import Account
 
+from .validation import validate_api_url, validate_private_key
 from .wallet import load_wallet
-from .validation import validate_private_key, validate_api_url
-from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
+from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
 
 load_dotenv()
 
@@ -39,7 +40,7 @@ class _BlockRunX402Transport(httpx.BaseTransport):
     """Custom httpx transport that intercepts 402 responses and signs x402 payments."""
 
     def __init__(
-        self, account: Account, api_url: str, base_transport: Optional[httpx.BaseTransport] = None
+        self, account: Account, api_url: str, base_transport: httpx.BaseTransport | None = None
     ):
         self._account = account
         self._api_url = api_url
@@ -126,8 +127,8 @@ class AnthropicClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = DEFAULT_CHAT_TIMEOUT,
         **kwargs,
     ):

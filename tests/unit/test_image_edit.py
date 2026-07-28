@@ -11,7 +11,6 @@ that the 402 → sign → retry dance preserves it on the paid request.
 from __future__ import annotations
 
 import json
-from typing import List
 
 import httpx
 
@@ -22,7 +21,7 @@ from ..helpers import TEST_PRIVATE_KEY, build_payment_required_response
 DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
 
 
-def _image_edit_transport(calls: List[httpx.Request]) -> httpx.MockTransport:
+def _image_edit_transport(calls: list[httpx.Request]) -> httpx.MockTransport:
     """First POST → 402 with payment requirements; retry with signature → 200."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -48,14 +47,14 @@ def _image_edit_transport(calls: List[httpx.Request]) -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
-def _make_client(calls: List[httpx.Request]) -> ImageClient:
+def _make_client(calls: list[httpx.Request]) -> ImageClient:
     client = ImageClient(private_key=TEST_PRIVATE_KEY)
     client._client = httpx.Client(transport=_image_edit_transport(calls))
     return client
 
 
 def test_edit_single_image_passes_string_through():
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     client = _make_client(calls)
 
     result = client.edit("Make the sky purple", image=DATA_URI)
@@ -72,7 +71,7 @@ def test_edit_single_image_passes_string_through():
 
 
 def test_edit_defaults_to_gpt_image_2():
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     client = _make_client(calls)
 
     client.edit("Make the sky purple", image=DATA_URI)
@@ -83,7 +82,7 @@ def test_edit_defaults_to_gpt_image_2():
 
 
 def test_edit_multi_image_passes_list_through():
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     client = _make_client(calls)
 
     images = [DATA_URI, DATA_URI]

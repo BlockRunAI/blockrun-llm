@@ -33,29 +33,32 @@ Usage:
 Pricing: $0.54 per outbound call (regardless of duration up to max_duration).
 """
 
-import os
-from typing import Optional, Dict, Any, List
-import httpx
-from eth_account import Account
-from dotenv import load_dotenv
+from __future__ import annotations
 
-from .types import APIError, PaymentError
-from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
-from .validation import (
-    validate_private_key,
-    validate_api_url,
-    sanitize_error_response,
-)
+import os
+from typing import Any
+
+import httpx
+from dotenv import load_dotenv
+from eth_account import Account
+
 from .tx_log import paid_request_error_prefix
+from .types import APIError, PaymentError
+from .validation import (
+    sanitize_error_response,
+    validate_api_url,
+    validate_private_key,
+)
+from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
 
 load_dotenv()
 
 
 # Built-in Bland.ai voice presets — any string accepted by Bland is also valid.
-VOICE_PRESETS: List[str] = ["nat", "josh", "maya", "june", "paige", "derek", "florian"]
+VOICE_PRESETS: list[str] = ["nat", "josh", "maya", "june", "paige", "derek", "florian"]
 
 # Bland.ai conversation models
-CALL_MODELS: List[str] = ["base", "enhanced", "turbo"]
+CALL_MODELS: list[str] = ["base", "enhanced", "turbo"]
 
 # Settled price per call (USD)
 CALL_PRICE_USD: float = 0.54
@@ -80,8 +83,8 @@ class VoiceClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = 60.0,
     ):
         """
@@ -124,15 +127,15 @@ class VoiceClient:
         to: str,
         task: str,
         *,
-        from_: Optional[str] = None,
-        voice: Optional[str] = None,
+        from_: str | None = None,
+        voice: str | None = None,
         max_duration: int = 5,
         language: str = "en-US",
-        first_sentence: Optional[str] = None,
-        wait_for_greeting: Optional[bool] = None,
-        interruption_threshold: Optional[int] = None,
-        model: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        first_sentence: str | None = None,
+        wait_for_greeting: bool | None = None,
+        interruption_threshold: int | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
         """
         Initiate an AI-powered outbound phone call.
 
@@ -196,7 +199,7 @@ class VoiceClient:
         if interruption_threshold is not None and not (50 <= interruption_threshold <= 500):
             raise ValueError("interruption_threshold must be between 50 and 500")
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "to": to.strip(),
             "task": task.strip(),
             "max_duration": max_duration,
@@ -217,7 +220,7 @@ class VoiceClient:
 
         return self._request_with_payment("/v1/voice/call", body)
 
-    def get_status(self, call_id: str) -> Dict[str, Any]:
+    def get_status(self, call_id: str) -> dict[str, Any]:
         """
         Poll the status of an in-progress or completed call. Free — no payment.
 
@@ -256,7 +259,7 @@ class VoiceClient:
 
         return response.json()
 
-    def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    def _request_with_payment(self, endpoint: str, body: dict[str, Any]) -> dict[str, Any]:
         """Make a POST with automatic x402 payment handling."""
         url = f"{self.api_url}{endpoint}"
 
@@ -285,9 +288,9 @@ class VoiceClient:
     def _handle_payment_and_retry(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle 402: parse requirements, sign payment, retry."""
         payment_header = response.headers.get("payment-required")
         if not payment_header:

@@ -10,7 +10,7 @@ test_solana_timeout_routing.py.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, Dict, List
+from typing import Any
 from unittest import mock
 
 import httpx
@@ -22,18 +22,17 @@ import pytest
 pytest.importorskip("x402")
 pytest.importorskip("solders")
 
-from blockrun_llm.solana_client import (  # noqa: E402
+from blockrun_llm.solana_client import (
     AsyncSolanaLLMClient,
     SolanaLLMClient,
     _assert_same_payment_terms,
 )
-from blockrun_llm.types import (  # noqa: E402
+from blockrun_llm.types import (
     APIError,
     MusicResponse,
     PaymentError,
     SpeechResponse,
 )
-
 
 # ---------------------------------------------------------------------------
 # _assert_same_payment_terms — the mid-poll re-sign guard
@@ -109,7 +108,7 @@ def _make_client(handler: Any) -> SolanaLLMClient:
     return client
 
 
-def _paid_flow(calls: List[httpx.Request], ok_body: Dict[str, Any]):
+def _paid_flow(calls: list[httpx.Request], ok_body: dict[str, Any]):
     """402 on the unsigned probe, then ``ok_body`` once signed. Captures the
     signed request so tests can assert the forwarded JSON body + path."""
 
@@ -138,7 +137,7 @@ class TestMediaDispatch:
     def test_music_body_and_response(self) -> None:
         import json
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _MUSIC_OK))
         resp = client.music("lo-fi beats")
         assert isinstance(resp, MusicResponse)
@@ -151,7 +150,7 @@ class TestMediaDispatch:
     def test_speech_body_and_response(self) -> None:
         import json
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _SPEECH_OK))
         resp = client.speech("hello world", voice="sarah")
         assert isinstance(resp, SpeechResponse)
@@ -162,7 +161,7 @@ class TestMediaDispatch:
         assert sent["voice"] == "sarah"
 
     def test_sound_effect_endpoint(self) -> None:
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _SPEECH_OK))
         client.sound_effect("thunder clap")
         assert calls[-1].url.path == "/api/v1/audio/sound-effects"
@@ -305,7 +304,7 @@ def _make_async_client(handler: Any) -> AsyncSolanaLLMClient:
     return client
 
 
-def _resign_handler(signed_poll_codes: List[int]):
+def _resign_handler(signed_poll_codes: list[int]):
     """Drive a video job through the mid-poll re-sign path.
 
     probe → 402; signed POST → 202 + poll_url; each *signed* GET poll returns
@@ -346,7 +345,7 @@ def _resign_handler(signed_poll_codes: List[int]):
     return handler
 
 
-_HELPER_KW: Dict[str, Any] = {
+_HELPER_KW: dict[str, Any] = {
     "poll_budget_seconds": 5.0,
     "poll_interval_seconds": 0.001,
     "max_resigns": 2,
@@ -413,7 +412,7 @@ class TestResignEndToEnd:
 # ---------------------------------------------------------------------------
 
 
-def _fresh_sig_handler(n_in_progress: int, poll_sigs: List[str]):
+def _fresh_sig_handler(n_in_progress: int, poll_sigs: list[str]):
     """Video job that NEVER 402s on a poll: n_in_progress in-progress polls,
     then completed. Records the PAYMENT-SIGNATURE seen on every signed poll so a
     test can assert the proactive re-sign refreshed it each time."""
@@ -464,7 +463,7 @@ class TestProactiveResign:
         # Fire the proactive re-sign on every poll (0s freshness window).
         monkeypatch.setattr(SolanaLLMClient, "MEDIA_RESIGN_FRESH_SECONDS", 0.0)
 
-        poll_sigs: List[str] = []
+        poll_sigs: list[str] = []
         client = _make_client(_fresh_sig_handler(3, poll_sigs))
         data = client._request_image_with_payment(
             "/v1/videos/generations", dict(_VIDEO_BODY), **_HELPER_KW
@@ -489,7 +488,7 @@ class TestProactiveResign:
         )
         monkeypatch.setattr(SolanaLLMClient, "MEDIA_RESIGN_FRESH_SECONDS", 0.0)
 
-        poll_sigs: List[str] = []
+        poll_sigs: list[str] = []
         client = _make_async_client(_fresh_sig_handler(3, poll_sigs))
         try:
             data = await client._request_image_with_payment(
@@ -504,7 +503,7 @@ class TestProactiveResign:
     # max_resigns == 0 (the image path) must NOT proactively re-sign, even with a
     # 0s freshness window: every poll reuses the single submit-time signature so
     # the image flow is provably untouched by the video-only fix.
-    _IMAGE_KW: Dict[str, Any] = {
+    _IMAGE_KW: dict[str, Any] = {
         "poll_budget_seconds": 5.0,
         "poll_interval_seconds": 0.001,
         "max_resigns": 0,
@@ -521,7 +520,7 @@ class TestProactiveResign:
         )
         monkeypatch.setattr(SolanaLLMClient, "MEDIA_RESIGN_FRESH_SECONDS", 0.0)
 
-        poll_sigs: List[str] = []
+        poll_sigs: list[str] = []
         client = _make_client(_fresh_sig_handler(3, poll_sigs))
         data = client._request_image_with_payment(
             "/v1/images/generations", dict(_VIDEO_BODY), **self._IMAGE_KW
@@ -543,7 +542,7 @@ class TestProactiveResign:
         )
         monkeypatch.setattr(SolanaLLMClient, "MEDIA_RESIGN_FRESH_SECONDS", 0.0)
 
-        poll_sigs: List[str] = []
+        poll_sigs: list[str] = []
         client = _make_async_client(_fresh_sig_handler(3, poll_sigs))
         try:
             data = await client._request_image_with_payment(
@@ -575,7 +574,7 @@ class TestSolanaImageQuality:
     def test_image_forwards_quality(self) -> None:
         import json
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _IMAGE_OK))
         client.image("a cat", model="openai/gpt-image-2", quality="low")
         sent = json.loads(calls[-1].content)
@@ -584,7 +583,7 @@ class TestSolanaImageQuality:
     def test_image_omits_quality_when_unset(self) -> None:
         import json
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _IMAGE_OK))
         client.image("a cat")
         assert "quality" not in json.loads(calls[-1].content)
@@ -592,7 +591,7 @@ class TestSolanaImageQuality:
     def test_image_edit_forwards_quality(self) -> None:
         import json
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _IMAGE_OK))
         client.image_edit("make it green", _DATA_URI, quality="high")
         sent = json.loads(calls[-1].content)
@@ -603,20 +602,20 @@ class TestSolanaImageQuality:
     def test_image_accepts_every_gateway_quality(self, value: str) -> None:
         import json
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _IMAGE_OK))
         client.image("a cat", model="openai/gpt-image-2", quality=value)
         assert json.loads(calls[-1].content)["quality"] == value
 
     def test_image_rejects_unknown_quality_before_paying(self) -> None:
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _IMAGE_OK))
         with pytest.raises(ValueError, match="quality must be one of"):
             client.image("a cat", model="openai/gpt-image-2", quality="hd")
         assert calls == []  # rejected locally — no request, no payment
 
     def test_image_edit_rejects_unknown_quality_before_paying(self) -> None:
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _IMAGE_OK))
         with pytest.raises(ValueError, match="quality must be one of"):
             client.image_edit("make it green", _DATA_URI, quality="ultra")
@@ -627,7 +626,7 @@ class TestSolanaVideoInputType:
     def test_video_forwards_input_type(self) -> None:
         import json
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _VIDEO_OK))
         client.video(
             "the flower blooms",
@@ -640,13 +639,13 @@ class TestSolanaVideoInputType:
     def test_video_omits_input_type_when_unset(self) -> None:
         import json
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _VIDEO_OK))
         client.video("a calm lake")
         assert "input_type" not in json.loads(calls[-1].content)
 
     def test_video_rejects_unknown_input_type_before_paying(self) -> None:
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _VIDEO_OK))
         with pytest.raises(ValueError, match="input_type must be one of"):
             client.video("x", input_type="img")
@@ -686,14 +685,14 @@ class TestAsyncMediaParamParity:
     async def test_async_video_forwards_input_type(self) -> None:
         import json
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_async_client(_paid_flow(calls, _VIDEO_OK))
         await client.video("a calm lake", input_type="text")
         assert json.loads(calls[-1].content)["input_type"] == "text"
 
     @pytest.mark.asyncio
     async def test_async_video_rejects_unknown_input_type_before_paying(self) -> None:
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_async_client(_paid_flow(calls, _VIDEO_OK))
         with pytest.raises(ValueError, match="input_type must be one of"):
             await client.video("x", input_type="img")
@@ -703,7 +702,7 @@ class TestAsyncMediaParamParity:
     async def test_async_image_forwards_quality(self) -> None:
         import json
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_async_client(_paid_flow(calls, _IMAGE_OK))
         await client.image("a cat", model="openai/gpt-image-2", quality="low")
         assert json.loads(calls[-1].content)["quality"] == "low"
@@ -712,7 +711,7 @@ class TestAsyncMediaParamParity:
     async def test_async_image_edit_forwards_quality(self) -> None:
         import json
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_async_client(_paid_flow(calls, _IMAGE_OK))
         await client.image_edit("make it green", _DATA_URI, quality="high")
         assert json.loads(calls[-1].content)["quality"] == "high"
@@ -720,7 +719,7 @@ class TestAsyncMediaParamParity:
 
     @pytest.mark.asyncio
     async def test_async_image_rejects_unknown_quality_before_paying(self) -> None:
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = _make_async_client(_paid_flow(calls, _IMAGE_OK))
         with pytest.raises(ValueError, match="quality must be one of"):
             await client.image("a cat", quality="hd")

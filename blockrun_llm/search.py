@@ -19,21 +19,24 @@ Your private key NEVER leaves your machine. Only EIP-712 signatures are sent
 in the PAYMENT-SIGNATURE header.
 """
 
+from __future__ import annotations
+
 import os
-from typing import Optional, Dict, Any, List, Literal
+from typing import Any, Literal
+
 import httpx
-from eth_account import Account
 from dotenv import load_dotenv
+from eth_account import Account
+from typing_extensions import Self
 
-from .types import SearchResult, APIError, PaymentError
-from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
-from .validation import (
-    validate_private_key,
-    validate_api_url,
-    sanitize_error_response,
-)
 from .tx_log import paid_request_error_prefix
-
+from .types import APIError, PaymentError, SearchResult
+from .validation import (
+    sanitize_error_response,
+    validate_api_url,
+    validate_private_key,
+)
+from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
 
 load_dotenv()
 
@@ -55,8 +58,8 @@ class SearchClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
     ):
         from .wallet import load_wallet
@@ -89,10 +92,10 @@ class SearchClient:
         self,
         query: str,
         *,
-        sources: Optional[List[SearchSourceLiteral]] = None,
+        sources: list[SearchSourceLiteral] | None = None,
         max_results: int = DEFAULT_MAX_RESULTS,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
     ) -> SearchResult:
         """
         Run a live search query.
@@ -111,7 +114,7 @@ class SearchClient:
         if not 1 <= max_results <= 50:
             raise ValueError("max_results must be between 1 and 50")
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "query": query,
             "max_results": max_results,
         }
@@ -125,7 +128,7 @@ class SearchClient:
         data = self._request_with_payment("/v1/search", body)
         return SearchResult(**data)
 
-    def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    def _request_with_payment(self, endpoint: str, body: dict[str, Any]) -> dict[str, Any]:
         url = f"{self.api_url}{endpoint}"
         response = self._client.post(url, json=body, headers={"Content-Type": "application/json"})
         if response.status_code == 402:
@@ -145,9 +148,9 @@ class SearchClient:
     def _handle_payment_and_retry(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         payment_header: Any = response.headers.get("payment-required")
         if not payment_header:
             try:
@@ -208,7 +211,7 @@ class SearchClient:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> "SearchClient":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:

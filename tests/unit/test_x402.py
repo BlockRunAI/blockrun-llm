@@ -1,14 +1,17 @@
 """Unit tests for x402 payment protocol."""
 
-import pytest
 import base64
 import json
+
+import pytest
+
 from blockrun_llm.x402 import (
     create_nonce,
     create_payment_payload,
-    parse_payment_required,
     extract_payment_details,
+    parse_payment_required,
 )
+
 from ..helpers import TEST_ACCOUNT, TEST_RECIPIENT
 
 
@@ -286,8 +289,8 @@ class TestSolanaX402SdkIntegration:
 
     def test_keypair_signer_address(self):
         """KeypairSigner should derive correct public key from bs58 secret."""
-        from x402.mechanisms.svm import KeypairSigner
         from solders.keypair import Keypair
+        from x402.mechanisms.svm import KeypairSigner
 
         # Generate a valid keypair and get its base58 representation
         kp = Keypair()

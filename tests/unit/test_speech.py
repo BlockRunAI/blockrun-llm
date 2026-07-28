@@ -1,6 +1,7 @@
 """Unit tests for SpeechClient request construction and response parsing."""
 
 import os
+
 import pytest
 
 from blockrun_llm import SpeechClient, SpeechResponse

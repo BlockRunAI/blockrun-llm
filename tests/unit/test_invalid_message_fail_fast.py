@@ -15,8 +15,8 @@ from __future__ import annotations
 from typing import Any
 
 from blockrun_llm.solana_client import (
-    _is_unrecoverable_payment_error,
     _is_permanent_payment_error,
+    _is_unrecoverable_payment_error,
 )
 from blockrun_llm.validation import build_payment_rejected_error
 

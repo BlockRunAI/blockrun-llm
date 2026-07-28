@@ -1,6 +1,7 @@
 """Unit tests for PortraitClient input validation."""
 
 import os
+
 import pytest
 
 from blockrun_llm import PortraitClient
