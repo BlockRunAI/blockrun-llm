@@ -74,15 +74,13 @@ def solana_key_to_bytes(private_key: str) -> bytes:
             parsed = json.loads(key)
         except json.JSONDecodeError as e:
             raise ValueError(
-                "Invalid Solana private key: looks like a JSON byte array "
-                "but is not valid JSON"
+                "Invalid Solana private key: looks like a JSON byte array " "but is not valid JSON"
             ) from e
         if not isinstance(parsed, list) or not all(
             isinstance(n, int) and 0 <= n <= 255 for n in parsed
         ):
             raise ValueError(
-                "Invalid Solana private key: JSON array must contain only "
-                "byte values (0-255)"
+                "Invalid Solana private key: JSON array must contain only " "byte values (0-255)"
             )
         if len(parsed) not in (32, 64):
             raise ValueError(
