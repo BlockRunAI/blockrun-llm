@@ -183,7 +183,7 @@ from .wallet import (
     create_wallet as generate_wallet,  # User-friendly alias
 )
 
-__version__ = "1.9.0"
+__version__ = "1.10.0"
 __all__ = [
     "NETWORK_ALIASES",
     "SUPPORTED_NETWORKS",
