@@ -1,6 +1,7 @@
 """Unit tests for RealFaceClient input validation."""
 
 import os
+
 import pytest
 
 from blockrun_llm import RealFaceClient

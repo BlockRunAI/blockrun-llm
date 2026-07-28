@@ -17,8 +17,7 @@ decode/encode helpers are stubbed exactly like ``test_streaming_solana``.
 
 from __future__ import annotations
 
-import unittest.mock as mock
-from typing import List
+from unittest import mock
 
 import httpx
 import pytest
@@ -26,9 +25,8 @@ import pytest
 pytest.importorskip("x402")
 pytest.importorskip("solders")
 
-from blockrun_llm import SolanaLLMClient  # noqa: E402
-from blockrun_llm import solana_client as sol  # noqa: E402
-
+from blockrun_llm import SolanaLLMClient
+from blockrun_llm import solana_client as sol
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -105,7 +103,7 @@ _IMAGE_OK = {"created": 1700000000, "data": [{"url": "https://blockrun.ai/i.png"
 _SEARCH_OK = {"query": "q", "summary": "s"}
 
 
-def _json_flow(calls: List[httpx.Request], ok_body: dict) -> httpx.MockTransport:
+def _json_flow(calls: list[httpx.Request], ok_body: dict) -> httpx.MockTransport:
     """402 on the unsigned probe, then the success body once signed."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -123,14 +121,14 @@ def _json_flow(calls: List[httpx.Request], ok_body: dict) -> httpx.MockTransport
 
 
 def test_chat_uses_chat_timeout_default() -> None:
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     client = _make_client(_json_flow(calls, _CHAT_OK))
     client.chat_completion("openai/gpt-5.2", [{"role": "user", "content": "hi"}])
     assert _read_timeout(calls[-1]) == sol.DEFAULT_CHAT_TIMEOUT
 
 
 def test_image_uses_image_timeout_default() -> None:
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     client = _make_client(_json_flow(calls, _IMAGE_OK))
     client.image("a cat", model="openai/gpt-image-2")
     # Probe + signed submit both carry the image budget, not the chat one.
@@ -140,14 +138,14 @@ def test_image_uses_image_timeout_default() -> None:
 
 
 def test_search_uses_search_timeout_default() -> None:
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     client = _make_client(_json_flow(calls, _SEARCH_OK))
     client.search("deep query")
     assert _read_timeout(calls[-1]) == sol.DEFAULT_SEARCH_TIMEOUT
 
 
 def test_exa_uses_search_timeout_default() -> None:
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     client = _make_client(_json_flow(calls, {"results": []}))
     client.exa_search("latest AI papers")
     assert _read_timeout(calls[-1]) == sol.DEFAULT_SEARCH_TIMEOUT
@@ -159,7 +157,7 @@ def test_exa_uses_search_timeout_default() -> None:
 
 
 def test_chat_per_call_override() -> None:
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     client = _make_client(_json_flow(calls, _CHAT_OK))
     client.chat_completion("openai/gpt-5.2", [{"role": "user", "content": "hi"}], timeout=7.0)
     assert _read_timeout(calls[0]) == 7.0
@@ -167,14 +165,14 @@ def test_chat_per_call_override() -> None:
 
 
 def test_image_per_call_override() -> None:
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     client = _make_client(_json_flow(calls, _IMAGE_OK))
     client.image("a cat", model="openai/gpt-image-2", timeout=9.0)
     assert _read_timeout(calls[-1]) == 9.0
 
 
 def test_search_per_call_override() -> None:
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     client = _make_client(_json_flow(calls, _SEARCH_OK))
     client.search("q", timeout=11.0)
     assert _read_timeout(calls[-1]) == 11.0
@@ -186,12 +184,12 @@ def test_search_per_call_override() -> None:
 
 
 def test_constructor_image_and_search_timeout_respected() -> None:
-    img_calls: List[httpx.Request] = []
+    img_calls: list[httpx.Request] = []
     img_client = _make_client(_json_flow(img_calls, _IMAGE_OK), image_timeout=42.0)
     img_client.image("a cat", model="openai/gpt-image-2")
     assert _read_timeout(img_calls[-1]) == 42.0
 
-    s_calls: List[httpx.Request] = []
+    s_calls: list[httpx.Request] = []
     s_client = _make_client(_json_flow(s_calls, _SEARCH_OK), search_timeout=99.0)
     s_client.search("q")
     assert _read_timeout(s_calls[-1]) == 99.0
@@ -200,7 +198,7 @@ def test_constructor_image_and_search_timeout_respected() -> None:
 def test_legacy_flat_timeout_still_governs_chat() -> None:
     """Backwards-compat: old ``SolanaLLMClient(timeout=...)`` callers keep
     controlling the chat budget through the single keyword."""
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     client = _make_client(_json_flow(calls, _CHAT_OK), timeout=33.0)
     client.chat_completion("openai/gpt-5.2", [{"role": "user", "content": "hi"}])
     assert _read_timeout(calls[-1]) == 33.0
@@ -239,7 +237,7 @@ def _make_async_client(transport: httpx.MockTransport, **kwargs: float):
 
 
 async def test_async_chat_uses_chat_timeout_default() -> None:
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     client = _make_async_client(_json_flow(calls, _CHAT_OK))
     await client.chat_completion("openai/gpt-5.2", [{"role": "user", "content": "hi"}])
     assert _read_timeout(calls[-1]) == sol.DEFAULT_CHAT_TIMEOUT
@@ -247,7 +245,7 @@ async def test_async_chat_uses_chat_timeout_default() -> None:
 
 
 async def test_async_chat_per_call_override() -> None:
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     client = _make_async_client(_json_flow(calls, _CHAT_OK))
     await client.chat_completion(
         "openai/gpt-5.2", [{"role": "user", "content": "hi"}], timeout=13.0

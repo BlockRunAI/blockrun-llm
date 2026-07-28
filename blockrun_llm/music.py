@@ -29,20 +29,23 @@ Pricing: $0.1575/track
 Note: Generated URLs expire in ~24h — download immediately if needed.
 """
 
-import os
-from typing import Optional, Dict, Any
-import httpx
-from eth_account import Account
-from dotenv import load_dotenv
+from __future__ import annotations
 
-from .types import MusicResponse, APIError, PaymentError
-from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
-from .validation import (
-    validate_private_key,
-    validate_api_url,
-    sanitize_error_response,
-)
+import os
+from typing import Any
+
+import httpx
+from dotenv import load_dotenv
+from eth_account import Account
+
 from .tx_log import paid_request_error_prefix
+from .types import APIError, MusicResponse, PaymentError
+from .validation import (
+    sanitize_error_response,
+    validate_api_url,
+    validate_private_key,
+)
+from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
 
 load_dotenv()
 
@@ -63,8 +66,8 @@ class MusicClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = 210.0,
     ):
         """
@@ -106,9 +109,9 @@ class MusicClient:
         self,
         prompt: str,
         *,
-        model: Optional[str] = None,
+        model: str | None = None,
         instrumental: bool = True,
-        lyrics: Optional[str] = None,
+        lyrics: str | None = None,
     ) -> MusicResponse:
         """
         Generate a music track from a text prompt.
@@ -145,7 +148,7 @@ class MusicClient:
         if instrumental and lyrics and lyrics.strip():
             raise ValueError("Cannot specify lyrics when instrumental is True")
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model or self.DEFAULT_MODEL,
             "prompt": prompt,
             "instrumental": instrumental,
@@ -155,7 +158,7 @@ class MusicClient:
 
         return self._request_with_payment("/v1/audio/generations", body)
 
-    def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> MusicResponse:
+    def _request_with_payment(self, endpoint: str, body: dict[str, Any]) -> MusicResponse:
         """Make a request with automatic x402 payment handling."""
         url = f"{self.api_url}{endpoint}"
 
@@ -184,7 +187,7 @@ class MusicClient:
     def _handle_payment_and_retry(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
     ) -> MusicResponse:
         """Handle 402 response: parse requirements, sign payment, retry."""

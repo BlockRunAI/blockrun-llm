@@ -54,252 +54,256 @@ Other Chains:
     - Solana (USDC): Use SolanaLLMClient (pip install blockrun-llm[solana])
 """
 
-from .client import (
-    LLMClient,
-    AsyncLLMClient,
-    list_models,
-    list_image_models,
-    testnet_client,
-    async_testnet_client,
-)
+from __future__ import annotations
+
 from .anthropic_client import AnthropicClient
-from .solana_client import AsyncSolanaLLMClient, SolanaLLMClient
-from .image import ImageClient
-from .music import MusicClient
-from .speech import SpeechClient
-from .video import VideoClient
-from .portrait import PortraitClient
-from .realface import RealFaceClient
-from .voice import VoiceClient
-from .phone import PhoneClient
-from .surf import SurfClient
-from .search import SearchClient
-from .price import PriceClient
-from .rpc import RpcClient, SUPPORTED_NETWORKS, NETWORK_ALIASES
-from .types import (
-    ChatMessage,
-    ChatResponse,
-    ChatCompletionChunk,
-    ChatChunkChoice,
-    ChatChunkDelta,
-    ChatChunkToolCall,
-    ChatChunkFunctionCall,
-    Model,
-    APIError,
-    PaymentError,
-    SpendLimitError,
-    ImageResponse,
-    ImageData,
-    ImageModel,
-    # Music / Audio types
-    MusicResponse,
-    AudioTrack,
-    AudioModel,
-    # Speech (TTS / sound effects) types
-    SpeechResponse,
-    SpeechAudio,
-    # Video types
-    VideoResponse,
-    VideoClip,
-    VideoModel,
-    # Virtual Portrait types
-    PortraitEnrollment,
-    PortraitUsage,
-    PortraitSettlement,
-    PortraitList,
-    PortraitListItem,
-    # RealFace types
-    RealFaceInit,
-    RealFaceStatus,
-    RealFaceEnrollment,
-    RealFaceList,
-    RealFaceListItem,
-    # Live Search types
-    SearchParameters,
-    WebSearchSource,
-    XSearchSource,
-    NewsSearchSource,
-    RssSearchSource,
-    # Smart routing types
-    RoutingDecision,
-    SmartChatResponse,
-    # Standalone search
-    SearchResult,
-    # Pyth market data types
-    PricePoint,
-    PriceBar,
-    PriceHistoryResponse,
-    SymbolListResponse,
-    # Multi-chain RPC types
-    RpcResponse,
-    RpcError,
-)
-from .wallet import (
-    setup_agent_wallet,  # Entry point for agents (auto-creates wallet)
-    status,  # One-command verification
-    get_or_create_wallet,
-    get_wallet_address,
-    format_wallet_created_message,
-    format_needs_funding_message,
-    format_funding_message_compact,
-    format_error_message,
-    generate_wallet_qr_ascii,
-    get_payment_links,
-    get_eip681_uri,
-    save_wallet_qr,
-    open_wallet_qr,
-    load_wallet,
-    scan_wallets,
-    list_discovered_wallets,
-    import_wallet,
-    format_wallet_migration_notice,
-    create_wallet as generate_wallet,  # User-friendly alias
-    WALLET_FILE,
-    WALLET_DIR,
-)
-from .solana_wallet import (
-    setup_agent_solana_wallet,
-    get_solana_usdc_balance,
-    generate_solana_qr_ascii,
-    open_solana_wallet_qr,
-    get_or_create_solana_wallet,
-    create_solana_wallet,
-    load_solana_wallet,
-    scan_solana_wallets,
-    list_discovered_solana_wallets,
-    import_solana_wallet,
-    format_solana_wallet_migration_notice,
-    get_solana_public_key,
-)
 from .cache import (
     clear_cache,
     export_cost_log_csv,
     export_cost_log_json,
     get_cost_log_summary,
 )
+from .client import (
+    AsyncLLMClient,
+    LLMClient,
+    async_testnet_client,
+    list_image_models,
+    list_models,
+    testnet_client,
+)
+from .image import ImageClient
+from .music import MusicClient
+from .phone import PhoneClient
+from .portrait import PortraitClient
+from .price import PriceClient
+from .realface import RealFaceClient
+from .rpc import NETWORK_ALIASES, SUPPORTED_NETWORKS, RpcClient
+from .search import SearchClient
+from .solana_client import AsyncSolanaLLMClient, SolanaLLMClient
+from .solana_wallet import (
+    create_solana_wallet,
+    format_solana_wallet_migration_notice,
+    generate_solana_qr_ascii,
+    get_or_create_solana_wallet,
+    get_solana_public_key,
+    get_solana_usdc_balance,
+    import_solana_wallet,
+    list_discovered_solana_wallets,
+    load_solana_wallet,
+    open_solana_wallet_qr,
+    scan_solana_wallets,
+    setup_agent_solana_wallet,
+)
+from .speech import SpeechClient
+from .surf import SurfClient
 from .tx_log import TransactionLogger, decode_settlement_header, format_row
+from .types import (
+    APIError,
+    AudioModel,
+    AudioTrack,
+    ChatChunkChoice,
+    ChatChunkDelta,
+    ChatChunkFunctionCall,
+    ChatChunkToolCall,
+    ChatCompletionChunk,
+    ChatMessage,
+    ChatResponse,
+    ImageData,
+    ImageModel,
+    ImageResponse,
+    Model,
+    # Music / Audio types
+    MusicResponse,
+    NewsSearchSource,
+    PaymentError,
+    # Virtual Portrait types
+    PortraitEnrollment,
+    PortraitList,
+    PortraitListItem,
+    PortraitSettlement,
+    PortraitUsage,
+    PriceBar,
+    PriceHistoryResponse,
+    # Pyth market data types
+    PricePoint,
+    RealFaceEnrollment,
+    # RealFace types
+    RealFaceInit,
+    RealFaceList,
+    RealFaceListItem,
+    RealFaceStatus,
+    # Smart routing types
+    RoutingDecision,
+    RpcError,
+    # Multi-chain RPC types
+    RpcResponse,
+    RssSearchSource,
+    # Live Search types
+    SearchParameters,
+    # Standalone search
+    SearchResult,
+    SmartChatResponse,
+    SpeechAudio,
+    # Speech (TTS / sound effects) types
+    SpeechResponse,
+    SpendLimitError,
+    SymbolListResponse,
+    VideoClip,
+    VideoModel,
+    # Video types
+    VideoResponse,
+    WebSearchSource,
+    XSearchSource,
+)
+from .video import VideoClient
+from .voice import VoiceClient
+from .wallet import (
+    WALLET_DIR,
+    WALLET_FILE,
+    format_error_message,
+    format_funding_message_compact,
+    format_needs_funding_message,
+    format_wallet_created_message,
+    format_wallet_migration_notice,
+    generate_wallet_qr_ascii,
+    get_eip681_uri,
+    get_or_create_wallet,
+    get_payment_links,
+    get_wallet_address,
+    import_wallet,
+    list_discovered_wallets,
+    load_wallet,
+    open_wallet_qr,
+    save_wallet_qr,
+    scan_wallets,
+    setup_agent_wallet,  # Entry point for agents (auto-creates wallet)
+    status,  # One-command verification
+)
+from .wallet import (
+    create_wallet as generate_wallet,  # User-friendly alias
+)
 
 __version__ = "1.9.0"
 __all__ = [
-    "LLMClient",
-    "AsyncLLMClient",
+    "NETWORK_ALIASES",
+    "SUPPORTED_NETWORKS",
+    "WALLET_DIR",
+    "WALLET_FILE",
+    "APIError",
     "AnthropicClient",
-    "SolanaLLMClient",
+    "AsyncLLMClient",
     "AsyncSolanaLLMClient",
-    # Testnet convenience functions
-    "testnet_client",
+    "AudioModel",
+    "AudioTrack",
+    "ChatChunkChoice",
+    "ChatChunkDelta",
+    "ChatChunkFunctionCall",
+    "ChatChunkToolCall",
+    "ChatCompletionChunk",
+    "ChatMessage",
+    "ChatResponse",
+    "ImageClient",
+    "ImageData",
+    "ImageModel",
+    "ImageResponse",
+    "LLMClient",
+    "Model",
+    "MusicClient",
+    "MusicResponse",
+    "NewsSearchSource",
+    "PaymentError",
+    "PhoneClient",
+    "PortraitClient",
+    "PortraitEnrollment",
+    "PortraitList",
+    "PortraitListItem",
+    "PortraitSettlement",
+    "PortraitUsage",
+    "PriceBar",
+    "PriceClient",
+    "PriceHistoryResponse",
+    # Pyth market data types
+    "PricePoint",
+    "RealFaceClient",
+    "RealFaceEnrollment",
+    "RealFaceInit",
+    "RealFaceList",
+    "RealFaceListItem",
+    "RealFaceStatus",
+    # Smart routing types
+    "RoutingDecision",
+    "RpcClient",
+    "RpcError",
+    # Multi-chain RPC types
+    "RpcResponse",
+    "RssSearchSource",
+    "SearchClient",
+    # Live Search types
+    "SearchParameters",
+    # Standalone search
+    "SearchResult",
+    "SmartChatResponse",
+    "SolanaLLMClient",
+    "SpeechAudio",
+    "SpeechClient",
+    "SpeechResponse",
+    "SpendLimitError",
+    "SurfClient",
+    "SymbolListResponse",
+    # Per-transaction log (opt-in, project-local ./log/)
+    "TransactionLogger",
+    "VideoClient",
+    "VideoClip",
+    "VideoModel",
+    "VideoResponse",
+    "VoiceClient",
+    "WebSearchSource",
+    "XSearchSource",
     "async_testnet_client",
+    # Cache + billing utilities
+    "clear_cache",
+    "create_solana_wallet",
+    "decode_settlement_header",
+    "export_cost_log_csv",
+    "export_cost_log_json",
+    "format_error_message",
+    "format_funding_message_compact",
+    "format_needs_funding_message",
+    "format_row",
+    "format_solana_wallet_migration_notice",
+    "format_wallet_created_message",
+    "format_wallet_migration_notice",
+    "generate_solana_qr_ascii",
+    "generate_wallet",
+    "generate_wallet_qr_ascii",
+    "get_cost_log_summary",
+    "get_eip681_uri",
+    "get_or_create_solana_wallet",
+    # Wallet utilities
+    "get_or_create_wallet",
+    "get_payment_links",
+    "get_solana_public_key",
+    "get_solana_usdc_balance",
+    "get_wallet_address",
+    "import_solana_wallet",
+    "import_wallet",
+    "list_discovered_solana_wallets",
+    "list_discovered_wallets",
+    "list_image_models",
+    # Standalone functions (no wallet required)
+    "list_models",
+    "load_solana_wallet",
+    "load_wallet",
+    "open_solana_wallet_qr",
+    "open_wallet_qr",
+    "save_wallet_qr",
+    "scan_solana_wallets",
+    "scan_wallets",
+    # Solana wallet utilities
+    "setup_agent_solana_wallet",
     # Entry point for agents (auto-creates wallet)
     "setup_agent_wallet",
     "status",
-    # Standalone functions (no wallet required)
-    "list_models",
-    "list_image_models",
-    "ImageClient",
-    "MusicClient",
-    "SpeechClient",
-    "VideoClient",
-    "PortraitClient",
-    "RealFaceClient",
-    "VoiceClient",
-    "PhoneClient",
-    "SurfClient",
-    "SearchClient",
-    "PriceClient",
-    "RpcClient",
-    "SUPPORTED_NETWORKS",
-    "NETWORK_ALIASES",
-    "ChatMessage",
-    "ChatResponse",
-    "ChatCompletionChunk",
-    "ChatChunkChoice",
-    "ChatChunkDelta",
-    "ChatChunkToolCall",
-    "ChatChunkFunctionCall",
-    "Model",
-    "APIError",
-    "PaymentError",
-    "SpendLimitError",
-    "ImageResponse",
-    "ImageData",
-    "ImageModel",
-    "MusicResponse",
-    "AudioTrack",
-    "AudioModel",
-    "SpeechResponse",
-    "SpeechAudio",
-    "VideoResponse",
-    "VideoClip",
-    "VideoModel",
-    "PortraitEnrollment",
-    "PortraitUsage",
-    "PortraitSettlement",
-    "PortraitList",
-    "PortraitListItem",
-    "RealFaceInit",
-    "RealFaceStatus",
-    "RealFaceEnrollment",
-    "RealFaceList",
-    "RealFaceListItem",
-    # Live Search types
-    "SearchParameters",
-    "WebSearchSource",
-    "XSearchSource",
-    "NewsSearchSource",
-    "RssSearchSource",
-    # Smart routing types
-    "RoutingDecision",
-    "SmartChatResponse",
-    # Standalone search
-    "SearchResult",
-    # Pyth market data types
-    "PricePoint",
-    "PriceBar",
-    "PriceHistoryResponse",
-    "SymbolListResponse",
-    # Multi-chain RPC types
-    "RpcResponse",
-    "RpcError",
-    # Wallet utilities
-    "get_or_create_wallet",
-    "get_wallet_address",
-    "generate_wallet",
-    "format_wallet_created_message",
-    "format_needs_funding_message",
-    "format_funding_message_compact",
-    "format_error_message",
-    "generate_wallet_qr_ascii",
-    "get_payment_links",
-    "get_eip681_uri",
-    "save_wallet_qr",
-    "open_wallet_qr",
-    "load_wallet",
-    "scan_wallets",
-    "list_discovered_wallets",
-    "import_wallet",
-    "format_wallet_migration_notice",
-    "WALLET_FILE",
-    "WALLET_DIR",
-    # Solana wallet utilities
-    "setup_agent_solana_wallet",
-    "get_solana_usdc_balance",
-    "generate_solana_qr_ascii",
-    "open_solana_wallet_qr",
-    "get_or_create_solana_wallet",
-    "create_solana_wallet",
-    "load_solana_wallet",
-    "scan_solana_wallets",
-    "list_discovered_solana_wallets",
-    "import_solana_wallet",
-    "format_solana_wallet_migration_notice",
-    "get_solana_public_key",
-    # Cache + billing utilities
-    "clear_cache",
-    "get_cost_log_summary",
-    "export_cost_log_csv",
-    "export_cost_log_json",
-    # Per-transaction log (opt-in, project-local ./log/)
-    "TransactionLogger",
-    "decode_settlement_header",
-    "format_row",
+    # Testnet convenience functions
+    "testnet_client",
 ]

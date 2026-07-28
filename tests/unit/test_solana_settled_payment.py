@@ -16,9 +16,9 @@ import pytest
 pytest.importorskip("x402")
 pytest.importorskip("solders")
 
-from blockrun_llm.client import _mark_settled  # noqa: E402
-from blockrun_llm.solana_client import _should_fallback_solana  # noqa: E402
-from blockrun_llm.types import APIError, PaymentError  # noqa: E402
+from blockrun_llm.client import _mark_settled
+from blockrun_llm.solana_client import _should_fallback_solana
+from blockrun_llm.types import APIError, PaymentError
 
 
 class TestSolanaSettledTag:

@@ -46,20 +46,23 @@ Networks:
     attempt, so new Tatum chains work without an SDK update.
 """
 
-import os
-from typing import Optional, Dict, Any, List, Union
-import httpx
-from eth_account import Account
-from dotenv import load_dotenv
+from __future__ import annotations
 
-from .types import RpcResponse, APIError, PaymentError
-from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
-from .validation import (
-    validate_private_key,
-    validate_api_url,
-    sanitize_error_response,
-)
+import os
+from typing import Any
+
+import httpx
+from dotenv import load_dotenv
+from eth_account import Account
+
 from .tx_log import paid_request_error_prefix
+from .types import APIError, PaymentError, RpcResponse
+from .validation import (
+    sanitize_error_response,
+    validate_api_url,
+    validate_private_key,
+)
+from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
 
 load_dotenv()
 
@@ -163,8 +166,8 @@ class RpcClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
     ):
         """
@@ -206,9 +209,9 @@ class RpcClient:
         self,
         network: str,
         method: str,
-        params: Optional[List[Any]] = None,
+        params: list[Any] | None = None,
         *,
-        id: Union[str, int] = 1,
+        id: str | int = 1,
     ) -> RpcResponse:
         """
         Make a single JSON-RPC 2.0 call. Flat $0.002.
@@ -235,7 +238,7 @@ class RpcClient:
             block = client.call("ethereum", "eth_blockNumber")
             print(int(block.result, 16))
         """
-        body: Dict[str, Any] = {"jsonrpc": "2.0", "id": id, "method": method}
+        body: dict[str, Any] = {"jsonrpc": "2.0", "id": id, "method": method}
         if params is not None:
             body["params"] = params
 
@@ -245,8 +248,8 @@ class RpcClient:
     def batch(
         self,
         network: str,
-        requests: List[Dict[str, Any]],
-    ) -> List[RpcResponse]:
+        requests: list[dict[str, Any]],
+    ) -> list[RpcResponse]:
         """
         Make a JSON-RPC 2.0 batch call. Priced per element ($0.002 x N).
 
@@ -292,7 +295,7 @@ class RpcClient:
         )
 
     def _request_with_payment(
-        self, network: str, body: Union[Dict[str, Any], List[Dict[str, Any]]]
+        self, network: str, body: dict[str, Any] | list[dict[str, Any]]
     ) -> tuple:
         """POST the JSON-RPC body with automatic x402 payment handling."""
         endpoint = f"/v1/rpc/{network}"
@@ -324,7 +327,7 @@ class RpcClient:
         self,
         url: str,
         endpoint: str,
-        body: Union[Dict[str, Any], List[Dict[str, Any]]],
+        body: dict[str, Any] | list[dict[str, Any]],
         response: httpx.Response,
     ) -> tuple:
         """Handle 402 response: parse requirements, sign payment, retry."""

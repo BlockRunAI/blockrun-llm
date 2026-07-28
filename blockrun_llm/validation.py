@@ -9,8 +9,10 @@ This module provides validation functions to ensure:
 - Resource URLs match expected domains
 """
 
+from __future__ import annotations
+
 import re
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -62,7 +64,7 @@ def _looks_like_solana_key(key: str) -> bool:
     EVM 64-char range — so a malformed 64-char hex key still routes to the
     regular hex error rather than the Solana hint.
     """
-    candidate = key[2:] if key.startswith("0x") else key
+    candidate = key.removeprefix("0x")
     if len(candidate) == 64 or not (40 <= len(candidate) <= 90):
         return False
     return any(c in _BASE58_ONLY_CHARS for c in candidate)
@@ -167,7 +169,7 @@ def validate_model(model: str) -> None:
             pass
 
 
-def validate_video_input_type(input_type: Optional[str]) -> None:
+def validate_video_input_type(input_type: str | None) -> None:
     """
     Validate the optional `input_type` seed-mode assertion on video generation.
 
@@ -193,7 +195,7 @@ def validate_video_input_type(input_type: Optional[str]) -> None:
         )
 
 
-def validate_image_quality(quality: Optional[str]) -> None:
+def validate_image_quality(quality: str | None) -> None:
     """
     Validate the optional `quality` knob on Solana image generation/editing.
 
@@ -239,7 +241,7 @@ def validate_image_quality(quality: Optional[str]) -> None:
 MAX_TOKENS_SANITY_LIMIT = 1_000_000
 
 
-def validate_max_tokens(max_tokens: Optional[int]) -> None:
+def validate_max_tokens(max_tokens: int | None) -> None:
     """
     Validate max_tokens parameter.
 
@@ -283,7 +285,7 @@ def validate_max_tokens(max_tokens: Optional[int]) -> None:
         )
 
 
-def validate_temperature(temperature: Optional[float]) -> None:
+def validate_temperature(temperature: float | None) -> None:
     """
     Validate temperature parameter.
 
@@ -309,7 +311,7 @@ def validate_temperature(temperature: Optional[float]) -> None:
         raise ValueError("temperature must be between 0 and 2")
 
 
-def validate_top_p(top_p: Optional[float]) -> None:
+def validate_top_p(top_p: float | None) -> None:
     """
     Validate top_p parameter (nucleus sampling).
 
@@ -370,7 +372,7 @@ def validate_api_url(url: str) -> None:
         )
 
 
-def build_payment_rejected_error(response: Any) -> "PaymentError":
+def build_payment_rejected_error(response: Any) -> PaymentError:
     """Translate a 402 retry response into a :class:`PaymentError` that
     preserves the gateway's original failure reason.
 
@@ -427,7 +429,7 @@ def build_payment_rejected_error(response: Any) -> "PaymentError":
     return PaymentError(msg, status_code=402, response=sanitized)
 
 
-def sanitize_error_response(error_body: Any) -> Dict[str, Any]:
+def sanitize_error_response(error_body: Any) -> dict[str, Any]:
     """
     Sanitize API error responses to prevent information leakage.
 
@@ -465,7 +467,7 @@ def sanitize_error_response(error_body: Any) -> Dict[str, Any]:
     if isinstance(nested, dict):
         message = nested.get("message")
         code = nested.get("code") or error_body.get("code")
-        result: Dict[str, Any] = {
+        result: dict[str, Any] = {
             "message": message if isinstance(message, str) else "API request failed",
             "code": code if isinstance(code, str) else None,
         }
@@ -537,7 +539,7 @@ def validate_resource_url(url: str, base_url: str) -> str:
         return f"{base_url}/v1/chat/completions"
 
 
-def resolve_spend_limit(explicit: Optional[float], env_var: str) -> Optional[float]:
+def resolve_spend_limit(explicit: float | None, env_var: str) -> float | None:
     """Resolve a spend limit from the constructor argument or its env var.
 
     ``None`` means unlimited, which is the default and the pre-1.9.0 behavior.
@@ -566,10 +568,10 @@ def resolve_spend_limit(explicit: Optional[float], env_var: str) -> Optional[flo
 def check_spend_limits(
     cost_usd: float,
     *,
-    max_cost_per_call: Optional[float],
-    max_session_cost: Optional[float],
+    max_cost_per_call: float | None,
+    max_session_cost: float | None,
     session_spent_usd: float,
-    model: Optional[str] = None,
+    model: str | None = None,
 ) -> None:
     """Refuse a quote that would breach a caller-configured spend limit.
 

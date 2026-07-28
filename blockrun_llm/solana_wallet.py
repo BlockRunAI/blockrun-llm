@@ -11,7 +11,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .solana_client import SolanaLLMClient
@@ -30,7 +30,7 @@ def _require_solders() -> None:
         )
 
 
-def create_solana_wallet() -> Dict[str, str]:
+def create_solana_wallet() -> dict[str, str]:
     """
     Create a new Solana wallet.
 
@@ -144,7 +144,7 @@ def _expand_solana_seed(private_key: str) -> str:
     return private_key
 
 
-def scan_solana_wallets() -> List[Dict[str, str]]:
+def scan_solana_wallets() -> list[dict[str, str]]:
     """
     Discover ~/.<dir>/solana-wallet.json files from other providers.
 
@@ -159,7 +159,7 @@ def scan_solana_wallets() -> List[Dict[str, str]]:
         list_discovered_solana_wallets() for an address derived from the key.
     """
     home = Path.home()
-    results: List[tuple] = []  # (mtime, private_key, address, source)
+    results: list[tuple] = []  # (mtime, private_key, address, source)
 
     try:
         for entry in home.iterdir():
@@ -190,7 +190,7 @@ def scan_solana_wallets() -> List[Dict[str, str]]:
     return [{"private_key": pk, "address": addr, "source": src} for _, pk, addr, src in results]
 
 
-def list_discovered_solana_wallets() -> List[Dict[str, str]]:
+def list_discovered_solana_wallets() -> list[dict[str, str]]:
     """
     List Solana wallets from other applications, safe to show to a user.
 
@@ -257,7 +257,7 @@ def import_solana_wallet(address: str) -> str:
     )
 
 
-def load_solana_wallet() -> Optional[str]:
+def load_solana_wallet() -> str | None:
     """
     Load Solana wallet private key.
 
@@ -275,7 +275,7 @@ def load_solana_wallet() -> Optional[str]:
     return None
 
 
-def get_or_create_solana_wallet() -> Dict[str, object]:
+def get_or_create_solana_wallet() -> dict[str, object]:
     """
     Get existing Solana wallet or create new one.
 
@@ -309,7 +309,7 @@ def get_or_create_solana_wallet() -> Dict[str, object]:
     return {**wallet, "is_new": True}
 
 
-def format_solana_wallet_migration_notice(new_address: str) -> Optional[str]:
+def format_solana_wallet_migration_notice(new_address: str) -> str | None:
     """
     Warn when a new Solana wallet was created while provider wallets exist.
 
@@ -363,7 +363,7 @@ SOLANA_WALLET_KEY=<private-key> for a single run without changing anything.
 """
 
 
-def setup_agent_solana_wallet(silent: bool = False) -> "SolanaLLMClient":
+def setup_agent_solana_wallet(silent: bool = False) -> SolanaLLMClient:
     """
     Set up Solana wallet for agent use and return a SolanaLLMClient.
 
@@ -402,7 +402,7 @@ def setup_agent_solana_wallet(silent: bool = False) -> "SolanaLLMClient":
     return SolanaLLMClient(private_key=result["private_key"])
 
 
-def get_solana_usdc_balance(address: str, rpc_url: Optional[str] = None) -> float:
+def get_solana_usdc_balance(address: str, rpc_url: str | None = None) -> float:
     """
     Get USDC-SPL balance for a Solana address.
 
@@ -484,8 +484,9 @@ def generate_solana_qr_ascii(address: str) -> str:
 
     # Generate new QR
     try:
-        import qrcode
         from io import StringIO
+
+        import qrcode
 
         qr = qrcode.QRCode(
             version=1,
@@ -513,7 +514,7 @@ def generate_solana_qr_ascii(address: str) -> str:
         return f"[QR code requires 'qrcode' package: pip install qrcode[pil]]\nAddress: {address}"
 
 
-def save_solana_wallet_qr(address: str, path: Optional[str] = None) -> str:
+def save_solana_wallet_qr(address: str, path: str | None = None) -> str:
     """
     Save Solana QR code as PNG image.
 
@@ -560,8 +561,8 @@ def open_solana_wallet_qr(address: str) -> str:
     Returns:
         Path to saved QR image
     """
-    import subprocess
     import platform
+    import subprocess
 
     qr_path = save_solana_wallet_qr(address)
     if qr_path:

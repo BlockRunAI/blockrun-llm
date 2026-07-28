@@ -35,20 +35,23 @@ Models & pricing:
 Price = (characters / 1000) x model rate, minimum $0.001/request.
 """
 
-import os
-from typing import Optional, Dict, Any, List
-import httpx
-from eth_account import Account
-from dotenv import load_dotenv
+from __future__ import annotations
 
-from .types import SpeechResponse, APIError, PaymentError
-from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
-from .validation import (
-    validate_private_key,
-    validate_api_url,
-    sanitize_error_response,
-)
+import os
+from typing import Any
+
+import httpx
+from dotenv import load_dotenv
+from eth_account import Account
+
 from .tx_log import paid_request_error_prefix
+from .types import APIError, PaymentError, SpeechResponse
+from .validation import (
+    sanitize_error_response,
+    validate_api_url,
+    validate_private_key,
+)
+from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
 
 load_dotenv()
 
@@ -85,8 +88,8 @@ class SpeechClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = 120.0,
     ):
         """
@@ -128,10 +131,10 @@ class SpeechClient:
         self,
         input: str,
         *,
-        model: Optional[str] = None,
-        voice: Optional[str] = None,
-        response_format: Optional[str] = None,
-        speed: Optional[float] = None,
+        model: str | None = None,
+        voice: str | None = None,
+        response_format: str | None = None,
+        speed: float | None = None,
     ) -> SpeechResponse:
         """
         Synthesize speech from text (OpenAI-compatible TTS).
@@ -162,7 +165,7 @@ class SpeechClient:
             result = client.generate("Welcome to BlockRun.", voice="george")
             print(result.data[0].url)
         """
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model or self.DEFAULT_MODEL,
             "input": input,
         }
@@ -182,10 +185,10 @@ class SpeechClient:
         self,
         text: str,
         *,
-        model: Optional[str] = None,
-        duration_seconds: Optional[float] = None,
-        prompt_influence: Optional[float] = None,
-        response_format: Optional[str] = None,
+        model: str | None = None,
+        duration_seconds: float | None = None,
+        prompt_influence: float | None = None,
+        response_format: str | None = None,
     ) -> SpeechResponse:
         """
         Generate a cinematic sound effect from a text prompt.
@@ -207,7 +210,7 @@ class SpeechClient:
             result = client.sound_effect("crackling campfire at night")
             print(result.data[0].url)
         """
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model or self.DEFAULT_SOUNDFX_MODEL,
             "text": text,
         }
@@ -220,7 +223,7 @@ class SpeechClient:
 
         return self._request_with_payment("/v1/audio/sound-effects", body)
 
-    def list_voices(self) -> List[Dict[str, Any]]:
+    def list_voices(self) -> list[dict[str, Any]]:
         """
         List available voices for TTS (free, rate-limited 60 req/min/IP).
 
@@ -243,7 +246,7 @@ class SpeechClient:
 
         return response.json().get("data", [])
 
-    def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> SpeechResponse:
+    def _request_with_payment(self, endpoint: str, body: dict[str, Any]) -> SpeechResponse:
         """Make a request with automatic x402 payment handling."""
         url = f"{self.api_url}{endpoint}"
 
@@ -273,7 +276,7 @@ class SpeechClient:
         self,
         url: str,
         endpoint: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
     ) -> SpeechResponse:
         """Handle 402 response: parse requirements, sign payment, retry."""

@@ -36,30 +36,33 @@ Usage:
         print(p.assetId, p.name)
 """
 
-import os
-from typing import Optional, Dict, Any
-import httpx
-from eth_account import Account
-from dotenv import load_dotenv
+from __future__ import annotations
 
+import os
+from typing import Any
+
+import httpx
+from dotenv import load_dotenv
+from eth_account import Account
+
+from .tx_log import paid_request_error_prefix
 from .types import (
-    PortraitEnrollment,
-    PortraitList,
     APIError,
     PaymentError,
+    PortraitEnrollment,
+    PortraitList,
+)
+from .validation import (
+    sanitize_error_response,
+    validate_api_url,
+    validate_private_key,
+    validate_resource_url,
 )
 from .x402 import (
     create_payment_payload,
-    parse_payment_required,
     extract_payment_details,
+    parse_payment_required,
 )
-from .validation import (
-    validate_private_key,
-    validate_api_url,
-    sanitize_error_response,
-    validate_resource_url,
-)
-from .tx_log import paid_request_error_prefix
 
 load_dotenv()
 
@@ -85,8 +88,8 @@ class PortraitClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = 60.0,
     ):
         """
@@ -153,7 +156,7 @@ class PortraitClient:
         if not image_url or not image_url.lower().startswith(("https://", "http://")):
             raise ValueError("image_url must be an http(s) URL")
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "name": name,
             "image_url": image_url,
         }
@@ -163,7 +166,7 @@ class PortraitClient:
     # Listing (free, rate-limited)
     # ------------------------------------------------------------------
 
-    def list_portraits(self, wallet_address: Optional[str] = None) -> PortraitList:
+    def list_portraits(self, wallet_address: str | None = None) -> PortraitList:
         """
         List portraits enrolled by a wallet. Free, but rate-limited to
         ~20 requests / hour / IP (shared with the wallet-reconciliation
@@ -198,7 +201,7 @@ class PortraitClient:
     # Internal: x402 paid POST
     # ------------------------------------------------------------------
 
-    def _post_with_payment(self, endpoint: str, body: Dict[str, Any]) -> PortraitEnrollment:
+    def _post_with_payment(self, endpoint: str, body: dict[str, Any]) -> PortraitEnrollment:
         url = f"{self.api_url}{endpoint}"
 
         resp = self._client.post(
@@ -218,7 +221,7 @@ class PortraitClient:
     def _handle_payment_and_retry(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
     ) -> PortraitEnrollment:
         payment_header = response.headers.get("payment-required")

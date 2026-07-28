@@ -23,45 +23,52 @@ import os
 import re
 import sys
 import threading
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from collections.abc import Iterator
+from typing import Any
 
 import httpx
+from typing_extensions import Self
 
-from .types import (
-    ChatCompletionChunk,
-    ChatResponse,
-    ImageResponse,
-    VideoResponse,
-    MusicResponse,
-    SpeechResponse,
-    PortraitEnrollment,
-    PortraitList,
-    RealFaceInit,
-    RealFaceStatus,
-    RealFaceEnrollment,
-    RealFaceList,
-    PricePoint,
-    PriceHistoryResponse,
-    SymbolListResponse,
-    RpcResponse,
-    APIError,
-    PaymentError,
-    SearchResult,
-    stream_choice_content,
-    stream_choice_finish_reason,
-    chunk_meta,
-    chunk_usage_dict,
-)
+# Shared with the Base client: signing is settlement on either chain, so the
+# "already paid, do not retry on another model" tag has to mean the same thing
+# in both fallback chains. client.py does not import this module, so there is
+# no cycle.
+from .client import _SETTLED_ATTR, _enforce_spend_limits, _mark_settled
+from .price import Category, Market, Resolution, Session
+from .realface import _GROUP_ID_RE
 from .solana_wallet import get_solana_public_key
 from .tx_log import (
     TransactionLogger,
+    _resolve_log_dir,
     decode_settlement_header,
     paid_request_error_prefix,
     read_settlement_header,
-    _resolve_log_dir,
 )
-from .price import Category, Market, Resolution, Session
-from .realface import _GROUP_ID_RE
+from .types import (
+    APIError,
+    ChatCompletionChunk,
+    ChatResponse,
+    ImageResponse,
+    MusicResponse,
+    PaymentError,
+    PortraitEnrollment,
+    PortraitList,
+    PriceHistoryResponse,
+    PricePoint,
+    RealFaceEnrollment,
+    RealFaceInit,
+    RealFaceList,
+    RealFaceStatus,
+    RpcResponse,
+    SearchResult,
+    SpeechResponse,
+    SymbolListResponse,
+    VideoResponse,
+    chunk_meta,
+    chunk_usage_dict,
+    stream_choice_content,
+    stream_choice_finish_reason,
+)
 from .validation import (
     build_payment_rejected_error,
     resolve_spend_limit,
@@ -72,17 +79,11 @@ from .validation import (
     validate_video_input_type,
 )
 
-# Shared with the Base client: signing is settlement on either chain, so the
-# "already paid, do not retry on another model" tag has to mean the same thing
-# in both fallback chains. client.py does not import this module, so there is
-# no cycle.
-from .client import _SETTLED_ATTR, _enforce_spend_limits, _mark_settled
-
 try:
     from x402 import x402ClientSync
+    from x402.http.utils import decode_payment_required_header, encode_payment_signature_header
     from x402.mechanisms.svm import KeypairSigner
     from x402.mechanisms.svm.exact.register import register_exact_svm_client
-    from x402.http.utils import decode_payment_required_header, encode_payment_signature_header
 
     _HAS_X402 = True
 except ImportError:
@@ -237,9 +238,9 @@ DEFAULT_SOLANA_RPC_URL = "https://sol.blockrun.ai/api/v1/solana/rpc"
 
 
 def _resolve_rpc_config(
-    rpc_url: Optional[str],
-    rpc_headers: Optional[Dict[str, str]],
-) -> Tuple[str, Optional[Dict[str, str]]]:
+    rpc_url: str | None,
+    rpc_headers: dict[str, str] | None,
+) -> tuple[str, dict[str, str] | None]:
     """Resolve the effective RPC URL + headers from explicit args, env vars,
     or defaults — in that priority order.
 
@@ -273,7 +274,7 @@ def _resolve_rpc_config(
 
     resolved_url = rpc_url or os.environ.get("SOLANA_RPC_URL") or DEFAULT_SOLANA_RPC_URL
 
-    resolved_headers: Optional[Dict[str, str]] = None
+    resolved_headers: dict[str, str] | None = None
     if rpc_headers is not None:
         resolved_headers = dict(rpc_headers)
     else:
@@ -296,7 +297,7 @@ def _register_svm_with_headers(
     x402_client: Any,
     signer: Any,
     rpc_url: str,
-    rpc_headers: Optional[Dict[str, str]],
+    rpc_headers: dict[str, str] | None,
 ) -> None:
     """Register the SVM exact scheme on an x402 client, with optional
     extra HTTP headers for the underlying Solana RPC.
@@ -318,8 +319,8 @@ def _register_svm_with_headers(
     # header-less default.
     from solana.rpc.api import Client as SolanaClient
     from x402.mechanisms.svm.exact.client import ExactSvmScheme
-    from x402.mechanisms.svm.exact.v1.client import ExactSvmSchemeV1
     from x402.mechanisms.svm.exact.register import V1_NETWORKS
+    from x402.mechanisms.svm.exact.v1.client import ExactSvmSchemeV1
 
     pre_client = SolanaClient(rpc_url, extra_headers=rpc_headers)
 
@@ -369,9 +370,7 @@ def _should_fallback_solana(exc: Exception) -> bool:
         return True
     if isinstance(exc, httpx.NetworkError):
         return True
-    if isinstance(exc, APIError) and exc.status_code in (502, 503, 504, 522, 524):
-        return True
-    return False
+    return bool(isinstance(exc, APIError) and exc.status_code in (502, 503, 504, 522, 524))
 
 
 # Characters safe to interpolate into a single URL path segment. network /
@@ -391,7 +390,7 @@ def _safe_path_segment(value: str, field: str) -> str:
     return value
 
 
-def _receipt_from_headers(headers: Any) -> Optional[str]:
+def _receipt_from_headers(headers: Any) -> str | None:
     """Pull the x402 settlement tx hash from a paid response's headers."""
     if headers is None:
         return None
@@ -459,16 +458,16 @@ class SolanaLLMClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
+        private_key: str | None = None,
         api_url: str = SOLANA_API_URL,
-        rpc_url: Optional[str] = None,
+        rpc_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         image_timeout: float = DEFAULT_IMAGE_TIMEOUT,
         search_timeout: float = DEFAULT_SEARCH_TIMEOUT,
-        rpc_headers: Optional[Dict[str, str]] = None,
-        transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
-        max_cost_per_call: Optional[float] = None,
-        max_session_cost: Optional[float] = None,
+        rpc_headers: dict[str, str] | None = None,
+        transaction_log: bool | str | os.PathLike[str] | None = None,
+        max_cost_per_call: float | None = None,
+        max_session_cost: float | None = None,
     ) -> None:
         """Initialise the Solana client.
 
@@ -539,18 +538,18 @@ class SolanaLLMClient:
         self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
         self._session_calls = 0
         self._last_call_cost: float = 0.0
-        self._address: Optional[str] = None
+        self._address: str | None = None
 
         log_dir = _resolve_log_dir(transaction_log)
-        self._tx_logger: Optional[TransactionLogger] = (
+        self._tx_logger: TransactionLogger | None = (
             TransactionLogger(log_dir) if log_dir is not None else None
         )
-        self._last_settlement: Optional[Dict[str, Any]] = None
+        self._last_settlement: dict[str, Any] | None = None
         # Response headers from the most recent raw paid POST — consumed by
         # rpc()/music()/speech() to surface the settlement receipt + gateway
         # metadata the shared JSON-only helper would otherwise drop. Read it
         # immediately after the helper returns (no intervening await).
-        self._last_raw_headers: Optional[httpx.Headers] = None
+        self._last_raw_headers: httpx.Headers | None = None
 
         # Initialize x402 SDK client for Solana payment signing.
         self._x402_client = x402ClientSync()
@@ -584,7 +583,7 @@ class SolanaLLMClient:
         with self._payment_lock:
             return self._x402_client.create_payment_payload(payment_required)
 
-    def _capture_settlement(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
+    def _capture_settlement(self, response: httpx.Response) -> dict[str, Any] | None:
         """Decode the x402 settlement header on a Solana paid response.
 
         Solana facilitators put the on-chain transaction signature in the
@@ -623,10 +622,10 @@ class SolanaLLMClient:
 
         return get_solana_usdc_balance(self.get_wallet_address(), rpc_url=self._rpc_url)
 
-    def get_spending(self) -> Dict[str, Any]:
+    def get_spending(self) -> dict[str, Any]:
         return {"total_usd": self._session_total_usd, "calls": self._session_calls}
 
-    def _billing_meta(self) -> Dict[str, Optional[str]]:
+    def _billing_meta(self) -> dict[str, str | None]:
         """Billing metadata for cost-log entries."""
         return {
             "wallet": self.get_wallet_address(),
@@ -637,7 +636,7 @@ class SolanaLLMClient:
     def _log_transaction(
         self,
         endpoint: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: Any,
         cost_usd: float,
     ) -> None:
@@ -670,16 +669,16 @@ class SolanaLLMClient:
         self,
         model: str,
         prompt: str,
-        system: Optional[str] = None,
+        system: str | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
-        temperature: Optional[float] = None,
+        temperature: float | None = None,
         search: bool = False,
-        timeout: Optional[float] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        stop: Optional[Union[str, List[str]]] = None,
+        timeout: float | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
     ) -> str:
         """Simple 1-line chat."""
-        messages: List[Dict[str, str]] = []
+        messages: list[dict[str, str]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
@@ -698,17 +697,17 @@ class SolanaLLMClient:
     def chat_completion(
         self,
         model: str,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         max_tokens: int = DEFAULT_MAX_TOKENS,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
         search: bool = False,
-        search_parameters: Optional[Dict[str, Any]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
-        timeout: Optional[float] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        stop: Optional[Union[str, List[str]]] = None,
+        search_parameters: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        timeout: float | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
     ) -> ChatResponse:
         """Full chat completion (OpenAI-compatible).
 
@@ -722,7 +721,7 @@ class SolanaLLMClient:
         large ``max_tokens`` runs against slow models.
         """
         validate_max_tokens(max_tokens)
-        body: Dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
+        body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
             body["temperature"] = temperature
         if top_p is not None:
@@ -745,13 +744,13 @@ class SolanaLLMClient:
         """Close the HTTP client."""
         self._client.close()
 
-    def list_models(self) -> List[Dict[str, Any]]:
+    def list_models(self) -> list[dict[str, Any]]:
         resp = self._client.get(f"{self._api_url}/v1/models")
         resp.raise_for_status()
         return resp.json().get("data", [])
 
     @staticmethod
-    def _extract_payment_header(response: httpx.Response) -> Optional[str]:
+    def _extract_payment_header(response: httpx.Response) -> str | None:
         """Extract x402 payment header from a 402 response (header or body)."""
         payment_header = response.headers.get("payment-required")
         if not payment_header:
@@ -787,19 +786,19 @@ class SolanaLLMClient:
     def chat_completion_stream(
         self,
         model: str,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         *,
         max_tokens: int = DEFAULT_MAX_TOKENS,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
         search: bool = False,
-        search_parameters: Optional[Dict[str, Any]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        fallback_models: Optional[List[str]] = None,
-        timeout: Optional[float] = None,
+        search_parameters: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
+        timeout: float | None = None,
     ) -> Iterator[ChatCompletionChunk]:
         """
         Stream a chat completion via Server-Sent Events, paid in Solana USDC
@@ -823,7 +822,7 @@ class SolanaLLMClient:
         stream mode (HTTP 400). Codex / GPT-5.4-Pro also can't stream.
         """
         validate_max_tokens(max_tokens)
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": True,
@@ -847,7 +846,7 @@ class SolanaLLMClient:
             body["stop"] = stop
 
         attempts = [model, *(fallback_models or [])]
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
 
         for i, attempt_model in enumerate(attempts):
             body["model"] = attempt_model
@@ -876,8 +875,8 @@ class SolanaLLMClient:
     def _stream_with_payment(
         self,
         endpoint: str,
-        body: Dict[str, Any],
-        timeout: Optional[float] = None,
+        body: dict[str, Any],
+        timeout: float | None = None,
     ) -> Iterator[ChatCompletionChunk]:
         """Whole-request payment-retry wrapper around :meth:`_stream_once`.
 
@@ -911,8 +910,8 @@ class SolanaLLMClient:
     def _stream_once(
         self,
         endpoint: str,
-        body: Dict[str, Any],
-        timeout: Optional[float] = None,
+        body: dict[str, Any],
+        timeout: float | None = None,
     ) -> Iterator[ChatCompletionChunk]:
         """402 → sign (SVM) → retry → SSE iter. Same shape as the Base
         :meth:`LLMClient._stream_with_payment`; differs only in the
@@ -924,7 +923,7 @@ class SolanaLLMClient:
         backoffs = self._STREAM_5XX_BACKOFFS
 
         # ----- Phase 1: probe (no payment header) -----
-        payment_headers: Optional[Dict[str, str]] = None
+        payment_headers: dict[str, str] | None = None
         cost_usd = 0.0
 
         for attempt in range(len(backoffs) + 1):
@@ -983,7 +982,7 @@ class SolanaLLMClient:
     def _iter_and_archive(
         self,
         response: httpx.Response,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         cost_usd: float,
     ) -> Iterator[ChatCompletionChunk]:
         """Yield SSE chunks; on stream completion, archive the assembled
@@ -992,12 +991,12 @@ class SolanaLLMClient:
         in the same audit trail as non-stream paid calls.
 
         ``cost_usd == 0`` skips the archive (free models / unauth probe)."""
-        assembled_id: Optional[str] = None
-        assembled_model: Optional[str] = None
+        assembled_id: str | None = None
+        assembled_model: str | None = None
         assembled_created: int = 0
-        content_parts: List[str] = []
-        finish_reason: Optional[str] = None
-        usage_dict: Optional[Dict[str, Any]] = None
+        content_parts: list[str] = []
+        finish_reason: str | None = None
+        usage_dict: dict[str, Any] | None = None
 
         for chunk in self._iter_sse_chunks(response):
             if chunk.choices:
@@ -1024,7 +1023,7 @@ class SolanaLLMClient:
         if cost_usd > 0:
             from .cache import save_to_cache
 
-            response_data: Dict[str, Any] = {
+            response_data: dict[str, Any] = {
                 "id": assembled_id or "stream",
                 "object": "chat.completion",
                 "created": assembled_created or int(__import__("time").time()),
@@ -1077,7 +1076,7 @@ class SolanaLLMClient:
     def _sign_payment_from_response(
         self,
         response: httpx.Response,
-    ) -> Tuple[Dict[str, str], float]:
+    ) -> tuple[dict[str, str], float]:
         """Extract a 402 response's payment requirements, sign locally with
         the SVM x402 client, return ``(headers_with_PAYMENT_SIGNATURE,
         cost_usd)``. Mirrors the inline logic in
@@ -1121,7 +1120,7 @@ class SolanaLLMClient:
         )
 
     def _request_with_payment(
-        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
+        self, endpoint: str, body: dict[str, Any], timeout: float | None = None
     ) -> ChatResponse:
         """Whole-request payment-retry wrapper around :meth:`_request_once`.
 
@@ -1148,7 +1147,7 @@ class SolanaLLMClient:
                 )
 
     def _request_once(
-        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
+        self, endpoint: str, body: dict[str, Any], timeout: float | None = None
     ) -> ChatResponse:
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
@@ -1188,9 +1187,9 @@ class SolanaLLMClient:
     def _handle_payment_and_retry(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> ChatResponse:
         eff_timeout = timeout if timeout is not None else self._timeout
         payment_header = self._extract_payment_header(response)
@@ -1260,8 +1259,8 @@ class SolanaLLMClient:
         return ChatResponse(**response_data)
 
     def _request_with_payment_raw(
-        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
-    ) -> Dict[str, Any]:
+        self, endpoint: str, body: dict[str, Any], timeout: float | None = None
+    ) -> dict[str, Any]:
         """Make a request with Solana x402 payment, returning raw JSON."""
         from .cache import get_cached, save_to_cache
 
@@ -1323,10 +1322,10 @@ class SolanaLLMClient:
     def _handle_payment_and_retry_raw(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
-        timeout: Optional[float] = None,
-    ) -> Dict[str, Any]:
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
         """Handle 402 for raw endpoints with Solana payment."""
         eff_timeout = timeout if timeout is not None else self._timeout
         payment_header = self._extract_payment_header(response)
@@ -1386,9 +1385,9 @@ class SolanaLLMClient:
     def _get_with_payment_raw(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
         """GET with Solana x402 payment, returning raw JSON."""
         from .cache import get_cached, save_to_cache
 
@@ -1437,10 +1436,10 @@ class SolanaLLMClient:
     def _handle_get_payment_and_retry(
         self,
         url: str,
-        params: Optional[Dict[str, Any]],
+        params: dict[str, Any] | None,
         response: httpx.Response,
-        timeout: Optional[float] = None,
-    ) -> Dict[str, Any]:
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
         """Handle 402 for GET endpoints with Solana payment."""
         eff_timeout = timeout if timeout is not None else self._timeout
         payment_header = self._extract_payment_header(response)
@@ -1501,8 +1500,8 @@ class SolanaLLMClient:
         configured ``api_url`` already includes the trailing ``/api`` so
         we strip it once to avoid ``/api/api/...``.
         """
-        base = self._api_url[: -len("/api")] if self._api_url.endswith("/api") else self._api_url
-        if url.startswith("http://") or url.startswith("https://"):
+        base = self._api_url.removesuffix("/api")
+        if url.startswith(("http://", "https://")):
             # The poll loop sends (and re-signs) the wallet's PAYMENT-SIGNATURE
             # against this URL, so an absolute poll_url is pinned to the API
             # host+scheme — a gateway response pointing it elsewhere would leak
@@ -1522,14 +1521,14 @@ class SolanaLLMClient:
     def _request_image_with_payment(
         self,
         endpoint: str,
-        body: Dict[str, Any],
-        timeout: Optional[float] = None,
+        body: dict[str, Any],
+        timeout: float | None = None,
         *,
-        poll_budget_seconds: Optional[float] = None,
-        poll_interval_seconds: Optional[float] = None,
+        poll_budget_seconds: float | None = None,
+        poll_interval_seconds: float | None = None,
         max_resigns: int = 0,
         label: str = "Image",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Sign + submit + poll wrapper for async media generation.
 
         Shared by :meth:`image` (5-min budget, no mid-poll re-signing needed)
@@ -1815,8 +1814,8 @@ class SolanaLLMClient:
         model: str = "google/nano-banana",
         size: str = "1024x1024",
         n: int = 1,
-        quality: Optional[str] = None,
-        timeout: Optional[float] = None,
+        quality: str | None = None,
+        timeout: float | None = None,
     ) -> ImageResponse:
         """Generate an image from a text prompt (Solana payment).
 
@@ -1842,7 +1841,7 @@ class SolanaLLMClient:
         Raises:
             ValueError: If ``quality`` is not one of the four accepted values.
         """
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model,
             "prompt": prompt,
             "size": size,
@@ -1857,14 +1856,14 @@ class SolanaLLMClient:
     def image_edit(
         self,
         prompt: str,
-        image: Union[str, List[str]],
+        image: str | list[str],
         *,
         model: str = "openai/gpt-image-2",
-        mask: Optional[str] = None,
+        mask: str | None = None,
         size: str = "1024x1024",
         n: int = 1,
-        quality: Optional[str] = None,
-        timeout: Optional[float] = None,
+        quality: str | None = None,
+        timeout: float | None = None,
     ) -> ImageResponse:
         """Edit an image using img2img (Solana payment). ``image`` may be a
         single data URI or a list of 1-4 data URIs for multi-image fusion
@@ -1880,7 +1879,7 @@ class SolanaLLMClient:
         Raises:
             ValueError: If ``quality`` is not one of the four accepted values.
         """
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model,
             "prompt": prompt,
             "image": image,
@@ -1904,21 +1903,21 @@ class SolanaLLMClient:
         self,
         prompt: str,
         *,
-        model: Optional[str] = None,
-        image_url: Optional[str] = None,
-        last_frame_url: Optional[str] = None,
-        reference_image_urls: Optional[List[str]] = None,
-        real_face_asset_id: Optional[str] = None,
-        duration_seconds: Optional[int] = None,
-        aspect_ratio: Optional[str] = None,
-        resolution: Optional[str] = None,
-        generate_audio: Optional[bool] = None,
-        seed: Optional[int] = None,
-        watermark: Optional[bool] = None,
-        return_last_frame: Optional[bool] = None,
-        input_type: Optional[str] = None,
-        budget_seconds: Optional[float] = None,
-        timeout: Optional[float] = None,
+        model: str | None = None,
+        image_url: str | None = None,
+        last_frame_url: str | None = None,
+        reference_image_urls: list[str] | None = None,
+        real_face_asset_id: str | None = None,
+        duration_seconds: int | None = None,
+        aspect_ratio: str | None = None,
+        resolution: str | None = None,
+        generate_audio: bool | None = None,
+        seed: int | None = None,
+        watermark: bool | None = None,
+        return_last_frame: bool | None = None,
+        input_type: str | None = None,
+        budget_seconds: float | None = None,
+        timeout: float | None = None,
     ) -> VideoResponse:
         """Generate a video clip from a text prompt (Solana payment).
 
@@ -1967,11 +1966,11 @@ class SolanaLLMClient:
 
     def video_from_content(
         self,
-        content: List[Dict[str, Any]],
+        content: list[dict[str, Any]],
         *,
-        model: Optional[str] = None,
-        budget_seconds: Optional[float] = None,
-        timeout: Optional[float] = None,
+        model: str | None = None,
+        budget_seconds: float | None = None,
+        timeout: float | None = None,
         **options: Any,
     ) -> VideoResponse:
         """Generate a video from a Seedance ``content[]`` body (Solana payment).
@@ -1982,7 +1981,7 @@ class SolanaLLMClient:
         """
         if not content:
             raise ValueError("content must be a non-empty list of Seedance content items.")
-        body: Dict[str, Any] = {"content": content, **options}
+        body: dict[str, Any] = {"content": content, **options}
         if model is not None:
             body["model"] = model
         data = self._request_image_with_payment(
@@ -2006,10 +2005,10 @@ class SolanaLLMClient:
         self,
         prompt: str,
         *,
-        model: Optional[str] = None,
+        model: str | None = None,
         instrumental: bool = True,
-        lyrics: Optional[str] = None,
-        timeout: Optional[float] = None,
+        lyrics: str | None = None,
+        timeout: float | None = None,
     ) -> MusicResponse:
         """Generate a music track from a text prompt (Solana payment).
 
@@ -2018,7 +2017,7 @@ class SolanaLLMClient:
         """
         if instrumental and lyrics and lyrics.strip():
             raise ValueError("Cannot specify lyrics when instrumental is True")
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model or self.MUSIC_DEFAULT_MODEL,
             "prompt": prompt,
             "instrumental": instrumental,
@@ -2037,11 +2036,11 @@ class SolanaLLMClient:
         self,
         input: str,
         *,
-        model: Optional[str] = None,
-        voice: Optional[str] = None,
-        response_format: Optional[str] = None,
-        speed: Optional[float] = None,
-        timeout: Optional[float] = None,
+        model: str | None = None,
+        voice: str | None = None,
+        response_format: str | None = None,
+        speed: float | None = None,
+        timeout: float | None = None,
     ) -> SpeechResponse:
         """Synthesize speech from text (Solana payment).
 
@@ -2049,7 +2048,7 @@ class SolanaLLMClient:
         with character count. Default model ``elevenlabs/flash-v2.5``, default
         voice ``sarah``.
         """
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model or self.SPEECH_DEFAULT_MODEL,
             "input": input,
         }
@@ -2067,15 +2066,15 @@ class SolanaLLMClient:
         self,
         text: str,
         *,
-        model: Optional[str] = None,
-        duration_seconds: Optional[float] = None,
-        prompt_influence: Optional[float] = None,
-        response_format: Optional[str] = None,
-        timeout: Optional[float] = None,
+        model: str | None = None,
+        duration_seconds: float | None = None,
+        prompt_influence: float | None = None,
+        response_format: str | None = None,
+        timeout: float | None = None,
     ) -> SpeechResponse:
         """Generate a cinematic sound effect from a text prompt (Solana
         payment). Mirrors ``SpeechClient.sound_effect``. Flat $0.05, <=22s."""
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model or self.SOUNDFX_DEFAULT_MODEL,
             "text": text,
         }
@@ -2089,7 +2088,7 @@ class SolanaLLMClient:
         self._attach_receipt(data)
         return SpeechResponse(**data)
 
-    def list_voices(self) -> List[Dict[str, Any]]:
+    def list_voices(self) -> list[dict[str, Any]]:
         """List available speech voices (free)."""
         url = f"{self._api_url}/v1/audio/voices"
         resp = self._client.get(
@@ -2123,11 +2122,11 @@ class SolanaLLMClient:
             raise ValueError(f"name must be 64 chars or fewer (got {len(name)})")
         if not image_url or not image_url.lower().startswith(("https://", "http://")):
             raise ValueError("image_url must be an http(s) URL")
-        body: Dict[str, Any] = {"name": name, "image_url": image_url}
+        body: dict[str, Any] = {"name": name, "image_url": image_url}
         data = self._request_with_payment_raw("/v1/portrait/enroll", body)
         return PortraitEnrollment(**data)
 
-    def list_portraits(self, wallet_address: Optional[str] = None) -> PortraitList:
+    def list_portraits(self, wallet_address: str | None = None) -> PortraitList:
         """List Virtual Portraits enrolled by a wallet (free, rate-limited)."""
         addr = _safe_path_segment(wallet_address or self.get_wallet_address(), "wallet_address")
         url = f"{self._api_url}/v1/wallet/{addr}/portraits"
@@ -2150,7 +2149,7 @@ class SolanaLLMClient:
     # RealFace enrollment (Solana payment)
     # ------------------------------------------------------------------
 
-    def realface_init(self, name: str, group_id: Optional[str] = None) -> RealFaceInit:
+    def realface_init(self, name: str, group_id: str | None = None) -> RealFaceInit:
         """Start/refresh a RealFace enrollment (free, rate-limited). Returns
         the ``group_id`` and an ``h5_link`` (render as a QR for the real
         person's phone liveness check)."""
@@ -2160,7 +2159,7 @@ class SolanaLLMClient:
             raise ValueError(f"name must be 64 chars or fewer (got {len(name)})")
         if group_id is not None and not _GROUP_ID_RE.match(group_id):
             raise ValueError("group_id must look like 'legacy_rf_<digits>'")
-        body: Dict[str, Any] = {"name": name}
+        body: dict[str, Any] = {"name": name}
         if group_id:
             body["groupId"] = group_id
         url = f"{self._api_url}/v1/realface/init"
@@ -2238,11 +2237,11 @@ class SolanaLLMClient:
             raise ValueError("image_url must be an http(s) URL")
         if not group_id or not _GROUP_ID_RE.match(group_id):
             raise ValueError("group_id must look like 'legacy_rf_<digits>'")
-        body: Dict[str, Any] = {"name": name, "image_url": image_url, "group_id": group_id}
+        body: dict[str, Any] = {"name": name, "image_url": image_url, "group_id": group_id}
         data = self._request_with_payment_raw("/v1/realface/enroll", body)
         return RealFaceEnrollment(**data)
 
-    def list_realfaces(self, wallet_address: Optional[str] = None) -> RealFaceList:
+    def list_realfaces(self, wallet_address: str | None = None) -> RealFaceList:
         """List RealFace assets enrolled by a wallet (free, rate-limited)."""
         addr = _safe_path_segment(wallet_address or self.get_wallet_address(), "wallet_address")
         url = f"{self._api_url}/v1/wallet/{addr}/realfaces"
@@ -2269,20 +2268,20 @@ class SolanaLLMClient:
     def _build_video_body(
         prompt: str,
         *,
-        model: Optional[str],
-        image_url: Optional[str],
-        last_frame_url: Optional[str],
-        reference_image_urls: Optional[List[str]],
-        real_face_asset_id: Optional[str],
-        duration_seconds: Optional[int],
-        aspect_ratio: Optional[str],
-        resolution: Optional[str],
-        generate_audio: Optional[bool],
-        seed: Optional[int],
-        watermark: Optional[bool],
-        return_last_frame: Optional[bool],
-        input_type: Optional[str],
-    ) -> Dict[str, Any]:
+        model: str | None,
+        image_url: str | None,
+        last_frame_url: str | None,
+        reference_image_urls: list[str] | None,
+        real_face_asset_id: str | None,
+        duration_seconds: int | None,
+        aspect_ratio: str | None,
+        resolution: str | None,
+        generate_audio: bool | None,
+        seed: int | None,
+        watermark: bool | None,
+        return_last_frame: bool | None,
+        input_type: str | None,
+    ) -> dict[str, Any]:
         """Validate video kwargs and build the request body. Shared by the sync
         and async ``video()`` so their validation and payload never drift.
 
@@ -2317,7 +2316,7 @@ class SolanaLLMClient:
             )
         validate_video_input_type(input_type)
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model or SolanaLLMClient.VIDEO_DEFAULT_MODEL,
             "prompt": prompt,
         }
@@ -2349,7 +2348,7 @@ class SolanaLLMClient:
 
     @staticmethod
     def _rpc_response(
-        data: Any, headers: Optional[httpx.Headers], fallback_network: str
+        data: Any, headers: httpx.Headers | None, fallback_network: str
     ) -> RpcResponse:
         """Build an RpcResponse, surfacing gateway metadata from the paid
         response headers (canonical network, cache hit, settlement tx) exactly
@@ -2369,7 +2368,7 @@ class SolanaLLMClient:
 
     @staticmethod
     def _price_category_path(
-        category: str, market: Optional[str], kind: str, symbol: Optional[str]
+        category: str, market: str | None, kind: str, symbol: str | None
     ) -> str:
         if category == "stocks":
             if not market:
@@ -2388,13 +2387,13 @@ class SolanaLLMClient:
         category: Category,
         symbol: str,
         *,
-        market: Optional[Market] = None,
-        session: Optional[Session] = None,
+        market: Market | None = None,
+        session: Session | None = None,
     ) -> PricePoint:
         """Fetch a realtime Pyth price quote (Solana payment for paid
         categories). ``market`` is required for ``category='stocks'``."""
         endpoint = self._price_category_path(category, market, "price", symbol)
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         if session is not None:
             params["session"] = session
         data = self._get_with_payment_raw(
@@ -2421,12 +2420,12 @@ class SolanaLLMClient:
         resolution: Resolution = "D",
         from_ts: int,
         to_ts: int,
-        market: Optional[Market] = None,
-        session: Optional[Session] = None,
+        market: Market | None = None,
+        session: Session | None = None,
     ) -> PriceHistoryResponse:
         """Fetch OHLC bars between two Unix timestamps (seconds)."""
         endpoint = self._price_category_path(category, market, "history", symbol)
-        params: Dict[str, Any] = {"resolution": resolution, "from": from_ts, "to": to_ts}
+        params: dict[str, Any] = {"resolution": resolution, "from": from_ts, "to": to_ts}
         if session is not None:
             params["session"] = session
         data = self._get_with_payment_raw(endpoint, params=params, timeout=DEFAULT_FAST_TIMEOUT)
@@ -2441,13 +2440,13 @@ class SolanaLLMClient:
         self,
         category: Category,
         *,
-        q: Optional[str] = None,
+        q: str | None = None,
         limit: int = 100,
-        market: Optional[Market] = None,
+        market: Market | None = None,
     ) -> SymbolListResponse:
         """List available symbols in a Pyth category (free discovery)."""
         endpoint = self._price_category_path(category, market, "list", None)
-        params: Dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {"limit": limit}
         if q:
             params["q"] = q
         data = self._get_with_payment_raw(endpoint, params=params, timeout=DEFAULT_FAST_TIMEOUT)
@@ -2467,9 +2466,9 @@ class SolanaLLMClient:
         self,
         network: str,
         method: str,
-        params: Optional[List[Any]] = None,
+        params: list[Any] | None = None,
         *,
-        id: Union[str, int] = 1,
+        id: str | int = 1,
     ) -> RpcResponse:
         """Make a single JSON-RPC 2.0 call (Solana payment, flat $0.002).
 
@@ -2477,18 +2476,18 @@ class SolanaLLMClient:
         (``eth``, ``sol``, ``base`` …); the gateway resolves it.
         """
         _safe_path_segment(network, "network")
-        body: Dict[str, Any] = {"jsonrpc": "2.0", "id": id, "method": method}
+        body: dict[str, Any] = {"jsonrpc": "2.0", "id": id, "method": method}
         if params is not None:
             body["params"] = params
         data = self._request_with_payment_raw(f"/v1/rpc/{network}", body)
         return self._rpc_response(data, self._last_raw_headers, network)
 
-    def rpc_batch(self, network: str, requests: List[Dict[str, Any]]) -> List[RpcResponse]:
+    def rpc_batch(self, network: str, requests: list[dict[str, Any]]) -> list[RpcResponse]:
         """Make a JSON-RPC 2.0 batch call (Solana payment, $0.002 x N)."""
         if not requests:
             raise ValueError("batch requires at least one request")
         _safe_path_segment(network, "network")
-        body: List[Dict[str, Any]] = []
+        body: list[dict[str, Any]] = []
         for i, req in enumerate(requests):
             if "method" not in req:
                 raise ValueError(f"batch request {i} is missing 'method'")
@@ -2503,18 +2502,18 @@ class SolanaLLMClient:
         self,
         query: str,
         *,
-        sources: Optional[List[str]] = None,
+        sources: list[str] | None = None,
         max_results: int = 10,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
-        timeout: Optional[float] = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        timeout: float | None = None,
     ) -> SearchResult:
         """Standalone search (Solana payment).
 
         ``timeout`` overrides the per-call HTTP timeout (defaults to
         ``DEFAULT_SEARCH_TIMEOUT`` — deep web/X tool-use can run minutes).
         """
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "query": query,
             "max_results": max_results,
         }
@@ -2531,87 +2530,87 @@ class SolanaLLMClient:
 
     # ── Prediction Markets (Powered by Predexon) ────────────────────────────
 
-    def pm(self, path: str, **params: Any) -> Dict[str, Any]:
+    def pm(self, path: str, **params: Any) -> dict[str, Any]:
         """Query Predexon prediction market data (GET, Solana payment). Powered by Predexon."""
         return self._get_with_payment_raw(f"/v1/pm/{path}", params or None)
 
-    def pm_query(self, path: str, query: Dict[str, Any]) -> Dict[str, Any]:
+    def pm_query(self, path: str, query: dict[str, Any]) -> dict[str, Any]:
         """Structured query for Predexon data (POST, Solana payment). Powered by Predexon."""
         return self._request_with_payment_raw(f"/v1/pm/{path}", query)
 
-    def pm_markets(self, **params: Any) -> Dict[str, Any]:
+    def pm_markets(self, **params: Any) -> dict[str, Any]:
         """List canonical cross-venue markets (Predexon v2). Tier 1 ($0.001/call)."""
         return self.pm("markets", **params)
 
-    def pm_listings(self, **params: Any) -> Dict[str, Any]:
+    def pm_listings(self, **params: Any) -> dict[str, Any]:
         """List venue-native executable listings (Predexon v2). Tier 1 ($0.001/call)."""
         return self.pm("markets/listings", **params)
 
-    def pm_outcome(self, predexon_id: str) -> Dict[str, Any]:
+    def pm_outcome(self, predexon_id: str) -> dict[str, Any]:
         """Resolve a canonical Predexon outcome ID (Predexon v2). Tier 1 ($0.001/call)."""
         return self.pm(f"outcomes/{predexon_id}")
 
-    def pm_polymarket_markets(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_markets(self, **params: Any) -> dict[str, Any]:
         """List Polymarket markets (Predexon v2). Tier 1 ($0.001/call)."""
         return self.pm("polymarket/markets", **params)
 
-    def pm_polymarket_events(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_events(self, **params: Any) -> dict[str, Any]:
         """List Polymarket events (Predexon v2). Tier 1 ($0.001/call)."""
         return self.pm("polymarket/events", **params)
 
-    def pm_polymarket_markets_keyset(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_markets_keyset(self, **params: Any) -> dict[str, Any]:
         """Polymarket markets with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
         return self.pm("polymarket/markets/keyset", **params)
 
-    def pm_polymarket_events_keyset(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_events_keyset(self, **params: Any) -> dict[str, Any]:
         """Polymarket events with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
         return self.pm("polymarket/events/keyset", **params)
 
-    def pm_polymarket_positions(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_positions(self, **params: Any) -> dict[str, Any]:
         """Polymarket open positions (per-wallet, market-level PnL).
         Tier 1 ($0.001/call)."""
         return self.pm("polymarket/positions", **params)
 
-    def pm_polymarket_trades(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_trades(self, **params: Any) -> dict[str, Any]:
         """Recent Polymarket trades. Tier 1 ($0.001/call)."""
         return self.pm("polymarket/trades", **params)
 
-    def pm_polymarket_leaderboard(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_leaderboard(self, **params: Any) -> dict[str, Any]:
         """Polymarket trader leaderboard. Tier 1 ($0.001/call)."""
         return self.pm("polymarket/leaderboard", **params)
 
-    def pm_kalshi_markets(self, **params: Any) -> Dict[str, Any]:
+    def pm_kalshi_markets(self, **params: Any) -> dict[str, Any]:
         """List Kalshi markets. Tier 1 ($0.001/call)."""
         return self.pm("kalshi/markets", **params)
 
-    def pm_limitless_markets(self, **params: Any) -> Dict[str, Any]:
+    def pm_limitless_markets(self, **params: Any) -> dict[str, Any]:
         """List Limitless markets. Tier 1 ($0.001/call)."""
         return self.pm("limitless/markets", **params)
 
-    def pm_sports_categories(self) -> Dict[str, Any]:
+    def pm_sports_categories(self) -> dict[str, Any]:
         """List available sports categories. Tier 1 ($0.001/call)."""
         return self.pm("sports/categories")
 
-    def pm_sports_markets(self, **params: Any) -> Dict[str, Any]:
+    def pm_sports_markets(self, **params: Any) -> dict[str, Any]:
         """List sports markets grouped by game. Tier 1 ($0.001/call)."""
         return self.pm("sports/markets", **params)
 
-    def pm_wallet_identity(self, wallet: str) -> Dict[str, Any]:
+    def pm_wallet_identity(self, wallet: str) -> dict[str, Any]:
         """Identity + profile for one wallet. Tier 2 ($0.005/call)."""
         return self.pm(f"polymarket/wallet/identity/{wallet}")
 
-    def pm_wallet_identities(self, addresses: List[str]) -> Dict[str, Any]:
+    def pm_wallet_identities(self, addresses: list[str]) -> dict[str, Any]:
         """Bulk identity for up to 200 wallet addresses. Tier 2 ($0.005/call)."""
         return self.pm_query("polymarket/wallet/identities", {"addresses": addresses})
 
-    def pm_wallet_cluster(self, address: str) -> Dict[str, Any]:
+    def pm_wallet_cluster(self, address: str) -> dict[str, Any]:
         """Wallet-cluster discovery (on-chain transfers + identity proofs).
         Tier 2 ($0.005/call)."""
         return self.pm(f"polymarket/wallet/{address}/cluster")
 
     # ── Exa Web Search (Powered by Exa) ─────────────────────────────────────
 
-    def exa(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    def exa(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         """Generic Exa endpoint proxy (POST, Solana payment). Powered by Exa.
 
         Args:
@@ -2624,7 +2623,7 @@ class SolanaLLMClient:
         """
         return self._request_with_payment_raw(f"/v1/exa/{path}", body, timeout=self._search_timeout)
 
-    def exa_search(self, query: str, **kwargs: Any) -> Dict[str, Any]:
+    def exa_search(self, query: str, **kwargs: Any) -> dict[str, Any]:
         """Neural and keyword web search via Exa (Solana payment, $0.01/request).
 
         Args:
@@ -2639,7 +2638,7 @@ class SolanaLLMClient:
             "/v1/exa/search", {"query": query, **kwargs}, timeout=self._search_timeout
         )
 
-    def exa_find_similar(self, url: str, **kwargs: Any) -> Dict[str, Any]:
+    def exa_find_similar(self, url: str, **kwargs: Any) -> dict[str, Any]:
         """Find pages semantically similar to a given URL via Exa (Solana payment, $0.01/request).
 
         Args:
@@ -2654,7 +2653,7 @@ class SolanaLLMClient:
             "/v1/exa/find-similar", {"url": url, **kwargs}, timeout=self._search_timeout
         )
 
-    def exa_contents(self, urls: List[str], **kwargs: Any) -> Dict[str, Any]:
+    def exa_contents(self, urls: list[str], **kwargs: Any) -> dict[str, Any]:
         """Extract full text content from URLs via Exa (Solana payment, $0.002/URL).
 
         Args:
@@ -2669,7 +2668,7 @@ class SolanaLLMClient:
             "/v1/exa/contents", {"urls": urls, **kwargs}, timeout=self._search_timeout
         )
 
-    def exa_answer(self, query: str, **kwargs: Any) -> Dict[str, Any]:
+    def exa_answer(self, query: str, **kwargs: Any) -> dict[str, Any]:
         """AI-generated answer grounded in live web search via Exa (Solana payment, $0.01/request).
 
         Args:
@@ -2686,28 +2685,28 @@ class SolanaLLMClient:
 
     # ── DefiLlama (DeFi protocols / TVL / yields / prices) ──────────────────
 
-    def defi(self, path: str, **params: Any) -> Dict[str, Any]:
+    def defi(self, path: str, **params: Any) -> dict[str, Any]:
         """Query DefiLlama DeFi data (GET, Solana payment). $0.005/call
         ($0.001 for prices/{coins})."""
         return self._get_with_payment_raw(f"/v1/defillama/{path}", params or None)
 
-    def defi_protocols(self) -> Dict[str, Any]:
+    def defi_protocols(self) -> dict[str, Any]:
         """All DeFi protocols with TVL ($0.005/call)."""
         return self.defi("protocols")
 
-    def defi_protocol(self, slug: str) -> Dict[str, Any]:
+    def defi_protocol(self, slug: str) -> dict[str, Any]:
         """Single protocol details + historical TVL ($0.005/call)."""
         return self.defi(f"protocol/{slug}")
 
-    def defi_chains(self) -> Dict[str, Any]:
+    def defi_chains(self) -> dict[str, Any]:
         """Current TVL of every chain ($0.005/call)."""
         return self.defi("chains")
 
-    def defi_yields(self, **params: Any) -> Dict[str, Any]:
+    def defi_yields(self, **params: Any) -> dict[str, Any]:
         """Yield pools with APY/TVL ($0.005/call)."""
         return self.defi("yields", **params)
 
-    def defi_prices(self, coins: Union[List[str], str]) -> Dict[str, Any]:
+    def defi_prices(self, coins: list[str] | str) -> dict[str, Any]:
         """Token price lookup ($0.001/call)."""
         joined = ",".join(coins) if isinstance(coins, list) else coins
         return self.defi(f"prices/{joined}")
@@ -2719,68 +2718,68 @@ class SolanaLLMClient:
         path: str,
         *,
         method: str = "GET",
-        body: Optional[Dict[str, Any]] = None,
+        body: dict[str, Any] | None = None,
         **params: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Query the 0x Swap / Gasless APIs (free — no x402 payment)."""
         endpoint = f"/v1/zerox/{path}"
         if method.upper() == "POST":
             return self._request_with_payment_raw(endpoint, body or {})
         return self._get_with_payment_raw(endpoint, params or None)
 
-    def dex_price(self, **params: Any) -> Dict[str, Any]:
+    def dex_price(self, **params: Any) -> dict[str, Any]:
         """Indicative Permit2 swap price — no commitment (free)."""
         return self.dex("price", **params)
 
-    def dex_quote(self, **params: Any) -> Dict[str, Any]:
+    def dex_quote(self, **params: Any) -> dict[str, Any]:
         """Firm Permit2 swap quote with permit2.eip712 + tx data (free)."""
         return self.dex("quote", **params)
 
-    def dex_gasless_price(self, **params: Any) -> Dict[str, Any]:
+    def dex_gasless_price(self, **params: Any) -> dict[str, Any]:
         """Gasless indicative price quote (free)."""
         return self.dex("gasless/price", **params)
 
-    def dex_gasless_quote(self, **params: Any) -> Dict[str, Any]:
+    def dex_gasless_quote(self, **params: Any) -> dict[str, Any]:
         """Gasless firm quote — returns trade.eip712 to sign (free)."""
         return self.dex("gasless/quote", **params)
 
-    def dex_gasless_submit(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    def dex_gasless_submit(self, body: dict[str, Any]) -> dict[str, Any]:
         """Submit a signed gasless trade; the 0x relayer pays gas (free)."""
         return self.dex("gasless/submit", method="POST", body=body)
 
-    def dex_gasless_status(self, trade_hash: str) -> Dict[str, Any]:
+    def dex_gasless_status(self, trade_hash: str) -> dict[str, Any]:
         """Poll a gasless trade's status by tradeHash (free)."""
         return self.dex(f"gasless/status/{trade_hash}")
 
-    def dex_chains(self) -> Dict[str, Any]:
+    def dex_chains(self) -> dict[str, Any]:
         """Chains where the Swap API is supported (free)."""
         return self.dex("swap/chains")
 
-    def dex_gasless_chains(self) -> Dict[str, Any]:
+    def dex_gasless_chains(self) -> dict[str, Any]:
         """Chains where the Gasless API is supported (free)."""
         return self.dex("gasless/chains")
 
     # ── Modal Sandbox (pay-per-call cloud compute) ───────────────────────────
 
-    def modal(self, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def modal(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         """Call the Modal sandbox compute API (POST, Solana payment)."""
         return self._request_with_payment_raw(f"/v1/modal/{path}", body or {})
 
-    def modal_sandbox_create(self, **body: Any) -> Dict[str, Any]:
+    def modal_sandbox_create(self, **body: Any) -> dict[str, Any]:
         """Create a sandboxed compute environment ($0.01 CPU / $0.05 GPU)."""
         return self.modal("sandbox/create", body)
 
     def modal_sandbox_exec(
-        self, sandbox_id: str, command: List[str], **body: Any
-    ) -> Dict[str, Any]:
+        self, sandbox_id: str, command: list[str], **body: Any
+    ) -> dict[str, Any]:
         """Execute a command in a sandbox; returns stdout/stderr ($0.001)."""
         return self.modal("sandbox/exec", {"sandbox_id": sandbox_id, "command": command, **body})
 
-    def modal_sandbox_status(self, sandbox_id: str) -> Dict[str, Any]:
+    def modal_sandbox_status(self, sandbox_id: str) -> dict[str, Any]:
         """Check a sandbox's status ($0.001)."""
         return self.modal("sandbox/status", {"sandbox_id": sandbox_id})
 
-    def modal_sandbox_terminate(self, sandbox_id: str) -> Dict[str, Any]:
+    def modal_sandbox_terminate(self, sandbox_id: str) -> dict[str, Any]:
         """Terminate a sandbox ($0.001)."""
         return self.modal("sandbox/terminate", {"sandbox_id": sandbox_id})
 
@@ -2820,16 +2819,16 @@ class AsyncSolanaLLMClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
+        private_key: str | None = None,
         api_url: str = SOLANA_API_URL,
-        rpc_url: Optional[str] = None,
+        rpc_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         image_timeout: float = DEFAULT_IMAGE_TIMEOUT,
         search_timeout: float = DEFAULT_SEARCH_TIMEOUT,
-        rpc_headers: Optional[Dict[str, str]] = None,
-        transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
-        max_cost_per_call: Optional[float] = None,
-        max_session_cost: Optional[float] = None,
+        rpc_headers: dict[str, str] | None = None,
+        transaction_log: bool | str | os.PathLike[str] | None = None,
+        max_cost_per_call: float | None = None,
+        max_session_cost: float | None = None,
     ) -> None:
         """Async mirror of :class:`SolanaLLMClient.__init__`. Same env-var
         fallback for ``rpc_url`` / ``rpc_headers`` — see
@@ -2875,18 +2874,18 @@ class AsyncSolanaLLMClient:
         self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
         self._session_calls = 0
         self._last_call_cost: float = 0.0
-        self._address: Optional[str] = None
+        self._address: str | None = None
 
         log_dir = _resolve_log_dir(transaction_log)
-        self._tx_logger: Optional[TransactionLogger] = (
+        self._tx_logger: TransactionLogger | None = (
             TransactionLogger(log_dir) if log_dir is not None else None
         )
-        self._last_settlement: Optional[Dict[str, Any]] = None
+        self._last_settlement: dict[str, Any] | None = None
         # Response headers from the most recent raw paid POST — consumed by
         # rpc()/music()/speech() to surface the settlement receipt + gateway
         # metadata the shared JSON-only helper would otherwise drop. Read it
         # immediately after the helper returns (no intervening await).
-        self._last_raw_headers: Optional[httpx.Headers] = None
+        self._last_raw_headers: httpx.Headers | None = None
 
         # Async x402 client + same SVM signer the sync class uses.
         from x402 import x402Client  # local import to keep optional dep clean
@@ -2905,7 +2904,7 @@ class AsyncSolanaLLMClient:
         # Lazily created on first sign (avoids binding asyncio.Lock to a loop at
         # construction time). Serializes the async signing critical section so a
         # shared client is safe across concurrent coroutines — see _sign_payment.
-        self._payment_lock: Optional[asyncio.Lock] = None
+        self._payment_lock: asyncio.Lock | None = None
 
     async def _sign_payment(self, payment_required: Any) -> Any:
         """Task-safe async wrapper around ``x402_client.create_payment_payload``.
@@ -2919,7 +2918,7 @@ class AsyncSolanaLLMClient:
         async with self._payment_lock:
             return await self._x402_client.create_payment_payload(payment_required)
 
-    def _capture_settlement(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
+    def _capture_settlement(self, response: httpx.Response) -> dict[str, Any] | None:
         """Async-Solana twin of :meth:`SolanaLLMClient._capture_settlement`."""
         header = read_settlement_header(response.headers)
         settlement = decode_settlement_header(header)
@@ -2937,7 +2936,7 @@ class AsyncSolanaLLMClient:
     def _log_transaction(
         self,
         endpoint: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: Any,
         cost_usd: float,
     ) -> None:
@@ -2969,10 +2968,10 @@ class AsyncSolanaLLMClient:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def __aenter__(self) -> "AsyncSolanaLLMClient":
+    async def __aenter__(self) -> Self:
         return self
 
-    async def __aexit__(self, *_exc: Any) -> None:
+    async def __aexit__(self, *_exc: object) -> None:
         await self.close()
 
     # ------------------------------------------------------------------
@@ -2987,10 +2986,10 @@ class AsyncSolanaLLMClient:
     def is_solana(self) -> bool:
         return "sol.blockrun.ai" in self._api_url
 
-    def get_spending(self) -> Dict[str, Any]:
+    def get_spending(self) -> dict[str, Any]:
         return {"total_usd": self._session_total_usd, "calls": self._session_calls}
 
-    def _billing_meta(self) -> Dict[str, Optional[str]]:
+    def _billing_meta(self) -> dict[str, str | None]:
         return {
             "wallet": self.get_wallet_address(),
             "network": "solana-mainnet" if self.is_solana() else "solana-other",
@@ -3005,15 +3004,15 @@ class AsyncSolanaLLMClient:
         self,
         model: str,
         prompt: str,
-        system: Optional[str] = None,
+        system: str | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
-        temperature: Optional[float] = None,
+        temperature: float | None = None,
         search: bool = False,
-        timeout: Optional[float] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        stop: Optional[Union[str, List[str]]] = None,
+        timeout: float | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
     ) -> str:
-        messages: List[Dict[str, str]] = []
+        messages: list[dict[str, str]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
@@ -3032,20 +3031,20 @@ class AsyncSolanaLLMClient:
     async def chat_completion(
         self,
         model: str,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         max_tokens: int = DEFAULT_MAX_TOKENS,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
         search: bool = False,
-        search_parameters: Optional[Dict[str, Any]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
-        timeout: Optional[float] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        stop: Optional[Union[str, List[str]]] = None,
+        search_parameters: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        timeout: float | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
     ) -> ChatResponse:
         validate_max_tokens(max_tokens)
-        body: Dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
+        body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
             body["temperature"] = temperature
         if top_p is not None:
@@ -3064,7 +3063,7 @@ class AsyncSolanaLLMClient:
             body["stop"] = stop
         return await self._request_with_payment("/v1/chat/completions", body, timeout=timeout)
 
-    async def list_models(self) -> List[Dict[str, Any]]:
+    async def list_models(self) -> list[dict[str, Any]]:
         resp = await self._client.get(f"{self._api_url}/v1/models")
         resp.raise_for_status()
         return resp.json().get("data", [])
@@ -3076,25 +3075,25 @@ class AsyncSolanaLLMClient:
     async def chat_completion_stream(
         self,
         model: str,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         *,
         max_tokens: int = DEFAULT_MAX_TOKENS,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
         search: bool = False,
-        search_parameters: Optional[Dict[str, Any]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        fallback_models: Optional[List[str]] = None,
-        timeout: Optional[float] = None,
-    ) -> "AsyncSolanaIterator":
+        search_parameters: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
+        timeout: float | None = None,
+    ) -> AsyncSolanaIterator:
         """Async streaming. Same protocol semantics as the sync
         :meth:`SolanaLLMClient.chat_completion_stream`; only the iteration
         protocol differs (``async for``)."""
         validate_max_tokens(max_tokens)
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": True,
@@ -3118,7 +3117,7 @@ class AsyncSolanaLLMClient:
             body["stop"] = stop
 
         attempts = [model, *(fallback_models or [])]
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
 
         for i, attempt_model in enumerate(attempts):
             body["model"] = attempt_model
@@ -3147,8 +3146,8 @@ class AsyncSolanaLLMClient:
     async def _stream_with_payment(
         self,
         endpoint: str,
-        body: Dict[str, Any],
-        timeout: Optional[float] = None,
+        body: dict[str, Any],
+        timeout: float | None = None,
     ):
         """Whole-request payment-retry wrapper around :meth:`_stream_once`
         (async). Re-runs the paid request on a recoverable payment rejection,
@@ -3176,8 +3175,8 @@ class AsyncSolanaLLMClient:
     async def _stream_once(
         self,
         endpoint: str,
-        body: Dict[str, Any],
-        timeout: Optional[float] = None,
+        body: dict[str, Any],
+        timeout: float | None = None,
     ):
         """Async version of :meth:`SolanaLLMClient._stream_once`."""
         url = f"{self._api_url}{endpoint}"
@@ -3186,7 +3185,7 @@ class AsyncSolanaLLMClient:
         backoffs = self._STREAM_5XX_BACKOFFS
 
         # ----- Phase 1: probe (no payment header) -----
-        payment_headers: Optional[Dict[str, str]] = None
+        payment_headers: dict[str, str] | None = None
         cost_usd = 0.0
 
         for attempt in range(len(backoffs) + 1):
@@ -3263,16 +3262,16 @@ class AsyncSolanaLLMClient:
     async def _aiter_and_archive(
         self,
         response: httpx.Response,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         cost_usd: float,
     ):
         """Async version of :meth:`SolanaLLMClient._iter_and_archive`."""
-        assembled_id: Optional[str] = None
-        assembled_model: Optional[str] = None
+        assembled_id: str | None = None
+        assembled_model: str | None = None
         assembled_created: int = 0
-        content_parts: List[str] = []
-        finish_reason: Optional[str] = None
-        usage_dict: Optional[Dict[str, Any]] = None
+        content_parts: list[str] = []
+        finish_reason: str | None = None
+        usage_dict: dict[str, Any] | None = None
 
         async for chunk in self._aiter_sse_chunks(response):
             if chunk.choices:
@@ -3299,7 +3298,7 @@ class AsyncSolanaLLMClient:
         if cost_usd > 0:
             from .cache import save_to_cache
 
-            response_data: Dict[str, Any] = {
+            response_data: dict[str, Any] = {
                 "id": assembled_id or "stream",
                 "object": "chat.completion",
                 "created": assembled_created or int(__import__("time").time()),
@@ -3337,7 +3336,7 @@ class AsyncSolanaLLMClient:
     async def _sign_payment_from_response(
         self,
         response: httpx.Response,
-    ) -> Tuple[Dict[str, str], float]:
+    ) -> tuple[dict[str, str], float]:
         payment_header = SolanaLLMClient._extract_payment_header(response)
         if not payment_header:
             raise PaymentError("402 response but no payment requirements found")
@@ -3360,7 +3359,7 @@ class AsyncSolanaLLMClient:
     _raise_stream_error = SolanaLLMClient._raise_stream_error
 
     async def _request_with_payment(
-        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
+        self, endpoint: str, body: dict[str, Any], timeout: float | None = None
     ) -> ChatResponse:
         """Whole-request payment-retry wrapper around :meth:`_request_once`
         (async). Same policy as the sync path — recoverable payment rejections
@@ -3381,7 +3380,7 @@ class AsyncSolanaLLMClient:
                 )
 
     async def _request_once(
-        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
+        self, endpoint: str, body: dict[str, Any], timeout: float | None = None
     ) -> ChatResponse:
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
@@ -3420,9 +3419,9 @@ class AsyncSolanaLLMClient:
     async def _handle_payment_and_retry(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
     ) -> ChatResponse:
         eff_timeout = timeout if timeout is not None else self._timeout
         payment_headers, cost_usd = await self._sign_payment_from_response(response)
@@ -3472,8 +3471,8 @@ class AsyncSolanaLLMClient:
     # ── Raw passthrough request helpers (async, Solana payment) ─────────────
 
     async def _request_with_payment_raw(
-        self, endpoint: str, body: Dict[str, Any], timeout: Optional[float] = None
-    ) -> Dict[str, Any]:
+        self, endpoint: str, body: dict[str, Any], timeout: float | None = None
+    ) -> dict[str, Any]:
         """POST with Solana x402 payment, returning raw JSON (async mirror of
         the sync :class:`SolanaLLMClient` helper)."""
         from .cache import get_cached, save_to_cache
@@ -3542,9 +3541,9 @@ class AsyncSolanaLLMClient:
     async def _get_with_payment_raw(
         self,
         endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
         """GET with Solana x402 payment, returning raw JSON (async)."""
         from .cache import get_cached, save_to_cache
 
@@ -3615,18 +3614,18 @@ class AsyncSolanaLLMClient:
         self,
         query: str,
         *,
-        sources: Optional[List[str]] = None,
+        sources: list[str] | None = None,
         max_results: int = 10,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
-        timeout: Optional[float] = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+        timeout: float | None = None,
     ) -> SearchResult:
         """Standalone search (Solana payment).
 
         ``timeout`` overrides the per-call HTTP timeout (defaults to
         ``DEFAULT_SEARCH_TIMEOUT`` — deep web/X tool-use can run minutes).
         """
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "query": query,
             "max_results": max_results,
         }
@@ -3664,8 +3663,8 @@ class AsyncSolanaLLMClient:
         model: str = "google/nano-banana",
         size: str = "1024x1024",
         n: int = 1,
-        quality: Optional[str] = None,
-        timeout: Optional[float] = None,
+        quality: str | None = None,
+        timeout: float | None = None,
     ) -> ImageResponse:
         """Generate an image from a text prompt (Solana payment).
 
@@ -3682,7 +3681,7 @@ class AsyncSolanaLLMClient:
         Raises:
             ValueError: If ``quality`` is not one of the four accepted values.
         """
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model,
             "prompt": prompt,
             "size": size,
@@ -3699,14 +3698,14 @@ class AsyncSolanaLLMClient:
     async def image_edit(
         self,
         prompt: str,
-        image: Union[str, List[str]],
+        image: str | list[str],
         *,
         model: str = "openai/gpt-image-2",
-        mask: Optional[str] = None,
+        mask: str | None = None,
         size: str = "1024x1024",
         n: int = 1,
-        quality: Optional[str] = None,
-        timeout: Optional[float] = None,
+        quality: str | None = None,
+        timeout: float | None = None,
     ) -> ImageResponse:
         """Edit an image using img2img (Solana payment). ``image`` may be a
         single data URI or a list of 1-4 data URIs for multi-image fusion
@@ -3720,7 +3719,7 @@ class AsyncSolanaLLMClient:
         Raises:
             ValueError: If ``quality`` is not one of the four accepted values.
         """
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model,
             "prompt": prompt,
             "image": image,
@@ -3741,8 +3740,8 @@ class AsyncSolanaLLMClient:
     def _absolute_url(self, url: str) -> str:
         """Resolve a server-supplied relative ``poll_url`` against the API host
         (``api_url`` already includes the trailing ``/api`` — strip it once)."""
-        base = self._api_url[: -len("/api")] if self._api_url.endswith("/api") else self._api_url
-        if url.startswith("http://") or url.startswith("https://"):
+        base = self._api_url.removesuffix("/api")
+        if url.startswith(("http://", "https://")):
             # The poll loop sends (and re-signs) the wallet's PAYMENT-SIGNATURE
             # against this URL, so an absolute poll_url is pinned to the API
             # host+scheme — a gateway response pointing it elsewhere would leak
@@ -3765,21 +3764,21 @@ class AsyncSolanaLLMClient:
         self,
         prompt: str,
         *,
-        model: Optional[str] = None,
-        image_url: Optional[str] = None,
-        last_frame_url: Optional[str] = None,
-        reference_image_urls: Optional[List[str]] = None,
-        real_face_asset_id: Optional[str] = None,
-        duration_seconds: Optional[int] = None,
-        aspect_ratio: Optional[str] = None,
-        resolution: Optional[str] = None,
-        generate_audio: Optional[bool] = None,
-        seed: Optional[int] = None,
-        watermark: Optional[bool] = None,
-        return_last_frame: Optional[bool] = None,
-        input_type: Optional[str] = None,
-        budget_seconds: Optional[float] = None,
-        timeout: Optional[float] = None,
+        model: str | None = None,
+        image_url: str | None = None,
+        last_frame_url: str | None = None,
+        reference_image_urls: list[str] | None = None,
+        real_face_asset_id: str | None = None,
+        duration_seconds: int | None = None,
+        aspect_ratio: str | None = None,
+        resolution: str | None = None,
+        generate_audio: bool | None = None,
+        seed: int | None = None,
+        watermark: bool | None = None,
+        return_last_frame: bool | None = None,
+        input_type: str | None = None,
+        budget_seconds: float | None = None,
+        timeout: float | None = None,
     ) -> VideoResponse:
         """Generate a video clip (Solana payment). Async mirror of
         :meth:`SolanaLLMClient.video`."""
@@ -3817,17 +3816,17 @@ class AsyncSolanaLLMClient:
 
     async def video_from_content(
         self,
-        content: List[Dict[str, Any]],
+        content: list[dict[str, Any]],
         *,
-        model: Optional[str] = None,
-        budget_seconds: Optional[float] = None,
-        timeout: Optional[float] = None,
+        model: str | None = None,
+        budget_seconds: float | None = None,
+        timeout: float | None = None,
         **options: Any,
     ) -> VideoResponse:
         """Generate a video from a Seedance ``content[]`` body (Solana payment)."""
         if not content:
             raise ValueError("content must be a non-empty list of Seedance content items.")
-        body: Dict[str, Any] = {"content": content, **options}
+        body: dict[str, Any] = {"content": content, **options}
         if model is not None:
             body["model"] = model
         data = await self._request_image_with_payment(
@@ -3849,15 +3848,15 @@ class AsyncSolanaLLMClient:
         self,
         prompt: str,
         *,
-        model: Optional[str] = None,
+        model: str | None = None,
         instrumental: bool = True,
-        lyrics: Optional[str] = None,
-        timeout: Optional[float] = None,
+        lyrics: str | None = None,
+        timeout: float | None = None,
     ) -> MusicResponse:
         """Generate a music track (Solana payment)."""
         if instrumental and lyrics and lyrics.strip():
             raise ValueError("Cannot specify lyrics when instrumental is True")
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model or SolanaLLMClient.MUSIC_DEFAULT_MODEL,
             "prompt": prompt,
             "instrumental": instrumental,
@@ -3872,14 +3871,14 @@ class AsyncSolanaLLMClient:
         self,
         input: str,
         *,
-        model: Optional[str] = None,
-        voice: Optional[str] = None,
-        response_format: Optional[str] = None,
-        speed: Optional[float] = None,
-        timeout: Optional[float] = None,
+        model: str | None = None,
+        voice: str | None = None,
+        response_format: str | None = None,
+        speed: float | None = None,
+        timeout: float | None = None,
     ) -> SpeechResponse:
         """Synthesize speech from text (Solana payment)."""
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model or SolanaLLMClient.SPEECH_DEFAULT_MODEL,
             "input": input,
         }
@@ -3897,14 +3896,14 @@ class AsyncSolanaLLMClient:
         self,
         text: str,
         *,
-        model: Optional[str] = None,
-        duration_seconds: Optional[float] = None,
-        prompt_influence: Optional[float] = None,
-        response_format: Optional[str] = None,
-        timeout: Optional[float] = None,
+        model: str | None = None,
+        duration_seconds: float | None = None,
+        prompt_influence: float | None = None,
+        response_format: str | None = None,
+        timeout: float | None = None,
     ) -> SpeechResponse:
         """Generate a cinematic sound effect (Solana payment)."""
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model or SolanaLLMClient.SOUNDFX_DEFAULT_MODEL,
             "text": text,
         }
@@ -3920,7 +3919,7 @@ class AsyncSolanaLLMClient:
         self._attach_receipt(data)
         return SpeechResponse(**data)
 
-    async def list_voices(self) -> List[Dict[str, Any]]:
+    async def list_voices(self) -> list[dict[str, Any]]:
         """List available speech voices (free)."""
         url = f"{self._api_url}/v1/audio/voices"
         resp = await self._client.get(
@@ -3953,7 +3952,7 @@ class AsyncSolanaLLMClient:
         )
         return PortraitEnrollment(**data)
 
-    async def list_portraits(self, wallet_address: Optional[str] = None) -> PortraitList:
+    async def list_portraits(self, wallet_address: str | None = None) -> PortraitList:
         """List Virtual Portraits enrolled by a wallet (free, rate-limited)."""
         addr = _safe_path_segment(wallet_address or self.get_wallet_address(), "wallet_address")
         url = f"{self._api_url}/v1/wallet/{addr}/portraits"
@@ -3970,7 +3969,7 @@ class AsyncSolanaLLMClient:
             )
         return PortraitList(**resp.json())
 
-    async def realface_init(self, name: str, group_id: Optional[str] = None) -> RealFaceInit:
+    async def realface_init(self, name: str, group_id: str | None = None) -> RealFaceInit:
         """Start/refresh a RealFace enrollment (free, rate-limited)."""
         if not name or not name.strip():
             raise ValueError("name is required (1-64 chars)")
@@ -3978,7 +3977,7 @@ class AsyncSolanaLLMClient:
             raise ValueError(f"name must be 64 chars or fewer (got {len(name)})")
         if group_id is not None and not _GROUP_ID_RE.match(group_id):
             raise ValueError("group_id must look like 'legacy_rf_<digits>'")
-        body: Dict[str, Any] = {"name": name}
+        body: dict[str, Any] = {"name": name}
         if group_id:
             body["groupId"] = group_id
         url = f"{self._api_url}/v1/realface/init"
@@ -4060,7 +4059,7 @@ class AsyncSolanaLLMClient:
         )
         return RealFaceEnrollment(**data)
 
-    async def list_realfaces(self, wallet_address: Optional[str] = None) -> RealFaceList:
+    async def list_realfaces(self, wallet_address: str | None = None) -> RealFaceList:
         """List RealFace assets enrolled by a wallet (free, rate-limited)."""
         addr = _safe_path_segment(wallet_address or self.get_wallet_address(), "wallet_address")
         url = f"{self._api_url}/v1/wallet/{addr}/realfaces"
@@ -4082,12 +4081,12 @@ class AsyncSolanaLLMClient:
         category: Category,
         symbol: str,
         *,
-        market: Optional[Market] = None,
-        session: Optional[Session] = None,
+        market: Market | None = None,
+        session: Session | None = None,
     ) -> PricePoint:
         """Fetch a realtime Pyth price quote (Solana payment for paid categories)."""
         endpoint = SolanaLLMClient._price_category_path(category, market, "price", symbol)
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         if session is not None:
             params["session"] = session
         data = await self._get_with_payment_raw(
@@ -4114,12 +4113,12 @@ class AsyncSolanaLLMClient:
         resolution: Resolution = "D",
         from_ts: int,
         to_ts: int,
-        market: Optional[Market] = None,
-        session: Optional[Session] = None,
+        market: Market | None = None,
+        session: Session | None = None,
     ) -> PriceHistoryResponse:
         """Fetch OHLC bars between two Unix timestamps (seconds)."""
         endpoint = SolanaLLMClient._price_category_path(category, market, "history", symbol)
-        params: Dict[str, Any] = {"resolution": resolution, "from": from_ts, "to": to_ts}
+        params: dict[str, Any] = {"resolution": resolution, "from": from_ts, "to": to_ts}
         if session is not None:
             params["session"] = session
         data = await self._get_with_payment_raw(
@@ -4136,13 +4135,13 @@ class AsyncSolanaLLMClient:
         self,
         category: Category,
         *,
-        q: Optional[str] = None,
+        q: str | None = None,
         limit: int = 100,
-        market: Optional[Market] = None,
+        market: Market | None = None,
     ) -> SymbolListResponse:
         """List available symbols in a Pyth category (free discovery)."""
         endpoint = SolanaLLMClient._price_category_path(category, market, "list", None)
-        params: Dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {"limit": limit}
         if q:
             params["q"] = q
         data = await self._get_with_payment_raw(
@@ -4160,24 +4159,24 @@ class AsyncSolanaLLMClient:
         self,
         network: str,
         method: str,
-        params: Optional[List[Any]] = None,
+        params: list[Any] | None = None,
         *,
-        id: Union[str, int] = 1,
+        id: str | int = 1,
     ) -> RpcResponse:
         """Make a single JSON-RPC 2.0 call (Solana payment, flat $0.002)."""
         _safe_path_segment(network, "network")
-        body: Dict[str, Any] = {"jsonrpc": "2.0", "id": id, "method": method}
+        body: dict[str, Any] = {"jsonrpc": "2.0", "id": id, "method": method}
         if params is not None:
             body["params"] = params
         data = await self._request_with_payment_raw(f"/v1/rpc/{network}", body)
         return SolanaLLMClient._rpc_response(data, self._last_raw_headers, network)
 
-    async def rpc_batch(self, network: str, requests: List[Dict[str, Any]]) -> List[RpcResponse]:
+    async def rpc_batch(self, network: str, requests: list[dict[str, Any]]) -> list[RpcResponse]:
         """Make a JSON-RPC 2.0 batch call (Solana payment, $0.002 x N)."""
         if not requests:
             raise ValueError("batch requires at least one request")
         _safe_path_segment(network, "network")
-        body: List[Dict[str, Any]] = []
+        body: list[dict[str, Any]] = []
         for i, req in enumerate(requests):
             if "method" not in req:
                 raise ValueError(f"batch request {i} is missing 'method'")
@@ -4191,14 +4190,14 @@ class AsyncSolanaLLMClient:
     async def _request_image_with_payment(
         self,
         endpoint: str,
-        body: Dict[str, Any],
-        timeout: Optional[float] = None,
+        body: dict[str, Any],
+        timeout: float | None = None,
         *,
-        poll_budget_seconds: Optional[float] = None,
-        poll_interval_seconds: Optional[float] = None,
+        poll_budget_seconds: float | None = None,
+        poll_interval_seconds: float | None = None,
         max_resigns: int = 0,
         label: str = "Image",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Async sign + submit + poll wrapper for async media generation — the
         async mirror of the sync :class:`SolanaLLMClient` helper. Shared by
         :meth:`image` and :meth:`video` (``max_resigns`` re-signs to survive
@@ -4441,85 +4440,85 @@ class AsyncSolanaLLMClient:
 
     # ── Prediction Markets (Powered by Predexon) ────────────────────────────
 
-    async def pm(self, path: str, **params: Any) -> Dict[str, Any]:
+    async def pm(self, path: str, **params: Any) -> dict[str, Any]:
         """Query Predexon prediction market data (GET, Solana payment). Powered by Predexon."""
         return await self._get_with_payment_raw(f"/v1/pm/{path}", params or None)
 
-    async def pm_query(self, path: str, query: Dict[str, Any]) -> Dict[str, Any]:
+    async def pm_query(self, path: str, query: dict[str, Any]) -> dict[str, Any]:
         """Structured query for Predexon data (POST, Solana payment). Powered by Predexon."""
         return await self._request_with_payment_raw(f"/v1/pm/{path}", query)
 
-    async def pm_markets(self, **params: Any) -> Dict[str, Any]:
+    async def pm_markets(self, **params: Any) -> dict[str, Any]:
         """List canonical cross-venue markets (Predexon v2). Tier 1 ($0.001/call)."""
         return await self.pm("markets", **params)
 
-    async def pm_listings(self, **params: Any) -> Dict[str, Any]:
+    async def pm_listings(self, **params: Any) -> dict[str, Any]:
         """List venue-native executable listings (Predexon v2). Tier 1 ($0.001/call)."""
         return await self.pm("markets/listings", **params)
 
-    async def pm_outcome(self, predexon_id: str) -> Dict[str, Any]:
+    async def pm_outcome(self, predexon_id: str) -> dict[str, Any]:
         """Resolve a canonical Predexon outcome ID (Predexon v2). Tier 1 ($0.001/call)."""
         return await self.pm(f"outcomes/{predexon_id}")
 
-    async def pm_polymarket_markets(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_markets(self, **params: Any) -> dict[str, Any]:
         """List Polymarket markets (Predexon v2). Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/markets", **params)
 
-    async def pm_polymarket_events(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_events(self, **params: Any) -> dict[str, Any]:
         """List Polymarket events (Predexon v2). Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/events", **params)
 
-    async def pm_polymarket_markets_keyset(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_markets_keyset(self, **params: Any) -> dict[str, Any]:
         """Polymarket markets with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/markets/keyset", **params)
 
-    async def pm_polymarket_events_keyset(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_events_keyset(self, **params: Any) -> dict[str, Any]:
         """Polymarket events with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/events/keyset", **params)
 
-    async def pm_polymarket_positions(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_positions(self, **params: Any) -> dict[str, Any]:
         """Polymarket open positions (per-wallet, market-level PnL). Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/positions", **params)
 
-    async def pm_polymarket_trades(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_trades(self, **params: Any) -> dict[str, Any]:
         """Recent Polymarket trades. Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/trades", **params)
 
-    async def pm_polymarket_leaderboard(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_leaderboard(self, **params: Any) -> dict[str, Any]:
         """Polymarket trader leaderboard. Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/leaderboard", **params)
 
-    async def pm_kalshi_markets(self, **params: Any) -> Dict[str, Any]:
+    async def pm_kalshi_markets(self, **params: Any) -> dict[str, Any]:
         """List Kalshi markets. Tier 1 ($0.001/call)."""
         return await self.pm("kalshi/markets", **params)
 
-    async def pm_limitless_markets(self, **params: Any) -> Dict[str, Any]:
+    async def pm_limitless_markets(self, **params: Any) -> dict[str, Any]:
         """List Limitless markets. Tier 1 ($0.001/call)."""
         return await self.pm("limitless/markets", **params)
 
-    async def pm_sports_categories(self) -> Dict[str, Any]:
+    async def pm_sports_categories(self) -> dict[str, Any]:
         """List available sports categories. Tier 1 ($0.001/call)."""
         return await self.pm("sports/categories")
 
-    async def pm_sports_markets(self, **params: Any) -> Dict[str, Any]:
+    async def pm_sports_markets(self, **params: Any) -> dict[str, Any]:
         """List sports markets grouped by game. Tier 1 ($0.001/call)."""
         return await self.pm("sports/markets", **params)
 
-    async def pm_wallet_identity(self, wallet: str) -> Dict[str, Any]:
+    async def pm_wallet_identity(self, wallet: str) -> dict[str, Any]:
         """Identity + profile for one wallet. Tier 2 ($0.005/call)."""
         return await self.pm(f"polymarket/wallet/identity/{wallet}")
 
-    async def pm_wallet_identities(self, addresses: List[str]) -> Dict[str, Any]:
+    async def pm_wallet_identities(self, addresses: list[str]) -> dict[str, Any]:
         """Bulk identity for up to 200 wallet addresses. Tier 2 ($0.005/call)."""
         return await self.pm_query("polymarket/wallet/identities", {"addresses": addresses})
 
-    async def pm_wallet_cluster(self, address: str) -> Dict[str, Any]:
+    async def pm_wallet_cluster(self, address: str) -> dict[str, Any]:
         """Wallet-cluster discovery (on-chain transfers + identity proofs). Tier 2 ($0.005/call)."""
         return await self.pm(f"polymarket/wallet/{address}/cluster")
 
     # ── Exa Web Search (Powered by Exa) ─────────────────────────────────────
 
-    async def exa(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    async def exa(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         """Generic Exa endpoint proxy (POST, Solana payment). Powered by Exa.
 
         Args:
@@ -4530,25 +4529,25 @@ class AsyncSolanaLLMClient:
             f"/v1/exa/{path}", body, timeout=self._search_timeout
         )
 
-    async def exa_search(self, query: str, **kwargs: Any) -> Dict[str, Any]:
+    async def exa_search(self, query: str, **kwargs: Any) -> dict[str, Any]:
         """Neural and keyword web search via Exa (Solana payment, $0.01/request)."""
         return await self._request_with_payment_raw(
             "/v1/exa/search", {"query": query, **kwargs}, timeout=self._search_timeout
         )
 
-    async def exa_find_similar(self, url: str, **kwargs: Any) -> Dict[str, Any]:
+    async def exa_find_similar(self, url: str, **kwargs: Any) -> dict[str, Any]:
         """Find pages semantically similar to a given URL via Exa (Solana payment, $0.01/request)."""
         return await self._request_with_payment_raw(
             "/v1/exa/find-similar", {"url": url, **kwargs}, timeout=self._search_timeout
         )
 
-    async def exa_contents(self, urls: List[str], **kwargs: Any) -> Dict[str, Any]:
+    async def exa_contents(self, urls: list[str], **kwargs: Any) -> dict[str, Any]:
         """Extract full text content from URLs via Exa (Solana payment, $0.002/URL)."""
         return await self._request_with_payment_raw(
             "/v1/exa/contents", {"urls": urls, **kwargs}, timeout=self._search_timeout
         )
 
-    async def exa_answer(self, query: str, **kwargs: Any) -> Dict[str, Any]:
+    async def exa_answer(self, query: str, **kwargs: Any) -> dict[str, Any]:
         """AI-generated answer grounded in live web search via Exa (Solana payment, $0.01/request)."""
         return await self._request_with_payment_raw(
             "/v1/exa/answer", {"query": query, **kwargs}, timeout=self._search_timeout
@@ -4556,28 +4555,28 @@ class AsyncSolanaLLMClient:
 
     # ── DefiLlama (DeFi protocols / TVL / yields / prices) ──────────────────
 
-    async def defi(self, path: str, **params: Any) -> Dict[str, Any]:
+    async def defi(self, path: str, **params: Any) -> dict[str, Any]:
         """Query DefiLlama DeFi data (GET, Solana payment). $0.005/call
         ($0.001 for prices/{coins})."""
         return await self._get_with_payment_raw(f"/v1/defillama/{path}", params or None)
 
-    async def defi_protocols(self) -> Dict[str, Any]:
+    async def defi_protocols(self) -> dict[str, Any]:
         """All DeFi protocols with TVL ($0.005/call)."""
         return await self.defi("protocols")
 
-    async def defi_protocol(self, slug: str) -> Dict[str, Any]:
+    async def defi_protocol(self, slug: str) -> dict[str, Any]:
         """Single protocol details + historical TVL ($0.005/call)."""
         return await self.defi(f"protocol/{slug}")
 
-    async def defi_chains(self) -> Dict[str, Any]:
+    async def defi_chains(self) -> dict[str, Any]:
         """Current TVL of every chain ($0.005/call)."""
         return await self.defi("chains")
 
-    async def defi_yields(self, **params: Any) -> Dict[str, Any]:
+    async def defi_yields(self, **params: Any) -> dict[str, Any]:
         """Yield pools with APY/TVL ($0.005/call)."""
         return await self.defi("yields", **params)
 
-    async def defi_prices(self, coins: Union[List[str], str]) -> Dict[str, Any]:
+    async def defi_prices(self, coins: list[str] | str) -> dict[str, Any]:
         """Token price lookup ($0.001/call)."""
         joined = ",".join(coins) if isinstance(coins, list) else coins
         return await self.defi(f"prices/{joined}")
@@ -4589,70 +4588,70 @@ class AsyncSolanaLLMClient:
         path: str,
         *,
         method: str = "GET",
-        body: Optional[Dict[str, Any]] = None,
+        body: dict[str, Any] | None = None,
         **params: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Query the 0x Swap / Gasless APIs (free — no x402 payment)."""
         endpoint = f"/v1/zerox/{path}"
         if method.upper() == "POST":
             return await self._request_with_payment_raw(endpoint, body or {})
         return await self._get_with_payment_raw(endpoint, params or None)
 
-    async def dex_price(self, **params: Any) -> Dict[str, Any]:
+    async def dex_price(self, **params: Any) -> dict[str, Any]:
         """Indicative Permit2 swap price — no commitment (free)."""
         return await self.dex("price", **params)
 
-    async def dex_quote(self, **params: Any) -> Dict[str, Any]:
+    async def dex_quote(self, **params: Any) -> dict[str, Any]:
         """Firm Permit2 swap quote with permit2.eip712 + tx data (free)."""
         return await self.dex("quote", **params)
 
-    async def dex_gasless_price(self, **params: Any) -> Dict[str, Any]:
+    async def dex_gasless_price(self, **params: Any) -> dict[str, Any]:
         """Gasless indicative price quote (free)."""
         return await self.dex("gasless/price", **params)
 
-    async def dex_gasless_quote(self, **params: Any) -> Dict[str, Any]:
+    async def dex_gasless_quote(self, **params: Any) -> dict[str, Any]:
         """Gasless firm quote — returns trade.eip712 to sign (free)."""
         return await self.dex("gasless/quote", **params)
 
-    async def dex_gasless_submit(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    async def dex_gasless_submit(self, body: dict[str, Any]) -> dict[str, Any]:
         """Submit a signed gasless trade; the 0x relayer pays gas (free)."""
         return await self.dex("gasless/submit", method="POST", body=body)
 
-    async def dex_gasless_status(self, trade_hash: str) -> Dict[str, Any]:
+    async def dex_gasless_status(self, trade_hash: str) -> dict[str, Any]:
         """Poll a gasless trade's status by tradeHash (free)."""
         return await self.dex(f"gasless/status/{trade_hash}")
 
-    async def dex_chains(self) -> Dict[str, Any]:
+    async def dex_chains(self) -> dict[str, Any]:
         """Chains where the Swap API is supported (free)."""
         return await self.dex("swap/chains")
 
-    async def dex_gasless_chains(self) -> Dict[str, Any]:
+    async def dex_gasless_chains(self) -> dict[str, Any]:
         """Chains where the Gasless API is supported (free)."""
         return await self.dex("gasless/chains")
 
     # ── Modal Sandbox (pay-per-call cloud compute) ───────────────────────────
 
-    async def modal(self, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def modal(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         """Call the Modal sandbox compute API (POST, Solana payment)."""
         return await self._request_with_payment_raw(f"/v1/modal/{path}", body or {})
 
-    async def modal_sandbox_create(self, **body: Any) -> Dict[str, Any]:
+    async def modal_sandbox_create(self, **body: Any) -> dict[str, Any]:
         """Create a sandboxed compute environment ($0.01 CPU / $0.05 GPU)."""
         return await self.modal("sandbox/create", body)
 
     async def modal_sandbox_exec(
-        self, sandbox_id: str, command: List[str], **body: Any
-    ) -> Dict[str, Any]:
+        self, sandbox_id: str, command: list[str], **body: Any
+    ) -> dict[str, Any]:
         """Execute a command in a sandbox; returns stdout/stderr ($0.001)."""
         return await self.modal(
             "sandbox/exec", {"sandbox_id": sandbox_id, "command": command, **body}
         )
 
-    async def modal_sandbox_status(self, sandbox_id: str) -> Dict[str, Any]:
+    async def modal_sandbox_status(self, sandbox_id: str) -> dict[str, Any]:
         """Check a sandbox's status ($0.001)."""
         return await self.modal("sandbox/status", {"sandbox_id": sandbox_id})
 
-    async def modal_sandbox_terminate(self, sandbox_id: str) -> Dict[str, Any]:
+    async def modal_sandbox_terminate(self, sandbox_id: str) -> dict[str, Any]:
         """Terminate a sandbox ($0.001)."""
         return await self.modal("sandbox/terminate", {"sandbox_id": sandbox_id})
 

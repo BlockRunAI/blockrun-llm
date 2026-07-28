@@ -18,7 +18,6 @@ chunks skipped, finish_reason on the final chunk.
 from __future__ import annotations
 
 import json
-from typing import List
 
 import httpx
 import pytest
@@ -28,15 +27,14 @@ from blockrun_llm.types import PaymentError
 
 from ..helpers import TEST_PRIVATE_KEY, build_payment_required_response
 
-
 # ---------------------------------------------------------------------------
 # Synthetic SSE bodies
 # ---------------------------------------------------------------------------
 
 
-def _sse_events(deltas: List[str], finish: str = "stop", model: str = "test/model") -> bytes:
+def _sse_events(deltas: list[str], finish: str = "stop", model: str = "test/model") -> bytes:
     """Render a list of content deltas as raw SSE bytes ending with [DONE]."""
-    lines: List[str] = []
+    lines: list[str] = []
     # First chunk — role only.
     lines.append(
         "data: "
@@ -82,7 +80,7 @@ def _sse_events(deltas: List[str], finish: str = "stop", model: str = "test/mode
     return body.encode("utf-8")
 
 
-def _sse_with_garbage(deltas: List[str]) -> bytes:
+def _sse_with_garbage(deltas: list[str]) -> bytes:
     """Same as ``_sse_events`` but with a couple of malformed lines mixed in
     to verify the parser is tolerant."""
     base = _sse_events(deltas).decode("utf-8")
@@ -98,7 +96,7 @@ def _sse_with_garbage(deltas: List[str]) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def _make_free_model_transport(sse_body: bytes, calls: List[httpx.Request]) -> httpx.MockTransport:
+def _make_free_model_transport(sse_body: bytes, calls: list[httpx.Request]) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         return httpx.Response(
@@ -110,7 +108,7 @@ def _make_free_model_transport(sse_body: bytes, calls: List[httpx.Request]) -> h
     return httpx.MockTransport(handler)
 
 
-def _make_paid_model_transport(sse_body: bytes, calls: List[httpx.Request]) -> httpx.MockTransport:
+def _make_paid_model_transport(sse_body: bytes, calls: list[httpx.Request]) -> httpx.MockTransport:
     """First call → 402 with valid payment-required header; second → 200 SSE."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -140,13 +138,13 @@ def _make_paid_model_transport(sse_body: bytes, calls: List[httpx.Request]) -> h
 
 class TestSyncStreaming:
     def test_free_model_streams_without_payment(self):
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
         client._client = httpx.Client(
             transport=_make_free_model_transport(_sse_events(["Hello", " world"]), calls)
         )
 
-        chunks: List[ChatCompletionChunk] = list(
+        chunks: list[ChatCompletionChunk] = list(
             client.chat_completion_stream(
                 "nvidia/deepseek-v4-flash",
                 [{"role": "user", "content": "hi"}],
@@ -168,7 +166,7 @@ class TestSyncStreaming:
         assert finishes == ["stop"]
 
     def test_paid_model_signs_and_retries(self):
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
         client._client = httpx.Client(
             transport=_make_paid_model_transport(_sse_events(["Paid"]), calls)
@@ -199,7 +197,7 @@ class TestSyncStreaming:
         """Every paid-path chunk carries the real per-call x402 charge as
         ``chunk.cost_usd`` (race-free, vs the shared ``_last_call_cost``), so a
         streaming consumer can report the actual wallet deduction."""
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
         client._client = httpx.Client(
             transport=_make_paid_model_transport(_sse_events(["Paid"]), calls)
@@ -221,7 +219,7 @@ class TestSyncStreaming:
     def test_free_stream_chunks_have_no_cost(self):
         """Free models skip the 402/sign path (and the archive), so chunks
         carry no ``cost_usd`` — consumers treat that as 'no real charge'."""
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
         client._client = httpx.Client(
             transport=_make_free_model_transport(_sse_events(["hi"]), calls)
@@ -236,7 +234,7 @@ class TestSyncStreaming:
         assert all(getattr(c, "cost_usd", None) is None for c in chunks)
 
     def test_malformed_chunks_dont_abort_stream(self):
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
         client._client = httpx.Client(
             transport=_make_free_model_transport(_sse_with_garbage(["A", "B"]), calls)
@@ -254,7 +252,7 @@ class TestSyncStreaming:
 
     def test_paid_path_propagates_payment_rejected(self):
         """If the retry also returns 402, surface PaymentError."""
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             calls.append(request)
@@ -289,7 +287,7 @@ class TestSyncStreaming:
 class TestAsyncStreaming:
     @pytest.mark.asyncio
     async def test_async_free_model(self):
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = AsyncLLMClient(private_key=TEST_PRIVATE_KEY)
         # Swap in mock transport (same pattern as sync).
         await client._client.aclose()
@@ -297,7 +295,7 @@ class TestAsyncStreaming:
             transport=_make_free_model_transport(_sse_events(["Hi", "!"]), calls)
         )
 
-        chunks: List[ChatCompletionChunk] = []
+        chunks: list[ChatCompletionChunk] = []
         async for chunk in client.chat_completion_stream(
             "nvidia/deepseek-v4-flash",
             [{"role": "user", "content": "hi"}],
@@ -313,14 +311,14 @@ class TestAsyncStreaming:
 
     @pytest.mark.asyncio
     async def test_async_paid_model_signs_and_retries(self):
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = AsyncLLMClient(private_key=TEST_PRIVATE_KEY)
         await client._client.aclose()
         client._client = httpx.AsyncClient(
             transport=_make_paid_model_transport(_sse_events(["X"]), calls)
         )
 
-        chunks: List[ChatCompletionChunk] = []
+        chunks: list[ChatCompletionChunk] = []
         async for chunk in client.chat_completion_stream(
             "openai/gpt-5.5",
             [{"role": "user", "content": "hi"}],
@@ -341,7 +339,7 @@ class TestAsyncStreaming:
 def _make_flaky_free_transport(
     sse_body: bytes,
     fail_count: int,
-    calls: List[httpx.Request],
+    calls: list[httpx.Request],
     status: int = 503,
 ) -> httpx.MockTransport:
     """Returns ``status`` (default 503) for the first ``fail_count`` requests,
@@ -366,7 +364,7 @@ class TestStreamingRetries:
         # Zero out sleeps to keep tests fast.
         monkeypatch.setattr("time.sleep", lambda _s: None)
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
         client._client = httpx.Client(
             transport=_make_flaky_free_transport(_sse_events(["OK"]), fail_count=2, calls=calls)
@@ -384,7 +382,7 @@ class TestStreamingRetries:
     def test_raises_after_exhausting_retries(self, monkeypatch):
         monkeypatch.setattr("time.sleep", lambda _s: None)
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             calls.append(request)
@@ -414,7 +412,7 @@ class TestStreamingRetries:
         also trigger in-band retries before raising."""
         monkeypatch.setattr("time.sleep", lambda _s: None)
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         body = _sse_events(["paid-OK"])
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -462,7 +460,7 @@ class TestStreamingFallback:
     def test_falls_back_to_next_model_on_503(self, monkeypatch):
         monkeypatch.setattr("time.sleep", lambda _s: None)
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             calls.append(request)
@@ -502,15 +500,15 @@ class TestStreamingFallback:
         # Build SSE that's truncated (no [DONE]) so iter_lines simulates a
         # mid-stream connection drop via httpx parsing exception.
         truncated = (
-            'data: {"id":"x","object":"chat.completion.chunk","created":1,'
-            '"model":"primary/bad","choices":[{"index":0,"delta":{"role":"assistant"},'
-            '"finish_reason":null}]}\n\n'
-            'data: {"id":"x","object":"chat.completion.chunk","created":1,'
-            '"model":"primary/bad","choices":[{"index":0,"delta":{"content":"par"},'
-            '"finish_reason":null}]}\n\n'
-        ).encode()
+            b'data: {"id":"x","object":"chat.completion.chunk","created":1,'
+            b'"model":"primary/bad","choices":[{"index":0,"delta":{"role":"assistant"},'
+            b'"finish_reason":null}]}\n\n'
+            b'data: {"id":"x","object":"chat.completion.chunk","created":1,'
+            b'"model":"primary/bad","choices":[{"index":0,"delta":{"content":"par"},'
+            b'"finish_reason":null}]}\n\n'
+        )
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             calls.append(request)
@@ -545,7 +543,7 @@ class TestStreamingFallback:
         permanent client errors, not transient upstream issues."""
         monkeypatch.setattr("time.sleep", lambda _s: None)
 
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             calls.append(request)
@@ -634,8 +632,8 @@ def _sse_with_tool_call(model: str = "anthropic/claude-haiku-4-5") -> bytes:
     return ("\n\n".join(lines) + "\n\n").encode("utf-8")
 
 
-def _collect_tool_args(chunks: List[ChatCompletionChunk]) -> str:
-    out: List[str] = []
+def _collect_tool_args(chunks: list[ChatCompletionChunk]) -> str:
+    out: list[str] = []
     for c in chunks:
         if not c.choices:
             continue
@@ -655,7 +653,7 @@ class TestStreamedToolCalls:
     """
 
     def test_sync_streamed_tool_call(self):
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
         client._client = httpx.Client(
             transport=_make_paid_model_transport(_sse_with_tool_call(), calls)
@@ -679,13 +677,13 @@ class TestStreamedToolCalls:
 
     @pytest.mark.asyncio
     async def test_async_streamed_tool_call(self):
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = AsyncLLMClient(private_key=TEST_PRIVATE_KEY)
         await client._client.aclose()
         client._client = httpx.AsyncClient(
             transport=_make_paid_model_transport(_sse_with_tool_call(), calls)
         )
-        chunks: List[ChatCompletionChunk] = []
+        chunks: list[ChatCompletionChunk] = []
         async for chunk in client.chat_completion_stream(
             "openai/gpt-5.5",
             [{"role": "user", "content": "weather?"}],
@@ -736,7 +734,7 @@ class TestStreamedToolCalls:
         sse = (
             "\n\n".join("data: " + json.dumps(f) for f in frames) + "\n\ndata: [DONE]\n\n"
         ).encode()
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
         client._client = httpx.Client(transport=_make_paid_model_transport(sse, calls))
         chunks = list(
@@ -777,7 +775,7 @@ class TestStreamedToolCalls:
         sse = (
             "\n\n".join("data: " + json.dumps(f) for f in frames) + "\n\ndata: [DONE]\n\n"
         ).encode()
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         client = LLMClient(private_key=TEST_PRIVATE_KEY)
         client._client = httpx.Client(transport=_make_paid_model_transport(sse, calls))
         # Must not raise: the archive loop reads chunk.id via the dict/attr-tolerant

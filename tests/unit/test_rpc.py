@@ -1,10 +1,11 @@
 """Unit tests for RpcClient request construction and response parsing."""
 
 import os
+
 import httpx
 import pytest
 
-from blockrun_llm import RpcClient, RpcResponse, SUPPORTED_NETWORKS, NETWORK_ALIASES
+from blockrun_llm import NETWORK_ALIASES, SUPPORTED_NETWORKS, RpcClient, RpcResponse
 
 
 @pytest.fixture

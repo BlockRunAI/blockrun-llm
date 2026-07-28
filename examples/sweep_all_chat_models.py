@@ -25,13 +25,12 @@ import os
 import sys
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
 from blockrun_llm import AsyncLLMClient, LLMClient
 from blockrun_llm.types import APIError, PaymentError
-
 
 # ---------------------------------------------------------------------------
 # Sweep targets — hardcoded so we also probe hidden / retired model ids that
@@ -39,7 +38,7 @@ from blockrun_llm.types import APIError, PaymentError
 # the order the report displays them.
 # ---------------------------------------------------------------------------
 
-SWEEP_TARGETS: List[str] = [
+SWEEP_TARGETS: list[str] = [
     # OpenAI
     "openai/gpt-5.5",
     "openai/gpt-5.4",
@@ -157,16 +156,16 @@ class ProbeResult:
     provider: str
     status: str
     latency_ms: int
-    tokens_in: Optional[int] = None
-    tokens_out: Optional[int] = None
-    tokens_total: Optional[int] = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    tokens_total: int | None = None
     cost_delta_usd: float = 0.0
-    expected_cost_usd: Optional[float] = None
-    cost_drift_pct: Optional[float] = None
-    redirected_to: Optional[str] = None
+    expected_cost_usd: float | None = None
+    cost_drift_pct: float | None = None
+    redirected_to: str | None = None
     response_preview: str = ""
     contains_4: bool = False
-    error_message: Optional[str] = None
+    error_message: str | None = None
     timestamp: float = field(default_factory=time.time)
 
 
@@ -253,7 +252,7 @@ def preflight() -> LLMClient:
 # ---------------------------------------------------------------------------
 
 
-def forward_compat_check(client: LLMClient) -> Dict[str, Dict[str, Any]]:
+def forward_compat_check(client: LLMClient) -> dict[str, dict[str, Any]]:
     print(">>> Forward-compat check vs /v1/models")
     try:
         listed_raw = client.list_models()
@@ -262,7 +261,7 @@ def forward_compat_check(client: LLMClient) -> Dict[str, Dict[str, Any]]:
         print()
         return {}
 
-    listed_chat: Dict[str, Dict[str, Any]] = {}
+    listed_chat: dict[str, dict[str, Any]] = {}
     for m in listed_raw:
         cats = m.get("categories")
         if cats is None or "chat" in cats:
@@ -300,7 +299,7 @@ def forward_compat_check(client: LLMClient) -> Dict[str, Dict[str, Any]]:
 def probe_one(
     client: LLMClient,
     model_id: str,
-    pricing: Dict[str, Dict[str, Any]],
+    pricing: dict[str, dict[str, Any]],
 ) -> ProbeResult:
     provider = provider_of(model_id)
     max_toks = PROBE_MAX_TOKENS_REASONING if model_id in REASONING_MODELS else PROBE_MAX_TOKENS
@@ -440,11 +439,11 @@ def probe_one(
 
 def run_sweep(
     client: LLMClient,
-    targets: List[str],
+    targets: list[str],
     args: argparse.Namespace,
-    pricing: Dict[str, Dict[str, Any]],
-) -> List[ProbeResult]:
-    results: List[ProbeResult] = []
+    pricing: dict[str, dict[str, Any]],
+) -> list[ProbeResult]:
+    results: list[ProbeResult] = []
     n = len(targets)
     warned = False
 
@@ -496,7 +495,7 @@ def run_sweep(
 # ---------------------------------------------------------------------------
 
 
-async def _async_probe(client: AsyncLLMClient, model_id: str) -> Dict[str, Any]:
+async def _async_probe(client: AsyncLLMClient, model_id: str) -> dict[str, Any]:
     t0 = time.monotonic()
     try:
         response = await client.chat_completion(
@@ -528,13 +527,13 @@ async def _async_probe(client: AsyncLLMClient, model_id: str) -> Dict[str, Any]:
         }
 
 
-async def _async_smoke() -> List[Dict[str, Any]]:
+async def _async_smoke() -> list[dict[str, Any]]:
     async with AsyncLLMClient() as client:
         coros = [_async_probe(client, m) for m in ASYNC_SMOKE_MODELS]
         return await asyncio.gather(*coros)
 
 
-def run_async_smoke() -> List[Dict[str, Any]]:
+def run_async_smoke() -> list[dict[str, Any]]:
     print(">>> Async smoke (asyncio.gather over 3 models)")
     t0 = time.monotonic()
     results = asyncio.run(_async_smoke())
@@ -559,8 +558,8 @@ def run_async_smoke() -> List[Dict[str, Any]]:
 
 def report(
     client: LLMClient,
-    results: List[ProbeResult],
-    async_results: Optional[List[Dict[str, Any]]],
+    results: list[ProbeResult],
+    async_results: list[dict[str, Any]] | None,
     started_at: float,
     args: argparse.Namespace,
 ) -> bool:
@@ -586,7 +585,7 @@ def report(
         print()
 
     print(">>> Provider summary")
-    by_provider: Dict[str, List[ProbeResult]] = {}
+    by_provider: dict[str, list[ProbeResult]] = {}
     for r in results:
         by_provider.setdefault(r.provider, []).append(r)
     for provider in sorted(by_provider):
@@ -680,7 +679,7 @@ def main() -> int:
 
     results = run_sweep(client, targets, args, listed)
 
-    async_results: Optional[List[Dict[str, Any]]] = None
+    async_results: list[dict[str, Any]] | None = None
     if not args.skip_async:
         async_results = run_async_smoke()
 

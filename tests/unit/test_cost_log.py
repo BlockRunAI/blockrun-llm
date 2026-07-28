@@ -16,8 +16,7 @@ from blockrun_llm import cache
 
 def _write_log(path, rows):
     with open(path, "w") as f:
-        for row in rows:
-            f.write(json.dumps(row) + "\n")
+        f.writelines(json.dumps(row) + "\n" for row in rows)
 
 
 @pytest.fixture

@@ -36,8 +36,7 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
-
+from typing import Any
 
 DEFAULT_LOG_DIR = Path("./log")
 LOG_NAME = "transactions.log"
@@ -60,7 +59,7 @@ LOG_NAME = "transactions.log"
 _SETTLEMENT_HEADER_NAMES = ("PAYMENT-RESPONSE", "X-PAYMENT-RESPONSE")
 
 
-def read_settlement_header(headers: Any) -> Optional[str]:
+def read_settlement_header(headers: Any) -> str | None:
     """Pull the raw settlement header out of a response, under either name.
 
     Single source of truth for the header name — call sites must not hand-roll
@@ -78,7 +77,7 @@ def read_settlement_header(headers: Any) -> Optional[str]:
     return None
 
 
-def decode_settlement_header(header_value: Optional[str]) -> Optional[Dict[str, Any]]:
+def decode_settlement_header(header_value: str | None) -> dict[str, Any] | None:
     """Decode a ``PAYMENT-RESPONSE`` header into a settlement dict.
 
     The x402 facilitator returns a base64-encoded JSON describing what
@@ -170,7 +169,7 @@ def paid_request_error_prefix(headers: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _resolve_log_dir(option: Union[bool, str, "os.PathLike[str]", Path, None]) -> Optional[Path]:
+def _resolve_log_dir(option: bool | str | os.PathLike[str] | Path | None) -> Path | None:
     """Translate the ``transaction_log=...`` constructor argument into a Path.
 
     ``True``       → default ``./log``
@@ -268,13 +267,13 @@ def _extract_tokens(response: Any) -> tuple[int, int]:
 
 def format_row(
     *,
-    ts: Optional[float] = None,
+    ts: float | None = None,
     endpoint: str,
-    model: Optional[str],
+    model: str | None,
     in_tokens: int,
     out_tokens: int,
     cost_usd: float,
-    tx_hash: Optional[str],
+    tx_hash: str | None,
 ) -> str:
     """Format one log row exactly like the example in the module docstring."""
     if ts is None:
@@ -313,7 +312,7 @@ class TransactionLogger:
     automatically via the ``transaction_log=`` constructor argument.
     """
 
-    def __init__(self, directory: Union[str, "os.PathLike[str]", Path] = DEFAULT_LOG_DIR):
+    def __init__(self, directory: str | os.PathLike[str] | Path = DEFAULT_LOG_DIR):
         self.directory = Path(directory).expanduser()
         self.path = self.directory / LOG_NAME
 
@@ -321,15 +320,15 @@ class TransactionLogger:
         self,
         *,
         endpoint: str,
-        request: Dict[str, Any],
+        request: dict[str, Any],
         response: Any,
         cost_usd: float,
-        model: Optional[str] = None,
-        wallet: Optional[str] = None,
-        network: Optional[str] = None,
-        client_kind: Optional[str] = None,
-        settlement: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Path]:
+        model: str | None = None,
+        wallet: str | None = None,
+        network: str | None = None,
+        client_kind: str | None = None,
+        settlement: dict[str, Any] | None = None,
+    ) -> Path | None:
         """Append one formatted row to ``./log/transactions.log``.
 
         Returns the log path on success, or ``None`` if the file could not
@@ -382,8 +381,8 @@ class TransactionLogger:
 
 
 __all__ = [
+    "DEFAULT_LOG_DIR",
     "TransactionLogger",
     "decode_settlement_header",
     "format_row",
-    "DEFAULT_LOG_DIR",
 ]

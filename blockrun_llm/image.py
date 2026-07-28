@@ -26,14 +26,17 @@ Usage:
     result = client.generate("prompt", model="google/nano-banana-pro")
 """
 
-import os
-from typing import Optional, Dict, Any, List, Union
-import httpx
-from eth_account import Account
-from dotenv import load_dotenv
+from __future__ import annotations
 
-from .types import ImageResponse, APIError, PaymentError
-from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
+import os
+from typing import Any
+
+import httpx
+from dotenv import load_dotenv
+from eth_account import Account
+
+from .tx_log import paid_request_error_prefix
+from .types import APIError, ImageResponse, PaymentError
 from .validation import (
     build_payment_rejected_error,
     sanitize_error_response,
@@ -41,8 +44,7 @@ from .validation import (
     validate_private_key,
     validate_resource_url,
 )
-from .tx_log import paid_request_error_prefix
-
+from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
 
 # Load environment variables
 load_dotenv()
@@ -72,8 +74,8 @@ class ImageClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = 200.0,  # gpt-image-2 at >=1536px can take ~180s server-side; 200s gives buffer
     ):
         """
@@ -125,8 +127,8 @@ class ImageClient:
         self,
         prompt: str,
         *,
-        model: Optional[str] = None,
-        size: Optional[str] = None,
+        model: str | None = None,
+        size: str | None = None,
         n: int = 1,
         **kwargs: Any,
     ) -> ImageResponse:
@@ -168,7 +170,7 @@ class ImageClient:
             )
 
         # Build request body
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model or self.DEFAULT_MODEL,
             "prompt": prompt,
             "size": size or self.DEFAULT_SIZE,
@@ -181,11 +183,11 @@ class ImageClient:
     def edit(
         self,
         prompt: str,
-        image: Union[str, List[str]],
+        image: str | list[str],
         *,
-        model: Optional[str] = None,
-        mask: Optional[str] = None,
-        size: Optional[str] = None,
+        model: str | None = None,
+        mask: str | None = None,
+        size: str | None = None,
         n: int = 1,
         **kwargs: Any,
     ) -> ImageResponse:
@@ -241,7 +243,7 @@ class ImageClient:
                 f"Valid parameters are: prompt, image, model, mask, size, n.{hint}"
             )
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model or "openai/gpt-image-2",
             "prompt": prompt,
             "image": image,
@@ -253,7 +255,7 @@ class ImageClient:
 
         return self._request_with_payment("/v1/images/image2image", body)
 
-    def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ImageResponse:
+    def _request_with_payment(self, endpoint: str, body: dict[str, Any]) -> ImageResponse:
         """
         Make a request with automatic x402 payment handling.
 
@@ -293,7 +295,7 @@ class ImageClient:
     def _handle_payment_and_retry(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
     ) -> ImageResponse:
         """Handle 402 response: parse requirements, sign payment, retry."""
@@ -378,9 +380,9 @@ class ImageClient:
         our ``self.api_url`` already ends with ``/api`` so we strip it once
         to avoid double-prefixing.
         """
-        if url.startswith("http://") or url.startswith("https://"):
+        if url.startswith(("http://", "https://")):
             return url
-        base = self.api_url[: -len("/api")] if self.api_url.endswith("/api") else self.api_url
+        base = self.api_url.removesuffix("/api")
         return f"{base}{url}"
 
     def _poll_until_completed(

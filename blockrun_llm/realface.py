@@ -55,34 +55,37 @@ Usage:
         print(r.assetId, r.name)
 """
 
+from __future__ import annotations
+
 import os
 import re
 import time
-from typing import Optional, Dict, Any
-import httpx
-from eth_account import Account
-from dotenv import load_dotenv
+from typing import Any
 
+import httpx
+from dotenv import load_dotenv
+from eth_account import Account
+
+from .tx_log import paid_request_error_prefix
 from .types import (
-    RealFaceInit,
-    RealFaceStatus,
-    RealFaceEnrollment,
-    RealFaceList,
     APIError,
     PaymentError,
+    RealFaceEnrollment,
+    RealFaceInit,
+    RealFaceList,
+    RealFaceStatus,
+)
+from .validation import (
+    sanitize_error_response,
+    validate_api_url,
+    validate_private_key,
+    validate_resource_url,
 )
 from .x402 import (
     create_payment_payload,
-    parse_payment_required,
     extract_payment_details,
+    parse_payment_required,
 )
-from .validation import (
-    validate_private_key,
-    validate_api_url,
-    sanitize_error_response,
-    validate_resource_url,
-)
-from .tx_log import paid_request_error_prefix
 
 load_dotenv()
 
@@ -115,8 +118,8 @@ class RealFaceClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = 60.0,
     ):
         """
@@ -156,7 +159,7 @@ class RealFaceClient:
     # Step 1: init (free, rate-limited)
     # ------------------------------------------------------------------
 
-    def init(self, name: str, group_id: Optional[str] = None) -> RealFaceInit:
+    def init(self, name: str, group_id: str | None = None) -> RealFaceInit:
         """
         Start (or refresh) a RealFace enrollment. Free, but rate-limited to
         ~10 calls / hour / IP (each call creates an upstream session).
@@ -182,7 +185,7 @@ class RealFaceClient:
         if group_id is not None and not _GROUP_ID_RE.match(group_id):
             raise ValueError("group_id must look like 'legacy_rf_<digits>'")
 
-        body: Dict[str, Any] = {"name": name}
+        body: dict[str, Any] = {"name": name}
         if group_id:
             body["groupId"] = group_id
 
@@ -304,7 +307,7 @@ class RealFaceClient:
         if not group_id or not _GROUP_ID_RE.match(group_id):
             raise ValueError("group_id must look like 'legacy_rf_<digits>'")
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "name": name,
             "image_url": image_url,
             "group_id": group_id,
@@ -315,7 +318,7 @@ class RealFaceClient:
     # Listing (free, rate-limited)
     # ------------------------------------------------------------------
 
-    def list_realfaces(self, wallet_address: Optional[str] = None) -> RealFaceList:
+    def list_realfaces(self, wallet_address: str | None = None) -> RealFaceList:
         """
         List RealFaces enrolled by a wallet. Free, but rate-limited to
         ~20 requests / hour / IP (shared with the wallet-reconciliation
@@ -350,7 +353,7 @@ class RealFaceClient:
     # Internal: x402 paid POST
     # ------------------------------------------------------------------
 
-    def _post_with_payment(self, endpoint: str, body: Dict[str, Any]) -> RealFaceEnrollment:
+    def _post_with_payment(self, endpoint: str, body: dict[str, Any]) -> RealFaceEnrollment:
         url = f"{self.api_url}{endpoint}"
 
         resp = self._client.post(
@@ -370,7 +373,7 @@ class RealFaceClient:
     def _handle_payment_and_retry(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
     ) -> RealFaceEnrollment:
         payment_header = response.headers.get("payment-required")

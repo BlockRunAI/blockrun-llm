@@ -1,10 +1,11 @@
 """Unit tests for Solana wallet utilities."""
 
 import pytest
+
 from blockrun_llm.solana_wallet import (
     create_solana_wallet,
-    solana_key_to_bytes,
     get_solana_public_key,
+    solana_key_to_bytes,
 )
 
 # A valid test bs58 secret key (64 bytes, valid keypair from deterministic seed)

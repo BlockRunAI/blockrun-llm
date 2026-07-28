@@ -12,7 +12,7 @@ an unguarded Solana test file turns that job red (see #19/#20).
 
 from __future__ import annotations
 
-import unittest.mock as mock
+from unittest import mock
 
 import httpx
 import pytest
@@ -20,8 +20,8 @@ import pytest
 pytest.importorskip("x402")
 pytest.importorskip("solders")
 
-from blockrun_llm import SolanaLLMClient  # noqa: E402
-from blockrun_llm.validation import MAX_TOKENS_SANITY_LIMIT  # noqa: E402
+from blockrun_llm import SolanaLLMClient
+from blockrun_llm.validation import MAX_TOKENS_SANITY_LIMIT
 
 MESSAGES = [{"role": "user", "content": "hi"}]
 

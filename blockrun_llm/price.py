@@ -34,20 +34,21 @@ Usage:
 from __future__ import annotations
 
 import os
-from typing import Optional, Dict, Any, Literal
+from typing import Any, Literal
+
 import httpx
-from eth_account import Account
 from dotenv import load_dotenv
+from eth_account import Account
+from typing_extensions import Self
 
-from .types import APIError, PaymentError, PricePoint, PriceHistoryResponse, SymbolListResponse
-from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
-from .validation import (
-    validate_private_key,
-    validate_api_url,
-    sanitize_error_response,
-)
 from .tx_log import paid_request_error_prefix
-
+from .types import APIError, PaymentError, PriceHistoryResponse, PricePoint, SymbolListResponse
+from .validation import (
+    sanitize_error_response,
+    validate_api_url,
+    validate_private_key,
+)
+from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
 
 load_dotenv()
 
@@ -72,8 +73,8 @@ class PriceClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         require_wallet: bool = True,
     ):
@@ -113,8 +114,8 @@ class PriceClient:
         category: Category,
         symbol: str,
         *,
-        market: Optional[Market] = None,
-        session: Optional[Session] = None,
+        market: Market | None = None,
+        session: Session | None = None,
     ) -> PricePoint:
         """
         Fetch a realtime price quote.
@@ -122,7 +123,7 @@ class PriceClient:
         For ``stocks`` category the ``market`` param is required.
         """
         endpoint = self._category_path(category, market, "price", symbol)
-        params: Dict[str, Any] = {}
+        params: dict[str, Any] = {}
         if session is not None:
             params["session"] = session
         data = self._get_with_payment(endpoint, params=params)
@@ -147,14 +148,14 @@ class PriceClient:
         resolution: Resolution = "D",
         from_ts: int,
         to_ts: int,
-        market: Optional[Market] = None,
-        session: Optional[Session] = None,
+        market: Market | None = None,
+        session: Session | None = None,
     ) -> PriceHistoryResponse:
         """
         Fetch OHLC bars between two Unix timestamps (seconds).
         """
         endpoint = self._category_path(category, market, "history", symbol)
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "resolution": resolution,
             "from": from_ts,
             "to": to_ts,
@@ -173,15 +174,15 @@ class PriceClient:
         self,
         category: Category,
         *,
-        q: Optional[str] = None,
+        q: str | None = None,
         limit: int = 100,
-        market: Optional[Market] = None,
+        market: Market | None = None,
     ) -> SymbolListResponse:
         """
         List available symbols in a category (free discovery endpoint).
         """
         endpoint = self._category_path(category, market, "list", None)
-        params: Dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {"limit": limit}
         if q:
             params["q"] = q
         data = self._get_with_payment(endpoint, params=params)
@@ -199,9 +200,9 @@ class PriceClient:
     def _category_path(
         self,
         category: Category,
-        market: Optional[str],
+        market: str | None,
         kind: str,
-        symbol: Optional[str],
+        symbol: str | None,
     ) -> str:
         if category == "stocks":
             if not market:
@@ -215,7 +216,7 @@ class PriceClient:
             return f"{base}/{kind}"
         return f"{base}/{kind}/{symbol.upper()}"
 
-    def _get_with_payment(self, endpoint: str, *, params: Optional[Dict[str, Any]] = None) -> Any:
+    def _get_with_payment(self, endpoint: str, *, params: dict[str, Any] | None = None) -> Any:
         url = f"{self.api_url}{endpoint}"
         response = self._client.get(url, params=params)
         if response.status_code == 402:
@@ -239,7 +240,7 @@ class PriceClient:
     def _pay_and_retry(
         self,
         url: str,
-        params: Optional[Dict[str, Any]],
+        params: dict[str, Any] | None,
         response: httpx.Response,
     ) -> Any:
         payment_header: Any = response.headers.get("payment-required")
@@ -292,13 +293,13 @@ class PriceClient:
             )
         return retry.json()
 
-    def get_wallet_address(self) -> Optional[str]:
+    def get_wallet_address(self) -> str | None:
         return self.account.address if self.account else None
 
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> "PriceClient":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:

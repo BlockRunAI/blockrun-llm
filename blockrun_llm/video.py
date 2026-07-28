@@ -28,21 +28,24 @@ Usage:
     print(result.data[0].duration_seconds)
 """
 
+from __future__ import annotations
+
 import os
 import time
-from typing import Optional, Dict, Any, List
-import httpx
-from eth_account import Account
-from dotenv import load_dotenv
+from typing import Any
 
-from .types import VideoResponse, APIError, PaymentError
-from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
+import httpx
+from dotenv import load_dotenv
+from eth_account import Account
+
+from .types import APIError, PaymentError, VideoResponse
 from .validation import (
-    validate_private_key,
-    validate_api_url,
     sanitize_error_response,
+    validate_api_url,
+    validate_private_key,
     validate_video_input_type,
 )
+from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
 
 load_dotenv()
 
@@ -93,8 +96,8 @@ class VideoClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = 360.0,
     ):
         """
@@ -136,20 +139,20 @@ class VideoClient:
         self,
         prompt: str,
         *,
-        model: Optional[str] = None,
-        image_url: Optional[str] = None,
-        last_frame_url: Optional[str] = None,
-        reference_image_urls: Optional[List[str]] = None,
-        real_face_asset_id: Optional[str] = None,
-        duration_seconds: Optional[int] = None,
-        aspect_ratio: Optional[str] = None,
-        resolution: Optional[str] = None,
-        generate_audio: Optional[bool] = None,
-        seed: Optional[int] = None,
-        watermark: Optional[bool] = None,
-        return_last_frame: Optional[bool] = None,
-        input_type: Optional[str] = None,
-        budget_seconds: Optional[float] = None,
+        model: str | None = None,
+        image_url: str | None = None,
+        last_frame_url: str | None = None,
+        reference_image_urls: list[str] | None = None,
+        real_face_asset_id: str | None = None,
+        duration_seconds: int | None = None,
+        aspect_ratio: str | None = None,
+        resolution: str | None = None,
+        generate_audio: bool | None = None,
+        seed: int | None = None,
+        watermark: bool | None = None,
+        return_last_frame: bool | None = None,
+        input_type: str | None = None,
+        budget_seconds: float | None = None,
     ) -> VideoResponse:
         """
         Generate a video clip from a text prompt (or text + image / face asset).
@@ -247,7 +250,7 @@ class VideoClient:
             )
         validate_video_input_type(input_type)
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model or self.DEFAULT_MODEL,
             "prompt": prompt,
         }
@@ -284,10 +287,10 @@ class VideoClient:
 
     def generate_from_content(
         self,
-        content: List[Dict[str, Any]],
+        content: list[dict[str, Any]],
         *,
-        model: Optional[str] = None,
-        budget_seconds: Optional[float] = None,
+        model: str | None = None,
+        budget_seconds: float | None = None,
         **options: Any,
     ) -> VideoResponse:
         """
@@ -321,7 +324,7 @@ class VideoClient:
         if not content:
             raise ValueError("content must be a non-empty list of Seedance content items.")
 
-        body: Dict[str, Any] = {"content": content, **options}
+        body: dict[str, Any] = {"content": content, **options}
         if model is not None:
             body["model"] = model
 
@@ -336,7 +339,7 @@ class VideoClient:
 
     def _submit_and_poll(
         self,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         budget_seconds: float,
         submit_path: str = "/v1/videos/generations",
     ) -> VideoResponse:
@@ -486,13 +489,13 @@ class VideoClient:
         )
 
     def _absolute(self, url: str) -> str:
-        if url.startswith("http://") or url.startswith("https://"):
+        if url.startswith(("http://", "https://")):
             return url
         # self.api_url already ends without '/'; poll_url starts with '/api/...'
-        base = self.api_url[: -len("/api")] if self.api_url.endswith("/api") else self.api_url
+        base = self.api_url.removesuffix("/api")
         return f"{base}{url}"
 
-    def _extract_payment_required(self, resp: httpx.Response) -> Dict[str, Any]:
+    def _extract_payment_required(self, resp: httpx.Response) -> dict[str, Any]:
         header = resp.headers.get("payment-required")
         if header:
             return parse_payment_required(header)

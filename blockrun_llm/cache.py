@@ -20,13 +20,13 @@ import io
 import json
 import re
 import time
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Union
-
+from typing import Any
 
 # Default TTL in seconds per endpoint pattern
-DEFAULT_TTL: Dict[str, int] = {
+DEFAULT_TTL: dict[str, int] = {
     # X/Twitter data — cache 1 hour (followers/tweets don't change every minute)
     "/v1/partner/": 3600,
     # Prediction markets — cache 30 minutes
@@ -68,7 +68,7 @@ def _get_ttl(endpoint: str) -> int:
     return 3600
 
 
-def _cache_key(endpoint: str, body: Dict[str, Any]) -> str:
+def _cache_key(endpoint: str, body: dict[str, Any]) -> str:
     """Generate a deterministic cache key from endpoint + request body."""
     key_data = json.dumps({"endpoint": endpoint, "body": body}, sort_keys=True)
     return hashlib.sha256(key_data.encode()).hexdigest()[:16]
@@ -79,7 +79,7 @@ def _cache_path(key: str) -> Path:
     return CACHE_DIR / f"{key}.json"
 
 
-def get_cached(endpoint: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def get_cached(endpoint: str, body: dict[str, Any]) -> dict[str, Any] | None:
     """
     Check if a cached response exists and is still fresh.
 
@@ -109,7 +109,7 @@ def get_cached(endpoint: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 
-def _readable_filename(endpoint: str, body: Dict[str, Any]) -> str:
+def _readable_filename(endpoint: str, body: dict[str, Any]) -> str:
     """
     Generate a human-readable filename from endpoint + request body.
     """
@@ -141,14 +141,14 @@ def _readable_filename(endpoint: str, body: Dict[str, Any]) -> str:
 
 def save_to_cache(
     endpoint: str,
-    body: Dict[str, Any],
-    response: Dict[str, Any],
+    body: dict[str, Any],
+    response: dict[str, Any],
     cost_usd: float = 0.0,
     *,
-    model: Optional[str] = None,
-    wallet: Optional[str] = None,
-    network: Optional[str] = None,
-    client_kind: Optional[str] = None,
+    model: str | None = None,
+    wallet: str | None = None,
+    network: str | None = None,
+    client_kind: str | None = None,
 ) -> None:
     """
     Save a paid API response locally.
@@ -190,8 +190,8 @@ def save_to_cache(
 
 def _save_readable(
     endpoint: str,
-    body: Dict[str, Any],
-    response: Dict[str, Any],
+    body: dict[str, Any],
+    response: dict[str, Any],
     cost_usd: float,
 ) -> None:
     """Save a human-readable JSON file to ~/.blockrun/data/."""
@@ -214,10 +214,10 @@ def _append_cost_log(
     endpoint: str,
     cost_usd: float,
     *,
-    model: Optional[str] = None,
-    wallet: Optional[str] = None,
-    network: Optional[str] = None,
-    client_kind: Optional[str] = None,
+    model: str | None = None,
+    wallet: str | None = None,
+    network: str | None = None,
+    client_kind: str | None = None,
 ) -> None:
     """Append one JSONL row to ``~/.blockrun/cost_log.jsonl``.
 
@@ -234,7 +234,7 @@ def _append_cost_log(
     try:
         COST_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(COST_LOG_PATH, "a") as f:
-            entry: Dict[str, Any] = {
+            entry: dict[str, Any] = {
                 "ts": time.time(),
                 "endpoint": endpoint,
                 "cost_usd": cost_usd,
@@ -268,7 +268,7 @@ def clear_cache() -> int:
 # ---------------------------------------------------------------------------
 
 
-def _parse_date(value: Optional[str]) -> Optional[float]:
+def _parse_date(value: str | None) -> float | None:
     """Parse a YYYY-MM-DD or ISO 8601 date into a unix timestamp.
 
     Bare dates (YYYY-MM-DD) anchor to UTC midnight. Returns ``None`` when
@@ -292,11 +292,11 @@ def _parse_date(value: Optional[str]) -> Optional[float]:
 
 def _iter_cost_log(
     *,
-    from_ts: Optional[float] = None,
-    to_ts: Optional[float] = None,
-    wallet: Optional[str] = None,
-    network: Optional[str] = None,
-) -> Iterator[Dict[str, Any]]:
+    from_ts: float | None = None,
+    to_ts: float | None = None,
+    wallet: str | None = None,
+    network: str | None = None,
+) -> Iterator[dict[str, Any]]:
     """Yield cost-log entries that match the optional filters."""
     if not COST_LOG_PATH.exists():
         return
@@ -325,7 +325,7 @@ def _iter_cost_log(
         yield entry
 
 
-def _group_key(entry: Dict[str, Any], group_by: str) -> str:
+def _group_key(entry: dict[str, Any], group_by: str) -> str:
     """Compute the bucket key for a given grouping field."""
     if group_by == "day":
         ts = entry.get("ts")
@@ -345,12 +345,12 @@ _VALID_GROUP_BY = {"endpoint", "model", "wallet", "network", "client_kind", "day
 
 def get_cost_log_summary(
     *,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
-    wallet: Optional[str] = None,
-    network: Optional[str] = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    wallet: str | None = None,
+    network: str | None = None,
     group_by: str = "endpoint",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Read the cost log and return an aggregated summary.
 
     Args:
@@ -377,7 +377,7 @@ def get_cost_log_summary(
 
     total = 0.0
     calls = 0
-    groups: Dict[str, Dict[str, Any]] = {}
+    groups: dict[str, dict[str, Any]] = {}
 
     for entry in _iter_cost_log(from_ts=from_ts, to_ts=to_ts, wallet=wallet, network=network):
         cost = float(entry.get("cost_usd") or 0.0)
@@ -388,7 +388,7 @@ def get_cost_log_summary(
         slot["calls"] += 1
         slot["cost_usd"] += cost
 
-    result: Dict[str, Any] = {
+    result: dict[str, Any] = {
         "from_date": from_date,
         "to_date": to_date,
         "total_usd": total,
@@ -420,7 +420,7 @@ _EXPORT_COLUMNS = (
 )
 
 
-def _entry_to_record(entry: Dict[str, Any]) -> Dict[str, Any]:
+def _entry_to_record(entry: dict[str, Any]) -> dict[str, Any]:
     """Normalize one raw cost-log entry into the export record shape."""
     ts = entry.get("ts")
     ts_iso = (
@@ -441,11 +441,11 @@ def _entry_to_record(entry: Dict[str, Any]) -> Dict[str, Any]:
 
 def _filtered_records(
     *,
-    from_date: Optional[str],
-    to_date: Optional[str],
-    wallet: Optional[str],
-    network: Optional[str],
-) -> List[Dict[str, Any]]:
+    from_date: str | None,
+    to_date: str | None,
+    wallet: str | None,
+    network: str | None,
+) -> list[dict[str, Any]]:
     from_ts = _parse_date(from_date)
     to_ts = _parse_date(to_date)
     return [
@@ -455,12 +455,12 @@ def _filtered_records(
 
 
 def export_cost_log_csv(
-    output_path: Optional[Union[str, Path]] = None,
+    output_path: str | Path | None = None,
     *,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
-    wallet: Optional[str] = None,
-    network: Optional[str] = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    wallet: str | None = None,
+    network: str | None = None,
 ) -> str:
     """Render filtered cost-log entries as CSV.
 
@@ -487,12 +487,12 @@ def export_cost_log_csv(
 
 
 def export_cost_log_json(
-    output_path: Optional[Union[str, Path]] = None,
+    output_path: str | Path | None = None,
     *,
-    from_date: Optional[str] = None,
-    to_date: Optional[str] = None,
-    wallet: Optional[str] = None,
-    network: Optional[str] = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    wallet: str | None = None,
+    network: str | None = None,
 ) -> str:
     """Render filtered cost-log entries as a JSON array of records.
 

@@ -14,10 +14,11 @@ Usage:
     print(f"Saved {result['routing']['savings'] * 100:.0f}%")
 """
 
-import re
-import math
-from typing import Dict, List, Optional, Literal, TypedDict
+from __future__ import annotations
 
+import math
+import re
+from typing import Literal, TypedDict
 
 # Type definitions
 Tier = Literal["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
@@ -33,19 +34,19 @@ class RoutingDecision(TypedDict):
     cost_estimate: float
     baseline_cost: float
     savings: float  # 0-1 percentage
-    fallbacks: List[str]  # remaining models in tier order, for runtime fallback
+    fallbacks: list[str]  # remaining models in tier order, for runtime fallback
 
 
 class TierConfig(TypedDict):
     primary: str
-    fallback: List[str]
+    fallback: list[str]
 
 
 class ScoringResult(TypedDict):
     score: float
-    tier: Optional[Tier]
+    tier: Tier | None
     confidence: float
-    signals: List[str]
+    signals: list[str]
     agentic_score: float
 
 
@@ -224,7 +225,7 @@ DIMENSION_WEIGHTS = {
 
 # ─── Tier Configs by Profile ───
 
-AUTO_TIERS: Dict[Tier, TierConfig] = {
+AUTO_TIERS: dict[Tier, TierConfig] = {
     "SIMPLE": {
         # moonshot/kimi-k2.7 is Moonshot's current flagship (256K context,
         # image+video input, reasoning_content). It is the only k2 visible in
@@ -269,7 +270,7 @@ AUTO_TIERS: Dict[Tier, TierConfig] = {
     },
 }
 
-ECO_TIERS: Dict[Tier, TierConfig] = {
+ECO_TIERS: dict[Tier, TierConfig] = {
     "SIMPLE": {
         # See AUTO_TIERS note: kimi-k2.7 is the catalog flagship. k2.6 and k2.5
         # are hidden so the SDK no longer sees their pricing; primary must stay
@@ -303,7 +304,7 @@ ECO_TIERS: Dict[Tier, TierConfig] = {
     },
 }
 
-PREMIUM_TIERS: Dict[Tier, TierConfig] = {
+PREMIUM_TIERS: dict[Tier, TierConfig] = {
     "SIMPLE": {
         "primary": "google/gemini-2.5-flash",
         "fallback": ["openai/gpt-5.4-nano", "anthropic/claude-haiku-4.5"],
@@ -331,7 +332,7 @@ PREMIUM_TIERS: Dict[Tier, TierConfig] = {
     },
 }
 
-FREE_TIERS: Dict[Tier, TierConfig] = {
+FREE_TIERS: dict[Tier, TierConfig] = {
     # NVIDIA free tier refresh 2026-04-28: retired nvidia/gpt-oss-120b and
     # nvidia/gpt-oss-20b (NVIDIA's free build.nvidia.com tier reserves the
     # right to use prompts/outputs for service improvement, conflicting with
@@ -375,7 +376,7 @@ FREE_TIERS: Dict[Tier, TierConfig] = {
 
 def _score_keyword_match(
     text: str,
-    keywords: List[str],
+    keywords: list[str],
     thresholds: tuple = (1, 2),
     scores: tuple = (0, 0.5, 1.0),
 ) -> tuple:
@@ -395,7 +396,7 @@ def _calibrate_confidence(distance: float, steepness: float = 12) -> float:
 
 def classify_by_rules(
     prompt: str,
-    system_prompt: Optional[str],
+    system_prompt: str | None,
     estimated_tokens: int,
 ) -> ScoringResult:
     """
@@ -404,10 +405,10 @@ def classify_by_rules(
     """
     text = f"{system_prompt or ''} {prompt}".lower()
     user_text = prompt.lower()
-    signals: List[str] = []
+    signals: list[str] = []
 
     # Dimension scores
-    scores: Dict[str, float] = {}
+    scores: dict[str, float] = {}
 
     # 1. Token count
     if estimated_tokens < 50:
@@ -540,9 +541,9 @@ def classify_by_rules(
 
 def route(
     prompt: str,
-    system_prompt: Optional[str],
+    system_prompt: str | None,
     max_output_tokens: int,
-    model_pricing: Dict[str, Dict[str, float]],
+    model_pricing: dict[str, dict[str, float]],
     routing_profile: RoutingProfile = "auto",
 ) -> RoutingDecision:
     """

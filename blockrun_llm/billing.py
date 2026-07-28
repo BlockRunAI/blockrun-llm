@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import List, Optional
 
 from .cache import (
     COST_LOG_PATH,
@@ -174,7 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

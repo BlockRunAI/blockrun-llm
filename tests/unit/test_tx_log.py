@@ -16,7 +16,6 @@ import base64
 import json
 from pathlib import Path
 
-
 from blockrun_llm.tx_log import (
     DEFAULT_LOG_DIR,
     TransactionLogger,
@@ -24,7 +23,6 @@ from blockrun_llm.tx_log import (
     decode_settlement_header,
     format_row,
 )
-
 
 # ---------------------------------------------------------------------------
 # Logger writes

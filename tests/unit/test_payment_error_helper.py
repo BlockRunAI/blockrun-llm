@@ -8,8 +8,7 @@ balance."`` message, leaving customers no way to diagnose.
 
 from __future__ import annotations
 
-from typing import Any, Dict
-
+from typing import Any
 
 from blockrun_llm.types import PaymentError
 from blockrun_llm.validation import build_payment_rejected_error
@@ -55,7 +54,7 @@ class TestBuildPaymentRejectedError:
     def test_preserves_gateway_details(self) -> None:
         """The whole reason this helper exists: ``details`` must survive
         from the gateway's body to ``exc.response`` and into ``str(exc)``."""
-        gateway_body: Dict[str, Any] = {
+        gateway_body: dict[str, Any] = {
             "error": "Payment settlement failed",
             "details": "transaction_simulation_failed",
         }
