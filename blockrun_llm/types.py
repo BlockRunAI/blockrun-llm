@@ -1,8 +1,6 @@
 """Type definitions for BlockRun LLM SDK."""
 
-from __future__ import annotations
-
-from typing import Any, Literal, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
 
@@ -12,9 +10,9 @@ class FunctionDefinition(BaseModel):
     """Function definition for tool calling."""
 
     name: str
-    description: str | None = None
-    parameters: dict[str, Any] | None = None
-    strict: bool | None = None
+    description: Optional[str] = None
+    parameters: Optional[Dict[str, Any]] = None
+    strict: Optional[bool] = None
 
 
 class Tool(BaseModel):
@@ -40,7 +38,7 @@ class ToolCall(BaseModel):
 
 
 # Tool choice can be a string or object specifying which tool to use
-ToolChoiceFunction = dict[str, Any]  # {"type": "function", "function": {"name": "..."}}
+ToolChoiceFunction = Dict[str, Any]  # {"type": "function", "function": {"name": "..."}}
 ToolChoice = Union[Literal["none", "auto", "required"], ToolChoiceFunction]
 
 
@@ -53,16 +51,16 @@ class ChatMessage(BaseModel):
     """
 
     role: Literal["system", "user", "assistant", "tool"]
-    content: str | None = None
-    name: str | None = None  # For tool messages
-    tool_call_id: str | None = None  # For tool result messages
-    tool_calls: list[ToolCall] | None = None  # For assistant messages with tool calls
+    content: Optional[str] = None
+    name: Optional[str] = None  # For tool messages
+    tool_call_id: Optional[str] = None  # For tool result messages
+    tool_calls: Optional[List[ToolCall]] = None  # For assistant messages with tool calls
     # Extended fields returned by reasoning-capable upstream providers
     # (DeepSeek Reasoner, Grok 4 reasoning, xAI multi-agent, etc.).
     # Backend strips these from inbound requests but may forward them on the
     # response side, so we accept them as optional.
-    reasoning_content: str | None = None
-    thinking: str | None = None
+    reasoning_content: Optional[str] = None
+    thinking: Optional[str] = None
 
     class Config:
         extra = "allow"
@@ -73,7 +71,7 @@ class ChatChoice(BaseModel):
 
     index: int
     message: ChatMessage
-    finish_reason: str | None = None  # OpenAI-compatible; upstreams may add new values
+    finish_reason: Optional[str] = None  # OpenAI-compatible; upstreams may add new values
 
     class Config:
         extra = "allow"
@@ -85,11 +83,11 @@ class ChatUsage(BaseModel):
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
-    num_sources_used: int | None = None  # xAI Live Search sources used
+    num_sources_used: Optional[int] = None  # xAI Live Search sources used
     # Anthropic prompt caching — populated on anthropic/* models when cache
     # headers are sent. Reads are cheaper; writes incur a one-time surcharge.
-    cache_read_input_tokens: int | None = None
-    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: Optional[int] = None
+    cache_creation_input_tokens: Optional[int] = None
 
     class Config:
         extra = "allow"
@@ -107,9 +105,9 @@ class ChatResponse(BaseModel):
     object: str = "chat.completion"
     created: int
     model: str
-    choices: list[ChatChoice]
-    usage: ChatUsage | None = None
-    citations: list[str] | None = None  # xAI Live Search citation URLs
+    choices: List[ChatChoice]
+    usage: Optional[ChatUsage] = None
+    citations: Optional[List[str]] = None  # xAI Live Search citation URLs
 
     # Real x402 charge for THIS call, in USD — the exact amount debited from the
     # wallet (0.0 for free / cached calls). This is the authoritative number to
@@ -118,8 +116,8 @@ class ChatResponse(BaseModel):
     # the client on every chat completion. ``settlement`` carries the decoded
     # on-chain receipt (tx hash / micro-USDC / network) when the facilitator
     # returned an X-PAYMENT-RESPONSE header.
-    cost_usd: float | None = None
-    settlement: dict[str, Any] | None = None
+    cost_usd: Optional[float] = None
+    settlement: Optional[Dict[str, Any]] = None
 
     class Config:
         extra = "allow"
@@ -139,8 +137,8 @@ class ChatChunkFunctionCall(BaseModel):
     frame and ``arguments`` in fragments afterwards, so both are optional here —
     unlike the non-stream :class:`FunctionCall` where both are required."""
 
-    name: str | None = None
-    arguments: str | None = None
+    name: Optional[str] = None
+    arguments: Optional[str] = None
 
     class Config:
         extra = "allow"
@@ -160,13 +158,13 @@ class ChatChunkToolCall(BaseModel):
     lenient type keeps streamed tool calls parsing into real objects.
     """
 
-    index: int | None = None
-    id: str | None = None
+    index: Optional[int] = None
+    id: Optional[str] = None
     # Kept as a free-form ``str`` (not ``Literal["function"]``) so an upstream
     # that streams a non-"function" tool type can't fail validation and re-trigger
     # the very ``model_construct`` fallback this lenient type exists to avoid.
-    type: str | None = None
-    function: ChatChunkFunctionCall | None = None
+    type: Optional[str] = None
+    function: Optional[ChatChunkFunctionCall] = None
 
     class Config:
         extra = "allow"
@@ -181,11 +179,11 @@ class ChatChunkDelta(BaseModel):
     reasoning-capable upstreams.
     """
 
-    role: Literal["system", "user", "assistant", "tool"] | None = None
-    content: str | None = None
-    tool_calls: list[ChatChunkToolCall] | None = None
-    reasoning_content: str | None = None
-    thinking: str | None = None
+    role: Optional[Literal["system", "user", "assistant", "tool"]] = None
+    content: Optional[str] = None
+    tool_calls: Optional[List[ChatChunkToolCall]] = None
+    reasoning_content: Optional[str] = None
+    thinking: Optional[str] = None
 
     class Config:
         extra = "allow"
@@ -196,7 +194,7 @@ class ChatChunkChoice(BaseModel):
 
     index: int
     delta: ChatChunkDelta
-    finish_reason: str | None = None  # OpenAI-compatible; upstreams may add new values
+    finish_reason: Optional[str] = None  # OpenAI-compatible; upstreams may add new values
 
     class Config:
         extra = "allow"
@@ -209,17 +207,17 @@ class ChatCompletionChunk(BaseModel):
     object: str = "chat.completion.chunk"
     created: int
     model: str
-    choices: list[ChatChunkChoice]
+    choices: List[ChatChunkChoice]
     # Usage is populated only on the final chunk for providers that support it
     # (some upstreams omit it entirely — callers must tolerate ``None``).
-    usage: ChatUsage | None = None
-    citations: list[str] | None = None  # xAI Live Search citation URLs (final chunk only)
+    usage: Optional[ChatUsage] = None
+    citations: Optional[List[str]] = None  # xAI Live Search citation URLs (final chunk only)
 
     class Config:
         extra = "allow"
 
 
-def stream_choice_content(choice: Any) -> str | None:
+def stream_choice_content(choice: Any) -> Optional[str]:
     """Text delta from a streaming choice, tolerant of a raw ``dict`` choice.
 
     A chunk that fails strict validation falls back to ``model_construct``,
@@ -235,14 +233,14 @@ def stream_choice_content(choice: Any) -> str | None:
     return getattr(delta, "content", None) if delta is not None else None
 
 
-def stream_choice_finish_reason(choice: Any) -> str | None:
+def stream_choice_finish_reason(choice: Any) -> Optional[str]:
     """``finish_reason`` from a streaming choice, tolerant of a raw dict choice."""
     if isinstance(choice, dict):
         return choice.get("finish_reason")
     return getattr(choice, "finish_reason", None)
 
 
-def chunk_meta(chunk: Any) -> tuple[str | None, str | None, int | None]:
+def chunk_meta(chunk: Any) -> "tuple[Optional[str], Optional[str], Optional[int]]":
     """``(id, model, created)`` of a chunk, tolerant of a ``model_construct``'d
     chunk that omits required fields.
 
@@ -259,7 +257,7 @@ def chunk_meta(chunk: Any) -> tuple[str | None, str | None, int | None]:
     )
 
 
-def chunk_usage_dict(chunk: Any) -> dict[str, Any] | None:
+def chunk_usage_dict(chunk: Any) -> Optional[Dict[str, Any]]:
     """``usage`` of a chunk as a dict, tolerant of a model_construct'd chunk
     whose ``usage`` is a raw dict (no ``.model_dump``)."""
     usage = getattr(chunk, "usage", None)
@@ -284,10 +282,10 @@ class Model(BaseModel):
     available: bool = True
     # Extended metadata surfaced by /v1/models. `billing_mode` is one of
     # "paid" (per-token), "flat" (flat_price per request) or "free".
-    billing_mode: Literal["paid", "flat", "free"] | None = None
-    flat_price: float | None = None
-    categories: list[str] | None = None  # e.g. ["chat","reasoning","coding","vision"]
-    hidden: bool | None = None  # True for deprecated/superseded models still routable
+    billing_mode: Optional[Literal["paid", "flat", "free"]] = None
+    flat_price: Optional[float] = None
+    categories: Optional[List[str]] = None  # e.g. ["chat","reasoning","coding","vision"]
+    hidden: Optional[bool] = None  # True for deprecated/superseded models still routable
 
 
 class PaymentRequirement(BaseModel):
@@ -305,7 +303,7 @@ class PaymentRequired(BaseModel):
     """x402 payment required response."""
 
     x402_version: int = 1
-    accepts: list[PaymentRequirement]
+    accepts: List[PaymentRequirement]
 
 
 class BlockrunError(Exception):
@@ -325,8 +323,8 @@ class PaymentError(BlockrunError):
         self,
         message: str,
         *,
-        status_code: int | None = None,
-        response: dict | None = None,
+        status_code: Optional[int] = None,
+        response: Optional[dict] = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
@@ -363,7 +361,7 @@ class SpendLimitError(PaymentError):
 class APIError(BlockrunError):
     """API-related error."""
 
-    def __init__(self, message: str, status_code: int, response: dict | None = None):
+    def __init__(self, message: str, status_code: int, response: Optional[dict] = None):
         super().__init__(message)
         self.status_code = status_code
         self.response = response
@@ -378,16 +376,16 @@ class ImageData(BaseModel):
     # permanent blockrun-hosted URL and `source_url` is the original upstream.
     # `backed_up` is True iff the mirror step succeeded. For data-URI results
     # (e.g. openai/gpt-image-1) both fields are omitted.
-    source_url: str | None = None
-    backed_up: bool | None = None
-    revised_prompt: str | None = None
+    source_url: Optional[str] = None
+    backed_up: Optional[bool] = None
+    revised_prompt: Optional[str] = None
 
 
 class ImageResponse(BaseModel):
     """Response from image generation."""
 
     created: int
-    data: list[ImageData]
+    data: List[ImageData]
 
 
 class ImageModel(BaseModel):
@@ -408,8 +406,8 @@ class AudioTrack(BaseModel):
     """A single generated audio track."""
 
     url: str
-    duration_seconds: float | None = None
-    lyrics: str | None = None
+    duration_seconds: Optional[float] = None
+    lyrics: Optional[str] = None
 
 
 class MusicResponse(BaseModel):
@@ -417,8 +415,8 @@ class MusicResponse(BaseModel):
 
     created: int
     model: str
-    data: list[AudioTrack]
-    txHash: str | None = None
+    data: List[AudioTrack]
+    txHash: Optional[str] = None
 
 
 class AudioModel(BaseModel):
@@ -439,9 +437,9 @@ class SpeechAudio(BaseModel):
     """A single synthesized audio clip."""
 
     url: str
-    format: str | None = None
-    characters: int | None = None
-    credits: float | None = None
+    format: Optional[str] = None
+    characters: Optional[int] = None
+    credits: Optional[float] = None
 
 
 class SpeechResponse(BaseModel):
@@ -449,8 +447,8 @@ class SpeechResponse(BaseModel):
 
     created: int
     model: str
-    data: list[SpeechAudio]
-    txHash: str | None = None
+    data: List[SpeechAudio]
+    txHash: Optional[str] = None
 
 
 # Multi-chain RPC types
@@ -459,9 +457,9 @@ class SpeechResponse(BaseModel):
 class RpcError(BaseModel):
     """A JSON-RPC 2.0 error object."""
 
-    code: int | None = None
-    message: str | None = None
-    data: Any | None = None
+    code: Optional[int] = None
+    message: Optional[str] = None
+    data: Optional[Any] = None
 
 
 class RpcResponse(BaseModel):
@@ -471,14 +469,14 @@ class RpcResponse(BaseModel):
     from response headers (X-Network / X-Cache / X-Payment-Receipt).
     """
 
-    jsonrpc: str | None = None
-    id: str | int | None = None
-    result: Any | None = None
-    error: RpcError | None = None
+    jsonrpc: Optional[str] = None
+    id: Optional[Union[str, int]] = None
+    result: Optional[Any] = None
+    error: Optional[RpcError] = None
     # Gateway metadata (response headers)
-    network: str | None = None  # canonical network key, e.g. "ethereum"
+    network: Optional[str] = None  # canonical network key, e.g. "ethereum"
     cache_hit: bool = False  # served from the gateway's method-aware cache
-    tx_hash: str | None = None  # x402 settlement tx (single calls)
+    tx_hash: Optional[str] = None  # x402 settlement tx (single calls)
 
 
 # Video generation types
@@ -488,10 +486,10 @@ class VideoClip(BaseModel):
     """A single generated video clip."""
 
     url: str  # Permanent blockrun-hosted URL (falls back to upstream if backup fails)
-    source_url: str | None = None  # Original upstream URL (e.g. vidgen.x.ai)
-    duration_seconds: int | None = None
-    request_id: str | None = None  # Upstream provider's request id (xAI)
-    backed_up: bool | None = None
+    source_url: Optional[str] = None  # Original upstream URL (e.g. vidgen.x.ai)
+    duration_seconds: Optional[int] = None
+    request_id: Optional[str] = None  # Upstream provider's request id (xAI)
+    backed_up: Optional[bool] = None
 
 
 class VideoResponse(BaseModel):
@@ -499,8 +497,8 @@ class VideoResponse(BaseModel):
 
     created: int
     model: str
-    data: list[VideoClip]
-    txHash: str | None = None
+    data: List[VideoClip]
+    txHash: Optional[str] = None
 
 
 class VideoModel(BaseModel):
@@ -524,9 +522,11 @@ class WebSearchSource(BaseModel):
     """Web search source configuration."""
 
     type: Literal["web"] = "web"
-    country: str | None = None  # ISO alpha-2 country code
-    excluded_websites: list[str] | None = None  # Max 5 websites
-    allowed_websites: list[str] | None = None  # Max 5 websites (mutually exclusive with excluded)
+    country: Optional[str] = None  # ISO alpha-2 country code
+    excluded_websites: Optional[List[str]] = None  # Max 5 websites
+    allowed_websites: Optional[List[str]] = (
+        None  # Max 5 websites (mutually exclusive with excluded)
+    )
     safe_search: bool = True
 
 
@@ -534,19 +534,19 @@ class XSearchSource(BaseModel):
     """X/Twitter search source configuration."""
 
     type: Literal["x"] = "x"
-    included_x_handles: list[str] | None = None  # Max 10 handles
-    excluded_x_handles: list[str] | None = None  # Max 10 handles
-    post_favorite_count: int | None = None  # Minimum favorites threshold
-    post_view_count: int | None = None  # Minimum views threshold
+    included_x_handles: Optional[List[str]] = None  # Max 10 handles
+    excluded_x_handles: Optional[List[str]] = None  # Max 10 handles
+    post_favorite_count: Optional[int] = None  # Minimum favorites threshold
+    post_view_count: Optional[int] = None  # Minimum views threshold
 
 
 class NewsSearchSource(BaseModel):
     """News search source configuration."""
 
     type: Literal["news"] = "news"
-    country: str | None = None  # ISO alpha-2 country code
-    excluded_websites: list[str] | None = None  # Max 5 websites
-    allowed_websites: list[str] | None = None  # Max 5 websites
+    country: Optional[str] = None  # ISO alpha-2 country code
+    excluded_websites: Optional[List[str]] = None  # Max 5 websites
+    allowed_websites: Optional[List[str]] = None  # Max 5 websites
     safe_search: bool = True
 
 
@@ -554,11 +554,11 @@ class RssSearchSource(BaseModel):
     """RSS feed search source configuration."""
 
     type: Literal["rss"] = "rss"
-    links: list[str]  # RSS feed URLs (currently supports one)
+    links: List[str]  # RSS feed URLs (currently supports one)
 
 
 SearchSource = Union[
-    WebSearchSource, XSearchSource, NewsSearchSource, RssSearchSource, dict[str, Any]
+    WebSearchSource, XSearchSource, NewsSearchSource, RssSearchSource, Dict[str, Any]
 ]
 
 
@@ -578,17 +578,17 @@ class SearchParameters(BaseModel):
     """
 
     mode: Literal["off", "auto", "on"] = "auto"
-    sources: list[SearchSource] | None = None  # Default: web, news, x
+    sources: Optional[List[SearchSource]] = None  # Default: web, news, x
     return_citations: bool = True
-    from_date: str | None = None  # YYYY-MM-DD format
-    to_date: str | None = None  # YYYY-MM-DD format
+    from_date: Optional[str] = None  # YYYY-MM-DD format
+    to_date: Optional[str] = None  # YYYY-MM-DD format
     max_search_results: int = 10  # Max sources (default 10, ~$0.26 with margin)
 
 
 class SearchUsage(BaseModel):
     """Search usage information from xAI Live Search."""
 
-    num_sources_used: int | None = None
+    num_sources_used: Optional[int] = None
 
 
 class CostEstimate(BaseModel):
@@ -666,7 +666,7 @@ class RoutingDecision(BaseModel):
     cost_estimate: float
     baseline_cost: float
     savings: float  # 0-1 percentage
-    fallbacks: list[str] = []  # remaining models in tier order, for runtime fallback
+    fallbacks: List[str] = []  # remaining models in tier order, for runtime fallback
 
 
 class SmartChatResponse(BaseModel):
@@ -691,9 +691,9 @@ class SearchResult(BaseModel):
 
     query: str
     summary: str
-    citations: list[dict[str, str]] | None = None
-    sources_used: int | None = None
-    model: str | None = None
+    citations: Optional[List[Dict[str, str]]] = None
+    sources_used: Optional[int] = None
+    model: Optional[str] = None
 
 
 # Pyth-backed market data types (crypto, stocks, fx, commodity)
@@ -702,9 +702,9 @@ class PricePoint(BaseModel):
 
     symbol: str
     price: float
-    publish_time: int | None = None  # Unix seconds
-    confidence: float | None = None
-    feed_id: str | None = None
+    publish_time: Optional[int] = None  # Unix seconds
+    confidence: Optional[float] = None
+    feed_id: Optional[str] = None
 
     class Config:
         extra = "allow"
@@ -713,12 +713,12 @@ class PricePoint(BaseModel):
 class PriceBar(BaseModel):
     """OHLC bar in a historical price series."""
 
-    t: int | None = None  # Bar open time (unix seconds)
-    o: float | None = None
-    h: float | None = None
-    l: float | None = None
-    c: float | None = None
-    v: float | None = None
+    t: Optional[int] = None  # Bar open time (unix seconds)
+    o: Optional[float] = None
+    h: Optional[float] = None
+    l: Optional[float] = None
+    c: Optional[float] = None
+    v: Optional[float] = None
 
     class Config:
         extra = "allow"
@@ -728,8 +728,8 @@ class PriceHistoryResponse(BaseModel):
     """Response from a historical price endpoint."""
 
     symbol: str
-    resolution: str | None = None
-    bars: list[PriceBar] = []
+    resolution: Optional[str] = None
+    bars: List[PriceBar] = []
 
     class Config:
         extra = "allow"
@@ -738,8 +738,8 @@ class PriceHistoryResponse(BaseModel):
 class SymbolListResponse(BaseModel):
     """Response from a market symbol list endpoint."""
 
-    symbols: list[dict[str, Any]] = []
-    count: int | None = None
+    symbols: List[Dict[str, Any]] = []
+    count: Optional[int] = None
 
     class Config:
         extra = "allow"
@@ -751,8 +751,8 @@ class SymbolListResponse(BaseModel):
 class PortraitUsage(BaseModel):
     """How the enrolled portrait can be used."""
 
-    compatible_models: list[str] = []
-    how_to_use: str | None = None
+    compatible_models: List[str] = []
+    how_to_use: Optional[str] = None
 
     class Config:
         extra = "allow"
@@ -762,8 +762,8 @@ class PortraitSettlement(BaseModel):
     """On-chain settlement of the enrollment payment."""
 
     success: bool
-    tx_hash: str | None = None
-    network: str | None = None
+    tx_hash: Optional[str] = None
+    network: Optional[str] = None
 
     class Config:
         extra = "allow"
@@ -774,13 +774,13 @@ class PortraitEnrollment(BaseModel):
 
     object: str = "virtual_portrait"
     asset_id: str  # ta_xxxxxxxx — pass as real_face_asset_id on Seedance
-    group_id: str | None = None
+    group_id: Optional[str] = None
     name: str
     image_url: str
-    created_at: str | None = None
-    usage: PortraitUsage | None = None
-    price: dict[str, Any] | None = None  # {amount, currency}
-    settlement: PortraitSettlement | None = None
+    created_at: Optional[str] = None
+    usage: Optional[PortraitUsage] = None
+    price: Optional[Dict[str, Any]] = None  # {amount, currency}
+    settlement: Optional[PortraitSettlement] = None
 
     class Config:
         extra = "allow"
@@ -791,11 +791,11 @@ class PortraitListItem(BaseModel):
 
     # Upstream uses camelCase here, keep matching for transparent ingestion.
     assetId: str
-    groupId: str | None = None
-    name: str | None = None
-    imageUrl: str | None = None
-    createdAt: str | None = None
-    enrollmentTxHash: str | None = None
+    groupId: Optional[str] = None
+    name: Optional[str] = None
+    imageUrl: Optional[str] = None
+    createdAt: Optional[str] = None
+    enrollmentTxHash: Optional[str] = None
 
     class Config:
         extra = "allow"
@@ -805,8 +805,8 @@ class PortraitList(BaseModel):
     """Response from GET /v1/wallet/<address>/portraits."""
 
     wallet: str
-    portraits: list[PortraitListItem] = []
-    count: int | None = None
+    portraits: List[PortraitListItem] = []
+    count: Optional[int] = None
 
     class Config:
         extra = "allow"
@@ -828,10 +828,10 @@ class RealFaceInit(BaseModel):
     object: str = "realface.init"
     group_id: str  # legacy_rf_xxxx — pass to status()/enroll()
     h5_link: str  # URL the real person scans on their phone for liveness
-    status: str | None = None  # pending_validation | active
-    expires_in_seconds: int | None = None  # H5 session validity (~120s)
-    next_steps: dict[str, Any] | None = None
-    refreshed: bool | None = None  # True when re-issued for an existing group
+    status: Optional[str] = None  # pending_validation | active
+    expires_in_seconds: Optional[int] = None  # H5 session validity (~120s)
+    next_steps: Optional[Dict[str, Any]] = None
+    refreshed: Optional[bool] = None  # True when re-issued for an existing group
 
     class Config:
         extra = "allow"
@@ -843,7 +843,7 @@ class RealFaceStatus(BaseModel):
     object: str = "realface.status"
     group_id: str
     status: str  # pending_validation | active | …
-    asset_count: int | None = None
+    asset_count: Optional[int] = None
     ready_to_finalize: bool = False  # True once status == "active"
 
     class Config:
@@ -855,14 +855,14 @@ class RealFaceEnrollment(BaseModel):
 
     object: str = "realface"
     asset_id: str  # ta_xxxxxxxx — pass as real_face_asset_id on Seedance
-    group_id: str | None = None
-    byteplus_asset_id: str | None = None
+    group_id: Optional[str] = None
+    byteplus_asset_id: Optional[str] = None
     name: str
     image_url: str
-    created_at: str | None = None
-    usage: PortraitUsage | None = None
-    price: dict[str, Any] | None = None  # {amount, currency}
-    settlement: PortraitSettlement | None = None
+    created_at: Optional[str] = None
+    usage: Optional[PortraitUsage] = None
+    price: Optional[Dict[str, Any]] = None  # {amount, currency}
+    settlement: Optional[PortraitSettlement] = None
 
     class Config:
         extra = "allow"
@@ -873,12 +873,12 @@ class RealFaceListItem(BaseModel):
 
     # Upstream uses camelCase here, keep matching for transparent ingestion.
     assetId: str
-    groupId: str | None = None
-    name: str | None = None
-    imageUrl: str | None = None
-    createdAt: str | None = None
-    enrollmentTxHash: str | None = None
-    byteplusAssetId: str | None = None
+    groupId: Optional[str] = None
+    name: Optional[str] = None
+    imageUrl: Optional[str] = None
+    createdAt: Optional[str] = None
+    enrollmentTxHash: Optional[str] = None
+    byteplusAssetId: Optional[str] = None
 
     class Config:
         extra = "allow"
@@ -888,8 +888,8 @@ class RealFaceList(BaseModel):
     """Response from GET /v1/wallet/<address>/realfaces."""
 
     wallet: str
-    realfaces: list[RealFaceListItem] = []
-    count: int | None = None
+    realfaces: List[RealFaceListItem] = []
+    count: Optional[int] = None
 
     class Config:
         extra = "allow"

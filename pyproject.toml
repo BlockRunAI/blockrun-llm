@@ -96,3 +96,14 @@ ignore = ["BLE001", "S110", "S112", "TRY004", "DTZ005", "DTZ006", "RUF012"]
 [tool.mypy]
 python_version = "3.9"
 strict = true
+
+[tool.ruff.lint.per-file-ignores]
+# pydantic EVALUATES annotations at runtime to build each model. Under
+# `from __future__ import annotations` they are strings, and on Python 3.9
+# evaluating "str | None" is a TypeError — PEP 604 does not exist there.
+#
+# Parsing is not the constraint; evaluation is. compileall passes on 3.9 and
+# the import still fails, which is exactly how this got shipped to CI once.
+#
+# So this file keeps typing.Optional/List and no future import.
+"blockrun_llm/types.py" = ["FA100", "UP006", "UP007", "UP035", "UP045"]
