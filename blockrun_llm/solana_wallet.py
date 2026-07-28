@@ -156,19 +156,11 @@ def get_solana_public_key(private_key: str) -> str:
     _require_solders()
     from solders.keypair import Keypair  # type: ignore
 
-    try:
-        secret = solana_key_to_bytes(private_key)
-        kp = Keypair.from_seed(secret[:32])
-        return str(kp.pubkey())
-    except ValueError:
-        # 32-byte seed
-        import base58 as b58
-
-        decoded = b58.b58decode(private_key)
-        if len(decoded) == 32:
-            kp = Keypair.from_seed(decoded)
-            return str(kp.pubkey())
-        raise
+    # solana_key_to_bytes handles every accepted encoding, including 32-byte
+    # seeds, so a failure here is final — no fallback decode.
+    secret = solana_key_to_bytes(private_key)
+    kp = Keypair.from_seed(secret[:32])
+    return str(kp.pubkey())
 
 
 def save_solana_wallet(private_key: str) -> Path:
