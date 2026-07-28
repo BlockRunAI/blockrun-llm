@@ -37,39 +37,42 @@ Usage:
     print(result.choices[0].message.content)
 """
 
+from __future__ import annotations
+
+import json as _json
 import os
 import re
 import sys
-import json as _json
-from typing import AsyncIterator, Iterator, List, Dict, Any, Optional, Tuple, Union
-import httpx
-from eth_account import Account
-from dotenv import load_dotenv
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
-from .types import (
-    ChatResponse,
-    ChatCompletionChunk,
-    ImageResponse,
-    APIError,
-    PaymentError,
-    RoutingDecision,
-    SmartChatResponse,
-    RoutingProfile,
-    SearchResult,
-    stream_choice_content,
-    stream_choice_finish_reason,
-    chunk_meta,
-    chunk_usage_dict,
-)
+import httpx
+from dotenv import load_dotenv
+from eth_account import Account
+
 from .router import route as route_request
 from .tx_log import (
     TransactionLogger,
+    _resolve_log_dir,
     decode_settlement_header,
     paid_request_error_prefix,
     read_settlement_header,
-    _resolve_log_dir,
 )
-from .x402 import create_payment_payload, parse_payment_required, extract_payment_details
+from .types import (
+    APIError,
+    ChatCompletionChunk,
+    ChatResponse,
+    ImageResponse,
+    PaymentError,
+    RoutingDecision,
+    RoutingProfile,
+    SearchResult,
+    SmartChatResponse,
+    chunk_meta,
+    chunk_usage_dict,
+    stream_choice_content,
+    stream_choice_finish_reason,
+)
 from .validation import (
     check_spend_limits,
     resolve_spend_limit,
@@ -83,6 +86,7 @@ from .validation import (
     validate_temperature,
     validate_top_p,
 )
+from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
 
 # Load environment variables
 load_dotenv()
@@ -106,7 +110,7 @@ def _get_user_agent() -> str:
 # =============================================================================
 
 
-def list_models(api_url: str = "https://blockrun.ai/api") -> List[Dict[str, Any]]:
+def list_models(api_url: str = "https://blockrun.ai/api") -> list[dict[str, Any]]:
     """
     List available LLM models with pricing (no wallet required).
 
@@ -138,7 +142,7 @@ def list_models(api_url: str = "https://blockrun.ai/api") -> List[Dict[str, Any]
         return data.get("models", [])
 
 
-def list_image_models(api_url: str = "https://blockrun.ai/api") -> List[Dict[str, Any]]:
+def list_image_models(api_url: str = "https://blockrun.ai/api") -> list[dict[str, Any]]:
     """
     List available image generation models without requiring a wallet.
 
@@ -208,9 +212,7 @@ def _should_fallback(exc: Exception) -> bool:
         return True
     if isinstance(exc, httpx.NetworkError):
         return True
-    if isinstance(exc, APIError) and exc.status_code in (502, 503, 504, 522, 524):
-        return True
-    return False
+    return bool(isinstance(exc, APIError) and exc.status_code in (502, 503, 504, 522, 524))
 
 
 # The gateway states the output-token ceiling it actually quoted in the 402's
@@ -233,7 +235,7 @@ _QUOTED_MAX_TOKENS_RE = re.compile(
 _DESCRIPTION_SCAN_LIMIT = 512
 
 
-def _warn_if_clamped(body: Dict[str, Any], resource_description: Optional[str]) -> None:
+def _warn_if_clamped(body: dict[str, Any], resource_description: str | None) -> None:
     """Warn when the gateway quoted fewer output tokens than the caller asked for.
 
     An over-ceiling ``max_tokens`` is not rejected. The gateway silently clamps
@@ -279,7 +281,7 @@ def _warn_if_clamped(body: Dict[str, Any], resource_description: Optional[str]) 
         return
 
 
-def _enforce_spend_limits(client: Any, cost_usd: float, model: Optional[str] = None) -> None:
+def _enforce_spend_limits(client: Any, cost_usd: float, model: str | None = None) -> None:
     """Refuse a quote that breaches a limit the caller configured, before the
     paid request is sent.
 
@@ -352,13 +354,13 @@ class LLMClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = DEFAULT_CHAT_TIMEOUT,
         search_timeout: float = 300.0,
-        transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
-        max_cost_per_call: Optional[float] = None,
-        max_session_cost: Optional[float] = None,
+        transaction_log: bool | str | os.PathLike[str] | None = None,
+        max_cost_per_call: float | None = None,
+        max_session_cost: float | None = None,
     ):
         """
         Initialize the BlockRun LLM client.
@@ -442,19 +444,19 @@ class LLMClient:
         self._last_call_cost: float = 0.0
 
         # Model pricing cache for smart routing
-        self._model_pricing_cache: Optional[Dict[str, Dict[str, float]]] = None
+        self._model_pricing_cache: dict[str, dict[str, float]] | None = None
 
         # Opt-in transaction log + last on-chain settlement payload. The
         # settlement is populated from PAYMENT-RESPONSE on every paid retry
         # and cleared right before save_to_cache fires so it can't bleed
         # across calls when logging is disabled.
         log_dir = _resolve_log_dir(transaction_log)
-        self._tx_logger: Optional[TransactionLogger] = (
+        self._tx_logger: TransactionLogger | None = (
             TransactionLogger(log_dir) if log_dir is not None else None
         )
-        self._last_settlement: Optional[Dict[str, Any]] = None
+        self._last_settlement: dict[str, Any] | None = None
 
-    def _capture_settlement(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
+    def _capture_settlement(self, response: httpx.Response) -> dict[str, Any] | None:
         """Decode the x402 settlement header on a successful paid response.
 
         Returns the decoded settlement dict (also stashed on
@@ -467,7 +469,7 @@ class LLMClient:
         self._last_settlement = settlement
         return settlement
 
-    def _get_model_pricing(self) -> Dict[str, Dict[str, float]]:
+    def _get_model_pricing(self) -> dict[str, dict[str, float]]:
         """
         Get model pricing for smart routing.
 
@@ -484,7 +486,7 @@ class LLMClient:
             return self._model_pricing_cache
 
         models = self.list_models()
-        pricing: Dict[str, Dict[str, float]] = {}
+        pricing: dict[str, dict[str, float]] = {}
         for model in models:
             model_id = model.get("id", "")
             block = model.get("pricing") or {}
@@ -505,9 +507,9 @@ class LLMClient:
         self,
         prompt: str,
         *,
-        system: Optional[str] = None,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
         routing_profile: RoutingProfile = "auto",
     ) -> SmartChatResponse:
         """
@@ -573,7 +575,7 @@ class LLMClient:
             routing=RoutingDecision(**decision),
         )
 
-    def get_spending(self) -> Dict[str, Any]:
+    def get_spending(self) -> dict[str, Any]:
         """
         Get current session spending.
 
@@ -594,14 +596,14 @@ class LLMClient:
         model: str,
         prompt: str,
         *,
-        system: Optional[str] = None,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        search: Optional[bool] = None,
-        search_parameters: Optional[Dict[str, Any]] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        fallback_models: Optional[List[str]] = None,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        search: bool | None = None,
+        search_parameters: dict[str, Any] | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
         **extra: Any,
     ) -> str:
         """
@@ -634,7 +636,7 @@ class LLMClient:
                 search=True  # Enable live search
             )
         """
-        messages: List[Dict[str, str]] = []
+        messages: list[dict[str, str]] = []
 
         if system:
             messages.append({"role": "system", "content": system})
@@ -659,18 +661,18 @@ class LLMClient:
     def chat_completion(
         self,
         model: str,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         *,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        search: Optional[bool] = None,
-        search_parameters: Optional[Dict[str, Any]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        fallback_models: Optional[List[str]] = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        search: bool | None = None,
+        search_parameters: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
         **extra: Any,
     ) -> ChatResponse:
         """
@@ -748,7 +750,7 @@ class LLMClient:
         validate_top_p(top_p)
 
         # Build request body
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "max_tokens": max_tokens or self.DEFAULT_MAX_TOKENS,
@@ -788,7 +790,7 @@ class LLMClient:
         # network errors). Default behavior — single attempt — is preserved
         # when fallback_models is None or empty.
         attempts = [model, *(fallback_models or [])]
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for i, attempt_model in enumerate(attempts):
             body["model"] = attempt_model
             try:
@@ -814,18 +816,18 @@ class LLMClient:
     def chat_completion_stream(
         self,
         model: str,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         *,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
-        search: Optional[bool] = None,
-        search_parameters: Optional[Dict[str, Any]] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        fallback_models: Optional[List[str]] = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        search: bool | None = None,
+        search_parameters: dict[str, Any] | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
         **extra: Any,
     ) -> Iterator[ChatCompletionChunk]:
         """
@@ -871,7 +873,7 @@ class LLMClient:
         validate_temperature(temperature)
         validate_top_p(top_p)
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": True,
@@ -900,7 +902,7 @@ class LLMClient:
                 body.setdefault(k, v)
 
         attempts = [model, *(fallback_models or [])]
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
 
         for i, attempt_model in enumerate(attempts):
             body["model"] = attempt_model
@@ -938,7 +940,7 @@ class LLMClient:
     def _stream_with_payment(
         self,
         endpoint: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
     ) -> Iterator[ChatCompletionChunk]:
         """
         Run the 402 → sign → retry dance, then yield SSE chunks.
@@ -955,7 +957,7 @@ class LLMClient:
         timeout = self.search_timeout if is_search else self.timeout
 
         # ----- Phase 1: probe (no payment header) -----
-        payment_headers: Optional[Dict[str, str]] = None
+        payment_headers: dict[str, str] | None = None
         cost_usd = 0.0
 
         backoffs = self._STREAM_5XX_BACKOFFS
@@ -997,10 +999,10 @@ class LLMClient:
     def _stream_paid_phase(
         self,
         url: str,
-        body: Dict[str, Any],
-        payment_headers: Dict[str, str],
+        body: dict[str, Any],
+        payment_headers: dict[str, str],
         cost_usd: float,
-        timeout: Optional[float],
+        timeout: float | None,
     ) -> Iterator[ChatCompletionChunk]:
         """Phase 2 of :meth:`_stream_with_payment`: the paid, already-settled leg."""
         backoffs = self._STREAM_5XX_BACKOFFS
@@ -1029,7 +1031,7 @@ class LLMClient:
     def _iter_and_archive(
         self,
         response: httpx.Response,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         cost_usd: float,
         *,
         streaming: bool = True,
@@ -1039,12 +1041,12 @@ class LLMClient:
         ``chat.completion`` response so paid streaming calls show up in
         ``~/.blockrun/cost_log.jsonl`` and ``~/.blockrun/data/`` the same
         way non-stream paid calls do."""
-        assembled_id: Optional[str] = None
-        assembled_model: Optional[str] = None
+        assembled_id: str | None = None
+        assembled_model: str | None = None
         assembled_created: int = 0
-        content_parts: List[str] = []
-        finish_reason: Optional[str] = None
-        usage_dict: Optional[Dict[str, Any]] = None
+        content_parts: list[str] = []
+        finish_reason: str | None = None
+        usage_dict: dict[str, Any] | None = None
 
         for chunk in self._iter_sse_chunks(response):
             if chunk.choices:
@@ -1078,7 +1080,7 @@ class LLMClient:
         if cost_usd > 0:
             from .cache import save_to_cache
 
-            response_data: Dict[str, Any] = {
+            response_data: dict[str, Any] = {
                 "id": assembled_id or "stream",
                 "object": "chat.completion",
                 "created": assembled_created or int(__import__("time").time()),
@@ -1138,9 +1140,9 @@ class LLMClient:
 
     def _sign_payment_from_response(
         self,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
-    ) -> Tuple[Dict[str, str], float]:
+    ) -> tuple[dict[str, str], float]:
         """
         Extract a 402's payment requirements, sign locally, and return
         ``(headers_with_PAYMENT_SIGNATURE, cost_usd)``.
@@ -1150,7 +1152,7 @@ class LLMClient:
         which lets the streaming path open an SSE connection for the retry.
         """
         payment_header = response.headers.get("payment-required")
-        price_info: Dict[str, Any] = {}
+        price_info: dict[str, Any] = {}
         if not payment_header:
             try:
                 resp_body = response.json()
@@ -1219,7 +1221,7 @@ class LLMClient:
             sanitize_error_response(error_body),
         )
 
-    def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ChatResponse:
+    def _request_with_payment(self, endpoint: str, body: dict[str, Any]) -> ChatResponse:
         """
         Make a request with automatic x402 payment handling.
 
@@ -1273,7 +1275,7 @@ class LLMClient:
     def _handle_payment_and_retry(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
     ) -> ChatResponse:
         """
@@ -1409,7 +1411,7 @@ class LLMClient:
 
         return chat_response
 
-    def _request_with_payment_raw(self, endpoint: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    def _request_with_payment_raw(self, endpoint: str, body: dict[str, Any]) -> dict[str, Any]:
         """
         Make a request with automatic x402 payment handling, returning raw JSON.
 
@@ -1469,9 +1471,9 @@ class LLMClient:
     def _handle_payment_and_retry_raw(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle 402 response for raw endpoints: parse requirements, sign payment, retry."""
         payment_header = response.headers.get("payment-required")
         price_info = {}
@@ -1558,8 +1560,8 @@ class LLMClient:
         return retry_response.json()
 
     def _get_with_payment_raw(
-        self, endpoint: str, params: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        self, endpoint: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """
         GET with automatic x402 payment handling, returning raw JSON.
 
@@ -1612,9 +1614,9 @@ class LLMClient:
     def _handle_get_payment_and_retry(
         self,
         url: str,
-        params: Optional[Dict[str, Any]],
+        params: dict[str, Any] | None,
         response: httpx.Response,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle 402 response for GET endpoints: parse requirements, sign payment, retry with GET."""
         payment_header = response.headers.get("payment-required")
         price_info = {}
@@ -1700,10 +1702,10 @@ class LLMClient:
     def image_edit(
         self,
         prompt: str,
-        image: Union[str, List[str]],
+        image: str | list[str],
         *,
         model: str = "openai/gpt-image-2",
-        mask: Optional[str] = None,
+        mask: str | None = None,
         size: str = "1024x1024",
         n: int = 1,
     ) -> ImageResponse:
@@ -1727,7 +1729,7 @@ class LLMClient:
         Returns:
             ImageResponse with edited image URLs
         """
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model,
             "prompt": prompt,
             "image": image,
@@ -1744,10 +1746,10 @@ class LLMClient:
         self,
         query: str,
         *,
-        sources: Optional[List[str]] = None,
+        sources: list[str] | None = None,
         max_results: int = 10,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
     ) -> SearchResult:
         """
         Standalone search (web, X/Twitter, news).
@@ -1762,7 +1764,7 @@ class LLMClient:
         Returns:
             SearchResult with summary and citations
         """
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "query": query,
             "max_results": max_results,
         }
@@ -1778,7 +1780,7 @@ class LLMClient:
 
     # ── Exa Web Search (Powered by Exa) ─────────────────────────────────────
 
-    def exa(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    def exa(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         """Generic Exa endpoint proxy via x402 USDC on Base.
 
         Args:
@@ -1791,7 +1793,7 @@ class LLMClient:
         """
         return self._request_with_payment_raw(f"/v1/exa/{path}", body)
 
-    def exa_search(self, query: str, **kwargs: Any) -> Dict[str, Any]:
+    def exa_search(self, query: str, **kwargs: Any) -> dict[str, Any]:
         """Neural and keyword web search via Exa ($0.01/request, Base USDC).
 
         Args:
@@ -1804,7 +1806,7 @@ class LLMClient:
         """
         return self._request_with_payment_raw("/v1/exa/search", {"query": query, **kwargs})
 
-    def exa_find_similar(self, url: str, **kwargs: Any) -> Dict[str, Any]:
+    def exa_find_similar(self, url: str, **kwargs: Any) -> dict[str, Any]:
         """Find pages semantically similar to a given URL via Exa
         ($0.01/request, Base USDC).
 
@@ -1818,7 +1820,7 @@ class LLMClient:
         """
         return self._request_with_payment_raw("/v1/exa/find-similar", {"url": url, **kwargs})
 
-    def exa_contents(self, urls: List[str], **kwargs: Any) -> Dict[str, Any]:
+    def exa_contents(self, urls: list[str], **kwargs: Any) -> dict[str, Any]:
         """Extract full text content from URLs via Exa ($0.002/URL, Base USDC).
 
         Args:
@@ -1831,7 +1833,7 @@ class LLMClient:
         """
         return self._request_with_payment_raw("/v1/exa/contents", {"urls": urls, **kwargs})
 
-    def exa_answer(self, query: str, **kwargs: Any) -> Dict[str, Any]:
+    def exa_answer(self, query: str, **kwargs: Any) -> dict[str, Any]:
         """AI-generated answer grounded in live web search via Exa
         ($0.01/request, Base USDC).
 
@@ -1847,7 +1849,7 @@ class LLMClient:
 
     # ── Prediction Markets (Powered by Predexon) ────────────────────────────
 
-    def pm(self, path: str, **params: Any) -> Dict[str, Any]:
+    def pm(self, path: str, **params: Any) -> dict[str, Any]:
         """
         Query Predexon prediction market data (GET endpoints).
 
@@ -1875,7 +1877,7 @@ class LLMClient:
         """
         return self._get_with_payment_raw(f"/v1/pm/{path}", params or None)
 
-    def pm_query(self, path: str, query: Dict[str, Any]) -> Dict[str, Any]:
+    def pm_query(self, path: str, query: dict[str, Any]) -> dict[str, Any]:
         """
         Structured query for Predexon prediction market data (POST endpoints).
 
@@ -1901,7 +1903,7 @@ class LLMClient:
     # Thin wrappers over pm() / pm_query() for the most common v2 endpoints.
     # All accept arbitrary keyword filters that are forwarded as query params.
 
-    def pm_markets(self, **params: Any) -> Dict[str, Any]:
+    def pm_markets(self, **params: Any) -> dict[str, Any]:
         """List canonical cross-venue markets (Predexon v2).
 
         Filter with venue=, status=, category=, league=, event_id=,
@@ -1909,92 +1911,92 @@ class LLMClient:
         """
         return self.pm("markets", **params)
 
-    def pm_listings(self, **params: Any) -> Dict[str, Any]:
+    def pm_listings(self, **params: Any) -> dict[str, Any]:
         """List venue-native executable listings flattened across canonical
         markets (Predexon v2). Tier 1 ($0.001/call)."""
         return self.pm("markets/listings", **params)
 
-    def pm_outcome(self, predexon_id: str) -> Dict[str, Any]:
+    def pm_outcome(self, predexon_id: str) -> dict[str, Any]:
         """Resolve a canonical Predexon outcome ID to its market context and
         venue listings (Predexon v2). Tier 1 ($0.001/call)."""
         return self.pm(f"outcomes/{predexon_id}")
 
-    def pm_polymarket_markets(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_markets(self, **params: Any) -> dict[str, Any]:
         """List Polymarket markets (Predexon v2). Tier 1 ($0.001/call).
 
         For high-volume traversal use ``pm_polymarket_markets_keyset()``.
         """
         return self.pm("polymarket/markets", **params)
 
-    def pm_polymarket_events(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_events(self, **params: Any) -> dict[str, Any]:
         """List Polymarket events (Predexon v2). Tier 1 ($0.001/call).
 
         For high-volume traversal use ``pm_polymarket_events_keyset()``.
         """
         return self.pm("polymarket/events", **params)
 
-    def pm_polymarket_markets_keyset(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_markets_keyset(self, **params: Any) -> dict[str, Any]:
         """Polymarket markets with cursor-based keyset pagination
         (use pagination_key=). Tier 1 ($0.001/call)."""
         return self.pm("polymarket/markets/keyset", **params)
 
-    def pm_polymarket_events_keyset(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_events_keyset(self, **params: Any) -> dict[str, Any]:
         """Polymarket events with cursor-based keyset pagination
         (use pagination_key=). Tier 1 ($0.001/call)."""
         return self.pm("polymarket/events/keyset", **params)
 
-    def pm_polymarket_positions(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_positions(self, **params: Any) -> dict[str, Any]:
         """Polymarket open positions (per-wallet, market-level PnL).
         Tier 1 ($0.001/call)."""
         return self.pm("polymarket/positions", **params)
 
-    def pm_polymarket_trades(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_trades(self, **params: Any) -> dict[str, Any]:
         """Recent Polymarket trades (token, side, shares, price, tx_hash).
         Tier 1 ($0.001/call)."""
         return self.pm("polymarket/trades", **params)
 
-    def pm_polymarket_leaderboard(self, **params: Any) -> Dict[str, Any]:
+    def pm_polymarket_leaderboard(self, **params: Any) -> dict[str, Any]:
         """Polymarket trader leaderboard (rank by window, sort_by).
         Tier 1 ($0.001/call)."""
         return self.pm("polymarket/leaderboard", **params)
 
-    def pm_kalshi_markets(self, **params: Any) -> Dict[str, Any]:
+    def pm_kalshi_markets(self, **params: Any) -> dict[str, Any]:
         """List Kalshi markets (CFTC-regulated event contracts).
         Tier 1 ($0.001/call)."""
         return self.pm("kalshi/markets", **params)
 
-    def pm_limitless_markets(self, **params: Any) -> Dict[str, Any]:
+    def pm_limitless_markets(self, **params: Any) -> dict[str, Any]:
         """List Limitless markets (binary AMM-style outcomes).
         Tier 1 ($0.001/call)."""
         return self.pm("limitless/markets", **params)
 
-    def pm_sports_categories(self) -> Dict[str, Any]:
+    def pm_sports_categories(self) -> dict[str, Any]:
         """List available sports categories. Tier 1 ($0.001/call)."""
         return self.pm("sports/categories")
 
-    def pm_sports_markets(self, **params: Any) -> Dict[str, Any]:
+    def pm_sports_markets(self, **params: Any) -> dict[str, Any]:
         """List sports markets grouped by game. Filter with league=,
         sport_type=, status=, venue=. Tier 1 ($0.001/call)."""
         return self.pm("sports/markets", **params)
 
-    def pm_wallet_identity(self, wallet: str) -> Dict[str, Any]:
+    def pm_wallet_identity(self, wallet: str) -> dict[str, Any]:
         """Fetch identity + profile metadata for one wallet (ENS, Twitter,
         portfolio, etc.). Tier 2 ($0.005/call)."""
         return self.pm(f"polymarket/wallet/identity/{wallet}")
 
-    def pm_wallet_identities(self, addresses: List[str]) -> Dict[str, Any]:
+    def pm_wallet_identities(self, addresses: list[str]) -> dict[str, Any]:
         """Bulk identity lookup for up to 200 wallet addresses (POST).
         Tier 2 ($0.005/call)."""
         return self.pm_query("polymarket/wallet/identities", {"addresses": addresses})
 
-    def pm_wallet_cluster(self, address: str) -> Dict[str, Any]:
+    def pm_wallet_cluster(self, address: str) -> dict[str, Any]:
         """Discover wallets connected to a seed address via on-chain transfers
         and identity proofs. Tier 2 ($0.005/call)."""
         return self.pm(f"polymarket/wallet/{address}/cluster")
 
     # ── DefiLlama (DeFi protocols / TVL / yields / prices) ──────────────────
 
-    def defi(self, path: str, **params: Any) -> Dict[str, Any]:
+    def defi(self, path: str, **params: Any) -> dict[str, Any]:
         """
         Query DefiLlama DeFi data (GET passthrough). Powered by DefiLlama.
 
@@ -2014,23 +2016,23 @@ class LLMClient:
         """
         return self._get_with_payment_raw(f"/v1/defillama/{path}", params or None)
 
-    def defi_protocols(self) -> Dict[str, Any]:
+    def defi_protocols(self) -> dict[str, Any]:
         """All DeFi protocols with TVL ($0.005/call)."""
         return self.defi("protocols")
 
-    def defi_protocol(self, slug: str) -> Dict[str, Any]:
+    def defi_protocol(self, slug: str) -> dict[str, Any]:
         """Single protocol details + historical TVL ($0.005/call)."""
         return self.defi(f"protocol/{slug}")
 
-    def defi_chains(self) -> Dict[str, Any]:
+    def defi_chains(self) -> dict[str, Any]:
         """Current TVL of every chain ($0.005/call)."""
         return self.defi("chains")
 
-    def defi_yields(self, **params: Any) -> Dict[str, Any]:
+    def defi_yields(self, **params: Any) -> dict[str, Any]:
         """Yield pools with APY/TVL ($0.005/call)."""
         return self.defi("yields", **params)
 
-    def defi_prices(self, coins: Union[List[str], str]) -> Dict[str, Any]:
+    def defi_prices(self, coins: list[str] | str) -> dict[str, Any]:
         """Token price lookup ($0.001/call).
 
         Args:
@@ -2047,9 +2049,9 @@ class LLMClient:
         path: str,
         *,
         method: str = "GET",
-        body: Optional[Dict[str, Any]] = None,
+        body: dict[str, Any] | None = None,
         **params: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Query the 0x Swap / Gasless APIs (free — no x402 payment; BlockRun
         takes an on-chain affiliate fee on executed swaps instead).
@@ -2074,41 +2076,41 @@ class LLMClient:
             return self._request_with_payment_raw(endpoint, body or {})
         return self._get_with_payment_raw(endpoint, params or None)
 
-    def dex_price(self, **params: Any) -> Dict[str, Any]:
+    def dex_price(self, **params: Any) -> dict[str, Any]:
         """Indicative Permit2 swap price — no commitment (free)."""
         return self.dex("price", **params)
 
-    def dex_quote(self, **params: Any) -> Dict[str, Any]:
+    def dex_quote(self, **params: Any) -> dict[str, Any]:
         """Firm Permit2 swap quote with permit2.eip712 + tx data (free)."""
         return self.dex("quote", **params)
 
-    def dex_gasless_price(self, **params: Any) -> Dict[str, Any]:
+    def dex_gasless_price(self, **params: Any) -> dict[str, Any]:
         """Gasless indicative price quote (free)."""
         return self.dex("gasless/price", **params)
 
-    def dex_gasless_quote(self, **params: Any) -> Dict[str, Any]:
+    def dex_gasless_quote(self, **params: Any) -> dict[str, Any]:
         """Gasless firm quote — returns trade.eip712 to sign (free)."""
         return self.dex("gasless/quote", **params)
 
-    def dex_gasless_submit(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    def dex_gasless_submit(self, body: dict[str, Any]) -> dict[str, Any]:
         """Submit a signed gasless trade; the 0x relayer pays gas (free)."""
         return self.dex("gasless/submit", method="POST", body=body)
 
-    def dex_gasless_status(self, trade_hash: str) -> Dict[str, Any]:
+    def dex_gasless_status(self, trade_hash: str) -> dict[str, Any]:
         """Poll a gasless trade's status by tradeHash (free)."""
         return self.dex(f"gasless/status/{trade_hash}")
 
-    def dex_chains(self) -> Dict[str, Any]:
+    def dex_chains(self) -> dict[str, Any]:
         """Chains where the Swap API is supported (free)."""
         return self.dex("swap/chains")
 
-    def dex_gasless_chains(self) -> Dict[str, Any]:
+    def dex_gasless_chains(self) -> dict[str, Any]:
         """Chains where the Gasless API is supported (free)."""
         return self.dex("gasless/chains")
 
     # ── Modal Sandbox (pay-per-call cloud compute) ───────────────────────────
 
-    def modal(self, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def modal(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         """
         Call the Modal sandbox compute API (POST passthrough).
 
@@ -2119,7 +2121,7 @@ class LLMClient:
         """
         return self._request_with_payment_raw(f"/v1/modal/{path}", body or {})
 
-    def modal_sandbox_create(self, **body: Any) -> Dict[str, Any]:
+    def modal_sandbox_create(self, **body: Any) -> dict[str, Any]:
         """Create a sandboxed compute environment ($0.01 CPU / $0.05 GPU).
 
         Common fields: image ("python:3.11"), gpu (optional GPU type),
@@ -2128,22 +2130,22 @@ class LLMClient:
         return self.modal("sandbox/create", body)
 
     def modal_sandbox_exec(
-        self, sandbox_id: str, command: List[str], **body: Any
-    ) -> Dict[str, Any]:
+        self, sandbox_id: str, command: list[str], **body: Any
+    ) -> dict[str, Any]:
         """Execute a command in a sandbox; returns stdout/stderr ($0.001)."""
         return self.modal("sandbox/exec", {"sandbox_id": sandbox_id, "command": command, **body})
 
-    def modal_sandbox_status(self, sandbox_id: str) -> Dict[str, Any]:
+    def modal_sandbox_status(self, sandbox_id: str) -> dict[str, Any]:
         """Check a sandbox's status ($0.001)."""
         return self.modal("sandbox/status", {"sandbox_id": sandbox_id})
 
-    def modal_sandbox_terminate(self, sandbox_id: str) -> Dict[str, Any]:
+    def modal_sandbox_terminate(self, sandbox_id: str) -> dict[str, Any]:
         """Terminate a sandbox ($0.001)."""
         return self.modal("sandbox/terminate", {"sandbox_id": sandbox_id})
 
     # ── Coinbase Onramp ──────────────────────────────────────────────────────
 
-    def onramp(self, address: str) -> Dict[str, Any]:
+    def onramp(self, address: str) -> dict[str, Any]:
         """Mint a one-time Coinbase Onramp link to fund a wallet with fiat (FREE).
 
         Opens the door to buying Base USDC with a card or bank (60+ fiat
@@ -2176,7 +2178,7 @@ class LLMClient:
             raise APIError("gateway returned no onramp url", 0, None)
         return data
 
-    def list_models(self) -> List[Dict[str, Any]]:
+    def list_models(self) -> list[dict[str, Any]]:
         """
         List available LLM models with pricing.
 
@@ -2198,7 +2200,7 @@ class LLMClient:
 
         return response.json().get("data", [])
 
-    def list_image_models(self) -> List[Dict[str, Any]]:
+    def list_image_models(self) -> list[dict[str, Any]]:
         """
         List available image generation models with pricing.
 
@@ -2213,7 +2215,7 @@ class LLMClient:
         """
         return [m for m in self.list_models() if "image" in (m.get("categories") or [])]
 
-    def list_all_models(self) -> List[Dict[str, Any]]:
+    def list_all_models(self) -> list[dict[str, Any]]:
         """
         List all available models (chat, image, music, etc.) with pricing.
 
@@ -2244,7 +2246,7 @@ class LLMClient:
         """Check if client is configured for testnet."""
         return "testnet.blockrun.ai" in self.api_url
 
-    def _billing_meta(self) -> Dict[str, Optional[str]]:
+    def _billing_meta(self) -> dict[str, str | None]:
         """Return billing metadata (wallet / network / client_kind) for the
         cost log. Used by ``save_to_cache`` call sites."""
         return {
@@ -2256,7 +2258,7 @@ class LLMClient:
     def _log_transaction(
         self,
         endpoint: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: Any,
         cost_usd: float,
     ) -> None:
@@ -2378,13 +2380,13 @@ class AsyncLLMClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = DEFAULT_CHAT_TIMEOUT,
         search_timeout: float = 300.0,
-        transaction_log: Union[bool, str, "os.PathLike[str]", None] = None,
-        max_cost_per_call: Optional[float] = None,
-        max_session_cost: Optional[float] = None,
+        transaction_log: bool | str | os.PathLike[str] | None = None,
+        max_cost_per_call: float | None = None,
+        max_session_cost: float | None = None,
     ):
         """
         Initialize the async BlockRun LLM client.
@@ -2458,12 +2460,12 @@ class AsyncLLMClient:
         self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
 
         log_dir = _resolve_log_dir(transaction_log)
-        self._tx_logger: Optional[TransactionLogger] = (
+        self._tx_logger: TransactionLogger | None = (
             TransactionLogger(log_dir) if log_dir is not None else None
         )
-        self._last_settlement: Optional[Dict[str, Any]] = None
+        self._last_settlement: dict[str, Any] | None = None
 
-    def _capture_settlement(self, response: httpx.Response) -> Optional[Dict[str, Any]]:
+    def _capture_settlement(self, response: httpx.Response) -> dict[str, Any] | None:
         """Async-client twin of :meth:`LLMClient._capture_settlement`."""
         header = read_settlement_header(response.headers)
         settlement = decode_settlement_header(header)
@@ -2475,18 +2477,18 @@ class AsyncLLMClient:
         model: str,
         prompt: str,
         *,
-        system: Optional[str] = None,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        search: Optional[bool] = None,
-        search_parameters: Optional[Dict[str, Any]] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        fallback_models: Optional[List[str]] = None,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        search: bool | None = None,
+        search_parameters: dict[str, Any] | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
         **extra: Any,
     ) -> str:
         """Async 1-line chat interface with optional xAI Live Search."""
-        messages: List[Dict[str, str]] = []
+        messages: list[dict[str, str]] = []
 
         if system:
             messages.append({"role": "system", "content": system})
@@ -2511,18 +2513,18 @@ class AsyncLLMClient:
     async def chat_completion(
         self,
         model: str,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         *,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        search: Optional[bool] = None,
-        search_parameters: Optional[Dict[str, Any]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        fallback_models: Optional[List[str]] = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        search: bool | None = None,
+        search_parameters: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
         **extra: Any,
     ) -> ChatResponse:
         """Async full chat completion interface with optional xAI Live Search and tool calling."""
@@ -2532,7 +2534,7 @@ class AsyncLLMClient:
         validate_temperature(temperature)
         validate_top_p(top_p)
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "max_tokens": max_tokens or self.DEFAULT_MAX_TOKENS,
@@ -2570,7 +2572,7 @@ class AsyncLLMClient:
         # Walk [model, *fallback_models] on retriable errors. See sync
         # chat_completion() above for the rationale.
         attempts = [model, *(fallback_models or [])]
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for i, attempt_model in enumerate(attempts):
             body["model"] = attempt_model
             try:
@@ -2595,18 +2597,18 @@ class AsyncLLMClient:
     async def chat_completion_stream(
         self,
         model: str,
-        messages: List[Dict[str, Any]],
+        messages: list[dict[str, Any]],
         *,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[Any] = None,
-        search: Optional[bool] = None,
-        search_parameters: Optional[Dict[str, Any]] = None,
-        response_format: Optional[Dict[str, Any]] = None,
-        stop: Optional[Union[str, List[str]]] = None,
-        fallback_models: Optional[List[str]] = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        search: bool | None = None,
+        search_parameters: dict[str, Any] | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
         **extra: Any,
     ) -> AsyncIterator[ChatCompletionChunk]:
         """
@@ -2619,7 +2621,7 @@ class AsyncLLMClient:
         validate_temperature(temperature)
         validate_top_p(top_p)
 
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "stream": True,
@@ -2648,7 +2650,7 @@ class AsyncLLMClient:
                 body.setdefault(k, v)
 
         attempts = [model, *(fallback_models or [])]
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
 
         for i, attempt_model in enumerate(attempts):
             body["model"] = attempt_model
@@ -2684,7 +2686,7 @@ class AsyncLLMClient:
     async def _stream_with_payment(
         self,
         endpoint: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
     ) -> AsyncIterator[ChatCompletionChunk]:
         """Async version of LLMClient._stream_with_payment.
 
@@ -2702,7 +2704,7 @@ class AsyncLLMClient:
         statuses_5xx = LLMClient._STREAM_5XX_STATUSES
 
         # ----- Phase 1: probe (no payment header) -----
-        payment_headers: Optional[Dict[str, str]] = None
+        payment_headers: dict[str, str] | None = None
         cost_usd = 0.0
 
         for attempt in range(len(backoffs) + 1):
@@ -2747,10 +2749,10 @@ class AsyncLLMClient:
     async def _astream_paid_phase(
         self,
         url: str,
-        body: Dict[str, Any],
-        payment_headers: Dict[str, str],
+        body: dict[str, Any],
+        payment_headers: dict[str, str],
         cost_usd: float,
-        timeout: Optional[float],
+        timeout: float | None,
     ) -> AsyncIterator[ChatCompletionChunk]:
         """Phase 2 of the async stream: the paid, already-settled leg."""
         backoffs = LLMClient._STREAM_5XX_BACKOFFS
@@ -2784,7 +2786,7 @@ class AsyncLLMClient:
     async def _aiter_and_archive(
         self,
         response: httpx.Response,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         cost_usd: float,
         *,
         streaming: bool = True,
@@ -2793,12 +2795,12 @@ class AsyncLLMClient:
         assembled ``chat.completion`` response to ``~/.blockrun/data/`` and
         the cost row to ``~/.blockrun/cost_log.jsonl`` once the stream
         finishes — only for paid calls (cost_usd > 0)."""
-        assembled_id: Optional[str] = None
-        assembled_model: Optional[str] = None
+        assembled_id: str | None = None
+        assembled_model: str | None = None
         assembled_created: int = 0
-        content_parts: List[str] = []
-        finish_reason: Optional[str] = None
-        usage_dict: Optional[Dict[str, Any]] = None
+        content_parts: list[str] = []
+        finish_reason: str | None = None
+        usage_dict: dict[str, Any] | None = None
 
         async for chunk in self._aiter_sse_chunks(response):
             if chunk.choices:
@@ -2825,7 +2827,7 @@ class AsyncLLMClient:
         if cost_usd > 0:
             from .cache import save_to_cache
 
-            response_data: Dict[str, Any] = {
+            response_data: dict[str, Any] = {
                 "id": assembled_id or "stream",
                 "object": "chat.completion",
                 "created": assembled_created or int(__import__("time").time()),
@@ -2879,7 +2881,7 @@ class AsyncLLMClient:
     _sign_payment_from_response = LLMClient._sign_payment_from_response
     _raise_stream_error = LLMClient._raise_stream_error
 
-    async def _request_with_payment(self, endpoint: str, body: Dict[str, Any]) -> ChatResponse:
+    async def _request_with_payment(self, endpoint: str, body: dict[str, Any]) -> ChatResponse:
         """Make async request with automatic payment handling."""
         url = f"{self.api_url}{endpoint}"
         req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
@@ -2920,7 +2922,7 @@ class AsyncLLMClient:
     async def _handle_payment_and_retry(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
     ) -> ChatResponse:
         """Handle 402 response asynchronously."""
@@ -3046,8 +3048,8 @@ class AsyncLLMClient:
         return chat_response
 
     async def _request_with_payment_raw(
-        self, endpoint: str, body: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, endpoint: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
         """Make async request with automatic payment handling, returning raw JSON."""
         from .cache import get_cached, save_to_cache
 
@@ -3100,9 +3102,9 @@ class AsyncLLMClient:
     async def _handle_payment_and_retry_raw(
         self,
         url: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: httpx.Response,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle 402 response asynchronously for raw endpoints."""
         payment_header = response.headers.get("payment-required")
         if not payment_header:
@@ -3178,8 +3180,8 @@ class AsyncLLMClient:
         return retry_response.json()
 
     async def _get_with_payment_raw(
-        self, endpoint: str, params: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
+        self, endpoint: str, params: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Async GET with x402 payment handling, returning raw JSON."""
         from .cache import get_cached, save_to_cache
 
@@ -3227,9 +3229,9 @@ class AsyncLLMClient:
     async def _handle_get_payment_and_retry(
         self,
         url: str,
-        params: Optional[Dict[str, Any]],
+        params: dict[str, Any] | None,
         response: httpx.Response,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Handle 402 response asynchronously for GET endpoints."""
         payment_header = response.headers.get("payment-required")
         if not payment_header:
@@ -3304,17 +3306,17 @@ class AsyncLLMClient:
     async def image_edit(
         self,
         prompt: str,
-        image: Union[str, List[str]],
+        image: str | list[str],
         *,
         model: str = "openai/gpt-image-2",
-        mask: Optional[str] = None,
+        mask: str | None = None,
         size: str = "1024x1024",
         n: int = 1,
     ) -> ImageResponse:
         """Async image editing (img2img). ``image`` may be a single data URI or
         a list of 1-4 data URIs for multi-image fusion (openai/* up to 4,
         google/* up to 3)."""
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "model": model,
             "prompt": prompt,
             "image": image,
@@ -3331,13 +3333,13 @@ class AsyncLLMClient:
         self,
         query: str,
         *,
-        sources: Optional[List[str]] = None,
+        sources: list[str] | None = None,
         max_results: int = 10,
-        from_date: Optional[str] = None,
-        to_date: Optional[str] = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
     ) -> SearchResult:
         """Async standalone search."""
-        body: Dict[str, Any] = {
+        body: dict[str, Any] = {
             "query": query,
             "max_results": max_results,
         }
@@ -3353,107 +3355,107 @@ class AsyncLLMClient:
 
     # ── Prediction Markets (Powered by Predexon) ────────────────────────────
 
-    async def pm(self, path: str, **params: Any) -> Dict[str, Any]:
+    async def pm(self, path: str, **params: Any) -> dict[str, Any]:
         """Async query Predexon prediction market data (GET). Powered by Predexon."""
         return await self._get_with_payment_raw(f"/v1/pm/{path}", params or None)
 
-    async def pm_query(self, path: str, query: Dict[str, Any]) -> Dict[str, Any]:
+    async def pm_query(self, path: str, query: dict[str, Any]) -> dict[str, Any]:
         """Async structured query for Predexon data (POST). Powered by Predexon."""
         return await self._request_with_payment_raw(f"/v1/pm/{path}", query)
 
-    async def pm_markets(self, **params: Any) -> Dict[str, Any]:
+    async def pm_markets(self, **params: Any) -> dict[str, Any]:
         """List canonical cross-venue markets (Predexon v2). Tier 1 ($0.001/call)."""
         return await self.pm("markets", **params)
 
-    async def pm_listings(self, **params: Any) -> Dict[str, Any]:
+    async def pm_listings(self, **params: Any) -> dict[str, Any]:
         """List venue-native executable listings (Predexon v2). Tier 1 ($0.001/call)."""
         return await self.pm("markets/listings", **params)
 
-    async def pm_outcome(self, predexon_id: str) -> Dict[str, Any]:
+    async def pm_outcome(self, predexon_id: str) -> dict[str, Any]:
         """Resolve a canonical Predexon outcome ID (Predexon v2). Tier 1 ($0.001/call)."""
         return await self.pm(f"outcomes/{predexon_id}")
 
-    async def pm_polymarket_markets(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_markets(self, **params: Any) -> dict[str, Any]:
         """List Polymarket markets (Predexon v2). Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/markets", **params)
 
-    async def pm_polymarket_events(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_events(self, **params: Any) -> dict[str, Any]:
         """List Polymarket events (Predexon v2). Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/events", **params)
 
-    async def pm_polymarket_markets_keyset(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_markets_keyset(self, **params: Any) -> dict[str, Any]:
         """Polymarket markets with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/markets/keyset", **params)
 
-    async def pm_polymarket_events_keyset(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_events_keyset(self, **params: Any) -> dict[str, Any]:
         """Polymarket events with cursor-based keyset pagination. Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/events/keyset", **params)
 
-    async def pm_polymarket_positions(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_positions(self, **params: Any) -> dict[str, Any]:
         """Polymarket open positions (per-wallet, market-level PnL).
         Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/positions", **params)
 
-    async def pm_polymarket_trades(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_trades(self, **params: Any) -> dict[str, Any]:
         """Recent Polymarket trades. Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/trades", **params)
 
-    async def pm_polymarket_leaderboard(self, **params: Any) -> Dict[str, Any]:
+    async def pm_polymarket_leaderboard(self, **params: Any) -> dict[str, Any]:
         """Polymarket trader leaderboard. Tier 1 ($0.001/call)."""
         return await self.pm("polymarket/leaderboard", **params)
 
-    async def pm_kalshi_markets(self, **params: Any) -> Dict[str, Any]:
+    async def pm_kalshi_markets(self, **params: Any) -> dict[str, Any]:
         """List Kalshi markets. Tier 1 ($0.001/call)."""
         return await self.pm("kalshi/markets", **params)
 
-    async def pm_limitless_markets(self, **params: Any) -> Dict[str, Any]:
+    async def pm_limitless_markets(self, **params: Any) -> dict[str, Any]:
         """List Limitless markets. Tier 1 ($0.001/call)."""
         return await self.pm("limitless/markets", **params)
 
-    async def pm_sports_categories(self) -> Dict[str, Any]:
+    async def pm_sports_categories(self) -> dict[str, Any]:
         """List available sports categories. Tier 1 ($0.001/call)."""
         return await self.pm("sports/categories")
 
-    async def pm_sports_markets(self, **params: Any) -> Dict[str, Any]:
+    async def pm_sports_markets(self, **params: Any) -> dict[str, Any]:
         """List sports markets grouped by game. Tier 1 ($0.001/call)."""
         return await self.pm("sports/markets", **params)
 
-    async def pm_wallet_identity(self, wallet: str) -> Dict[str, Any]:
+    async def pm_wallet_identity(self, wallet: str) -> dict[str, Any]:
         """Identity + profile for one wallet. Tier 2 ($0.005/call)."""
         return await self.pm(f"polymarket/wallet/identity/{wallet}")
 
-    async def pm_wallet_identities(self, addresses: List[str]) -> Dict[str, Any]:
+    async def pm_wallet_identities(self, addresses: list[str]) -> dict[str, Any]:
         """Bulk identity for up to 200 wallet addresses. Tier 2 ($0.005/call)."""
         return await self.pm_query("polymarket/wallet/identities", {"addresses": addresses})
 
-    async def pm_wallet_cluster(self, address: str) -> Dict[str, Any]:
+    async def pm_wallet_cluster(self, address: str) -> dict[str, Any]:
         """Wallet-cluster discovery (on-chain transfers + identity proofs).
         Tier 2 ($0.005/call)."""
         return await self.pm(f"polymarket/wallet/{address}/cluster")
 
     # ── DefiLlama (DeFi protocols / TVL / yields / prices) ──────────────────
 
-    async def defi(self, path: str, **params: Any) -> Dict[str, Any]:
+    async def defi(self, path: str, **params: Any) -> dict[str, Any]:
         """Async query DefiLlama DeFi data (GET). $0.005/call ($0.001 for prices)."""
         return await self._get_with_payment_raw(f"/v1/defillama/{path}", params or None)
 
-    async def defi_protocols(self) -> Dict[str, Any]:
+    async def defi_protocols(self) -> dict[str, Any]:
         """Async: all DeFi protocols with TVL ($0.005/call)."""
         return await self.defi("protocols")
 
-    async def defi_protocol(self, slug: str) -> Dict[str, Any]:
+    async def defi_protocol(self, slug: str) -> dict[str, Any]:
         """Async: single protocol details + historical TVL ($0.005/call)."""
         return await self.defi(f"protocol/{slug}")
 
-    async def defi_chains(self) -> Dict[str, Any]:
+    async def defi_chains(self) -> dict[str, Any]:
         """Async: current TVL of every chain ($0.005/call)."""
         return await self.defi("chains")
 
-    async def defi_yields(self, **params: Any) -> Dict[str, Any]:
+    async def defi_yields(self, **params: Any) -> dict[str, Any]:
         """Async: yield pools with APY/TVL ($0.005/call)."""
         return await self.defi("yields", **params)
 
-    async def defi_prices(self, coins: Union[List[str], str]) -> Dict[str, Any]:
+    async def defi_prices(self, coins: list[str] | str) -> dict[str, Any]:
         """Async: token price lookup ($0.001/call)."""
         joined = ",".join(coins) if isinstance(coins, list) else coins
         return await self.defi(f"prices/{joined}")
@@ -3465,74 +3467,74 @@ class AsyncLLMClient:
         path: str,
         *,
         method: str = "GET",
-        body: Optional[Dict[str, Any]] = None,
+        body: dict[str, Any] | None = None,
         **params: Any,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Async query the 0x Swap / Gasless APIs (free passthrough)."""
         endpoint = f"/v1/zerox/{path}"
         if method.upper() == "POST":
             return await self._request_with_payment_raw(endpoint, body or {})
         return await self._get_with_payment_raw(endpoint, params or None)
 
-    async def dex_price(self, **params: Any) -> Dict[str, Any]:
+    async def dex_price(self, **params: Any) -> dict[str, Any]:
         """Async: indicative Permit2 swap price (free)."""
         return await self.dex("price", **params)
 
-    async def dex_quote(self, **params: Any) -> Dict[str, Any]:
+    async def dex_quote(self, **params: Any) -> dict[str, Any]:
         """Async: firm Permit2 swap quote (free)."""
         return await self.dex("quote", **params)
 
-    async def dex_gasless_price(self, **params: Any) -> Dict[str, Any]:
+    async def dex_gasless_price(self, **params: Any) -> dict[str, Any]:
         """Async: gasless indicative price quote (free)."""
         return await self.dex("gasless/price", **params)
 
-    async def dex_gasless_quote(self, **params: Any) -> Dict[str, Any]:
+    async def dex_gasless_quote(self, **params: Any) -> dict[str, Any]:
         """Async: gasless firm quote — returns trade.eip712 to sign (free)."""
         return await self.dex("gasless/quote", **params)
 
-    async def dex_gasless_submit(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    async def dex_gasless_submit(self, body: dict[str, Any]) -> dict[str, Any]:
         """Async: submit a signed gasless trade (free)."""
         return await self.dex("gasless/submit", method="POST", body=body)
 
-    async def dex_gasless_status(self, trade_hash: str) -> Dict[str, Any]:
+    async def dex_gasless_status(self, trade_hash: str) -> dict[str, Any]:
         """Async: poll a gasless trade's status (free)."""
         return await self.dex(f"gasless/status/{trade_hash}")
 
-    async def dex_chains(self) -> Dict[str, Any]:
+    async def dex_chains(self) -> dict[str, Any]:
         """Async: chains where the Swap API is supported (free)."""
         return await self.dex("swap/chains")
 
-    async def dex_gasless_chains(self) -> Dict[str, Any]:
+    async def dex_gasless_chains(self) -> dict[str, Any]:
         """Async: chains where the Gasless API is supported (free)."""
         return await self.dex("gasless/chains")
 
     # ── Modal Sandbox (pay-per-call cloud compute) ───────────────────────────
 
-    async def modal(self, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def modal(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         """Async call the Modal sandbox compute API (POST passthrough)."""
         return await self._request_with_payment_raw(f"/v1/modal/{path}", body or {})
 
-    async def modal_sandbox_create(self, **body: Any) -> Dict[str, Any]:
+    async def modal_sandbox_create(self, **body: Any) -> dict[str, Any]:
         """Async: create a sandbox ($0.01 CPU / $0.05 GPU)."""
         return await self.modal("sandbox/create", body)
 
     async def modal_sandbox_exec(
-        self, sandbox_id: str, command: List[str], **body: Any
-    ) -> Dict[str, Any]:
+        self, sandbox_id: str, command: list[str], **body: Any
+    ) -> dict[str, Any]:
         """Async: execute a command in a sandbox ($0.001)."""
         return await self.modal(
             "sandbox/exec", {"sandbox_id": sandbox_id, "command": command, **body}
         )
 
-    async def modal_sandbox_status(self, sandbox_id: str) -> Dict[str, Any]:
+    async def modal_sandbox_status(self, sandbox_id: str) -> dict[str, Any]:
         """Async: check a sandbox's status ($0.001)."""
         return await self.modal("sandbox/status", {"sandbox_id": sandbox_id})
 
-    async def modal_sandbox_terminate(self, sandbox_id: str) -> Dict[str, Any]:
+    async def modal_sandbox_terminate(self, sandbox_id: str) -> dict[str, Any]:
         """Async: terminate a sandbox ($0.001)."""
         return await self.modal("sandbox/terminate", {"sandbox_id": sandbox_id})
 
-    async def list_models(self) -> List[Dict[str, Any]]:
+    async def list_models(self) -> list[dict[str, Any]]:
         """List available LLM models asynchronously."""
         response = await self._client.get(f"{self.api_url}/v1/models")
 
@@ -3549,7 +3551,7 @@ class AsyncLLMClient:
 
         return response.json().get("data", [])
 
-    async def list_image_models(self) -> List[Dict[str, Any]]:
+    async def list_image_models(self) -> list[dict[str, Any]]:
         """List available image generation models asynchronously.
 
         ``/v1/images/models`` was deprecated server-side; this filters the
@@ -3559,7 +3561,7 @@ class AsyncLLMClient:
         models = await self.list_models()
         return [m for m in models if "image" in (m.get("categories") or [])]
 
-    async def list_all_models(self) -> List[Dict[str, Any]]:
+    async def list_all_models(self) -> list[dict[str, Any]]:
         """
         List all available models (chat, image, music, etc.) asynchronously.
 
@@ -3587,7 +3589,7 @@ class AsyncLLMClient:
         """Check if client is configured for testnet."""
         return "testnet.blockrun.ai" in self.api_url
 
-    def _billing_meta(self) -> Dict[str, Optional[str]]:
+    def _billing_meta(self) -> dict[str, str | None]:
         """Billing metadata for cost-log entries."""
         return {
             "wallet": self.account.address,
@@ -3598,7 +3600,7 @@ class AsyncLLMClient:
     def _log_transaction(
         self,
         endpoint: str,
-        body: Dict[str, Any],
+        body: dict[str, Any],
         response: Any,
         cost_usd: float,
     ) -> None:
@@ -3700,7 +3702,7 @@ class AsyncLLMClient:
 # =============================================================================
 
 
-def testnet_client(private_key: Optional[str] = None, **kwargs) -> LLMClient:
+def testnet_client(private_key: str | None = None, **kwargs) -> LLMClient:
     """
     Create a testnet LLM client for development and testing.
 
@@ -3736,7 +3738,7 @@ def testnet_client(private_key: Optional[str] = None, **kwargs) -> LLMClient:
     )
 
 
-async def async_testnet_client(private_key: Optional[str] = None, **kwargs) -> AsyncLLMClient:
+async def async_testnet_client(private_key: str | None = None, **kwargs) -> AsyncLLMClient:
     """
     Create an async testnet LLM client for development and testing.
 

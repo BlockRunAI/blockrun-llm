@@ -36,12 +36,14 @@ signatures are sent in the PAYMENT-SIGNATURE header.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import httpx
 from dotenv import load_dotenv
 from eth_account import Account
+from typing_extensions import Self
 
+from .tx_log import paid_request_error_prefix
 from .types import APIError, PaymentError
 from .validation import (
     sanitize_error_response,
@@ -53,13 +55,12 @@ from .x402 import (
     extract_payment_details,
     parse_payment_required,
 )
-from .tx_log import paid_request_error_prefix
 
 load_dotenv()
 
 
 # Mirrors src/lib/surf.ts SURF_TIER_*_PRICE on the backend.
-SURF_TIER_PRICES: Dict[int, float] = {
+SURF_TIER_PRICES: dict[int, float] = {
     1: 0.001,
     2: 0.005,
     3: 0.020,
@@ -69,7 +70,7 @@ SURF_TIER_PRICES: Dict[int, float] = {
 # Mirrors src/lib/surf.ts SURF_ENDPOINTS. Each tuple is (path, method, tier, required_params).
 # Keep this list in sync when backend endpoints change — used for discovery, parameter
 # validation, and auto GET/POST routing in SurfClient.call().
-_SURF_CATALOG: List[Tuple[str, str, int, Tuple[str, ...]]] = [
+_SURF_CATALOG: list[tuple[str, str, int, tuple[str, ...]]] = [
     # exchange
     ("exchange/markets", "GET", 1, ()),
     ("exchange/price", "GET", 1, ("pair",)),
@@ -167,7 +168,7 @@ _SURF_CATALOG: List[Tuple[str, str, int, Tuple[str, ...]]] = [
     ("web/fetch", "GET", 2, ("url",)),
 ]
 
-_CATALOG_BY_PATH: Dict[str, Tuple[str, int, Tuple[str, ...]]] = {
+_CATALOG_BY_PATH: dict[str, tuple[str, int, tuple[str, ...]]] = {
     path: (method, tier, required) for path, method, tier, required in _SURF_CATALOG
 }
 
@@ -186,8 +187,8 @@ class SurfClient:
 
     def __init__(
         self,
-        private_key: Optional[str] = None,
-        api_url: Optional[str] = None,
+        private_key: str | None = None,
+        api_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
     ):
         from .wallet import load_wallet
@@ -219,7 +220,7 @@ class SurfClient:
     # ------------------------------------------------------------ Discovery API
 
     @staticmethod
-    def endpoints() -> List[Dict[str, Any]]:
+    def endpoints() -> list[dict[str, Any]]:
         """Return the full Surf endpoint catalog with method, tier, and price."""
         return [
             {
@@ -233,7 +234,7 @@ class SurfClient:
         ]
 
     @staticmethod
-    def endpoint_info(path: str) -> Optional[Dict[str, Any]]:
+    def endpoint_info(path: str) -> dict[str, Any] | None:
         """Return catalog info for one path, or None if unknown."""
         entry = _CATALOG_BY_PATH.get(path)
         if not entry:
@@ -257,12 +258,12 @@ class SurfClient:
 
     # ---------------------------------------------------------------- Core HTTP
 
-    def get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def get(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """GET an `/v1/surf/{path}` endpoint with optional query params."""
         self._validate_path(path, "GET", params or {})
         return self._request("GET", path, params=params, json_body=None)
 
-    def post(self, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def post(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
         """POST an `/v1/surf/{path}` endpoint with an optional JSON body."""
         self._validate_path(path, "POST", body or {})
         return self._request("POST", path, params=None, json_body=body)
@@ -271,9 +272,9 @@ class SurfClient:
         self,
         path: str,
         *,
-        params: Optional[Dict[str, Any]] = None,
-        body: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Generic helper that auto-routes to GET or POST based on the catalog.
 
@@ -295,7 +296,7 @@ class SurfClient:
 
     # ---------------------------------------------------------------- Internals
 
-    def _validate_path(self, path: str, method: str, supplied: Dict[str, Any]) -> None:
+    def _validate_path(self, path: str, method: str, supplied: dict[str, Any]) -> None:
         info = self.endpoint_info(path)
         if info is None:
             return  # allow forward-compat with newer backend endpoints
@@ -312,9 +313,9 @@ class SurfClient:
         method: str,
         path: str,
         *,
-        params: Optional[Dict[str, Any]],
-        json_body: Optional[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None,
+        json_body: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         url = f"{self.api_url}/v1/surf/{path}"
         headers = {"Content-Type": "application/json"} if json_body is not None else {}
         response = self._client.request(
@@ -332,10 +333,10 @@ class SurfClient:
         self,
         method: str,
         url: str,
-        params: Optional[Dict[str, Any]],
-        json_body: Optional[Dict[str, Any]],
+        params: dict[str, Any] | None,
+        json_body: dict[str, Any] | None,
         response: httpx.Response,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         payment_header: Any = response.headers.get("payment-required")
         if not payment_header:
             try:
@@ -368,7 +369,7 @@ class SurfClient:
             extensions=extensions,
         )
 
-        retry_headers: Dict[str, str] = {"PAYMENT-SIGNATURE": payment_payload}
+        retry_headers: dict[str, str] = {"PAYMENT-SIGNATURE": payment_payload}
         if json_body is not None:
             retry_headers["Content-Type"] = "application/json"
 
@@ -388,7 +389,7 @@ class SurfClient:
         return data
 
     @staticmethod
-    def _unwrap(response: httpx.Response, *, after_payment: bool = False) -> Dict[str, Any]:
+    def _unwrap(response: httpx.Response, *, after_payment: bool = False) -> dict[str, Any]:
         if response.status_code == 200:
             return response.json()
         try:
@@ -411,7 +412,7 @@ class SurfClient:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> "SurfClient":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:

@@ -14,7 +14,8 @@ import os
 import time
 
 import pytest
-from blockrun_llm import LLMClient, AsyncLLMClient
+
+from blockrun_llm import AsyncLLMClient, LLMClient
 
 WALLET_KEY = os.environ.get("BASE_CHAIN_WALLET_KEY")
 PRODUCTION_API = "https://blockrun.ai/api"

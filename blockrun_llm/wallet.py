@@ -13,7 +13,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING
 
 from eth_account import Account
 
@@ -31,7 +31,7 @@ USDC_BASE_CONTRACT = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 BASE_CHAIN_ID = "8453"
 
 
-def create_wallet() -> Tuple[str, str]:
+def create_wallet() -> tuple[str, str]:
     """
     Create a new Ethereum wallet.
 
@@ -59,7 +59,7 @@ def save_wallet(private_key: str) -> Path:
     return WALLET_FILE
 
 
-def scan_wallets() -> List[Dict[str, str]]:
+def scan_wallets() -> list[dict[str, str]]:
     """
     Discover ~/.<dir>/wallet.json files from other providers.
 
@@ -73,7 +73,7 @@ def scan_wallets() -> List[Dict[str, str]]:
         for an address derived from the key.
     """
     home = Path.home()
-    results: List[tuple] = []  # (mtime, private_key, address, source)
+    results: list[tuple] = []  # (mtime, private_key, address, source)
 
     try:
         for entry in home.iterdir():
@@ -99,7 +99,7 @@ def scan_wallets() -> List[Dict[str, str]]:
     return [{"private_key": pk, "address": addr, "source": src} for _, pk, addr, src in results]
 
 
-def list_discovered_wallets() -> List[Dict[str, str]]:
+def list_discovered_wallets() -> list[dict[str, str]]:
     """
     List wallets from other applications, safe to show to a user.
 
@@ -172,7 +172,7 @@ def import_wallet(address: str) -> str:
     )
 
 
-def load_wallet() -> Optional[str]:
+def load_wallet() -> str | None:
     """
     Load wallet private key from file.
 
@@ -200,7 +200,7 @@ def load_wallet() -> Optional[str]:
     return None
 
 
-def get_or_create_wallet() -> Tuple[str, str, bool]:
+def get_or_create_wallet() -> tuple[str, str, bool]:
     """
     Get existing wallet or create new one.
 
@@ -235,7 +235,7 @@ def get_or_create_wallet() -> Tuple[str, str, bool]:
     return address, key, True
 
 
-def get_wallet_address() -> Optional[str]:
+def get_wallet_address() -> str | None:
     """
     Get wallet address without exposing private key.
 
@@ -299,8 +299,9 @@ def generate_wallet_qr_ascii(address: str) -> str:
 
     # Generate new QR
     try:
-        import qrcode
         from io import StringIO
+
+        import qrcode
 
         qr = qrcode.QRCode(
             version=1,
@@ -328,7 +329,7 @@ def generate_wallet_qr_ascii(address: str) -> str:
         return f"[QR code requires 'qrcode' package: pip install qrcode[pil]]\nAddress: {address}"
 
 
-def save_wallet_qr(address: str, path: Optional[str] = None, with_logo: bool = True) -> str:
+def save_wallet_qr(address: str, path: str | None = None, with_logo: bool = True) -> str:
     """
     Save QR code as PNG image (EIP-681 format with optional Base logo).
 
@@ -341,10 +342,11 @@ def save_wallet_qr(address: str, path: Optional[str] = None, with_logo: bool = T
         Path to saved QR image
     """
     try:
+        import io
+        import urllib.request
+
         import qrcode
         from PIL import Image
-        import urllib.request
-        import io
 
         # Use EIP-681 format for MetaMask compatibility
         eip681_uri = get_eip681_uri(address)
@@ -404,8 +406,8 @@ def open_wallet_qr(address: str) -> str:
     Returns:
         Path to saved QR image
     """
-    import subprocess
     import platform
+    import subprocess
 
     qr_path = save_wallet_qr(address)
     if qr_path:
@@ -443,7 +445,7 @@ def get_payment_links(address: str) -> dict:
     }
 
 
-def format_wallet_migration_notice(new_address: str) -> Optional[str]:
+def format_wallet_migration_notice(new_address: str) -> str | None:
     """
     Warn when a new wallet was created while other provider wallets exist.
 
@@ -606,7 +608,7 @@ def format_funding_message_compact(address: str) -> str:
 Check my balance: {links['basescan']}"""
 
 
-def setup_agent_wallet(silent: bool = False) -> "LLMClient":
+def setup_agent_wallet(silent: bool = False) -> LLMClient:
     """
     Set up wallet for agent use and return an LLMClient.
 

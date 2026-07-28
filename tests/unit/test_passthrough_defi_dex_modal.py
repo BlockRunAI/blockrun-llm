@@ -1,6 +1,7 @@
 """Unit tests for the DefiLlama / 0x DEX / Modal passthrough methods."""
 
 import os
+
 import pytest
 
 from blockrun_llm import LLMClient

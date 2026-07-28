@@ -1,8 +1,10 @@
 """Unit tests for SolanaLLMClient."""
 
-import pytest
 import os
-from blockrun_llm.solana_client import SolanaLLMClient, AsyncSolanaLLMClient
+
+import pytest
+
+from blockrun_llm.solana_client import AsyncSolanaLLMClient, SolanaLLMClient
 
 TEST_BS58_KEY = (
     "433C7KFcM4y1ZEVdZYSH7wheSNAM384UcbgXEyD5FV7Q2HsQ1BwjEDx4GbBZUqPkZTVhFPyLyuZnzK8wCeAkU7wG"

@@ -1,13 +1,16 @@
 """Unit tests for LLMClient."""
 
-import pytest
 from unittest.mock import Mock, patch
-from blockrun_llm import LLMClient, APIError
+
+import pytest
+
+from blockrun_llm import APIError, LLMClient
+
 from ..helpers import (
     TEST_PRIVATE_KEY,
+    MockResponse,
     build_error_response,
     build_models_response,
-    MockResponse,
 )
 
 

@@ -1,6 +1,7 @@
 """Type definitions for BlockRun LLM SDK."""
 
-from typing import List, Optional, Literal, Dict, Any, Union
+from typing import Any, Dict, List, Literal, Optional, Union
+
 from pydantic import BaseModel
 
 
@@ -307,8 +308,6 @@ class PaymentRequired(BaseModel):
 
 class BlockrunError(Exception):
     """Base exception for BlockRun SDK."""
-
-    pass
 
 
 class PaymentError(BlockrunError):
@@ -717,7 +716,7 @@ class PriceBar(BaseModel):
     t: Optional[int] = None  # Bar open time (unix seconds)
     o: Optional[float] = None
     h: Optional[float] = None
-    l: Optional[float] = None  # noqa: E741 — Pyth bar field name
+    l: Optional[float] = None
     c: Optional[float] = None
     v: Optional[float] = None
 

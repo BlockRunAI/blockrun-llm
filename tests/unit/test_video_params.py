@@ -1,6 +1,7 @@
 """Unit tests for VideoClient.generate() parameter validation and body construction."""
 
 import os
+
 import pytest
 
 from blockrun_llm import VideoClient

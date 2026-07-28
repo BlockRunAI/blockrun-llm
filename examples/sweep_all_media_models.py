@@ -23,15 +23,14 @@ import json
 import sys
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 
 from blockrun_llm import ImageClient, LLMClient, MusicClient
 from blockrun_llm.types import APIError, PaymentError
 
-
-IMAGE_TARGETS: List[Dict[str, Any]] = [
+IMAGE_TARGETS: list[dict[str, Any]] = [
     # Each entry: model_id + size override if model has a constrained set.
     {"model": "google/nano-banana", "size": "1024x1024"},
     {"model": "google/nano-banana-pro", "size": "1024x1024"},
@@ -43,7 +42,7 @@ IMAGE_TARGETS: List[Dict[str, Any]] = [
     {"model": "xai/grok-imagine-image-pro", "size": "1024x1024"},
 ]
 
-MUSIC_TARGETS: List[str] = [
+MUSIC_TARGETS: list[str] = [
     "minimax/music-2.5+",
     "minimax/music-2.5",
 ]
@@ -59,8 +58,8 @@ class ProbeResult:
     status: str  # ok / http_error / timeout / payment_error / unexpected
     latency_ms: int
     cost_delta_usd: float = 0.0
-    artifact_url: Optional[str] = None  # first asset URL/data preview
-    error_message: Optional[str] = None
+    artifact_url: str | None = None  # first asset URL/data preview
+    error_message: str | None = None
     timestamp: float = field(default_factory=time.time)
 
 
@@ -95,8 +94,8 @@ def preview_url(url: str, max_len: int = 60) -> str:
 
 def probe_image(
     client: ImageClient,
-    target: Dict[str, Any],
-    pricing: Dict[str, float],
+    target: dict[str, Any],
+    pricing: dict[str, float],
 ) -> ProbeResult:
     model_id = target["model"]
     t0 = time.monotonic()
@@ -153,7 +152,7 @@ def probe_image(
 def probe_music(
     client: MusicClient,
     model_id: str,
-    pricing: Dict[str, float],
+    pricing: dict[str, float],
 ) -> ProbeResult:
     t0 = time.monotonic()
     try:
@@ -236,8 +235,8 @@ def preflight() -> tuple:
     # Image + music pricing both come from /v1/models filtered by category;
     # the legacy /v1/images/models endpoint currently returns 404 server-side
     # (2026-05-09), so don't rely on it.
-    image_pricing: Dict[str, float] = {}
-    music_pricing: Dict[str, float] = {}
+    image_pricing: dict[str, float] = {}
+    music_pricing: dict[str, float] = {}
     try:
         for m in llm.list_models():
             mid = m.get("id", "")
@@ -262,13 +261,13 @@ def preflight() -> tuple:
 
 def run_image_sweep(
     client: ImageClient,
-    pricing: Dict[str, float],
+    pricing: dict[str, float],
     args: argparse.Namespace,
     spent_so_far: float = 0.0,
-) -> List[ProbeResult]:
+) -> list[ProbeResult]:
     print(f">>> Image sweep ({len(IMAGE_TARGETS)} models)")
     print()
-    results: List[ProbeResult] = []
+    results: list[ProbeResult] = []
     n = len(IMAGE_TARGETS)
     warned = False
     spent = spent_so_far
@@ -306,14 +305,14 @@ def run_image_sweep(
 
 
 def run_music_sweep(
-    pricing: Dict[str, float],
+    pricing: dict[str, float],
     args: argparse.Namespace,
     spent_so_far: float = 0.0,
-) -> List[ProbeResult]:
+) -> list[ProbeResult]:
     print(f">>> Music sweep ({len(MUSIC_TARGETS)} models)")
     print()
     client = MusicClient()
-    results: List[ProbeResult] = []
+    results: list[ProbeResult] = []
     n = len(MUSIC_TARGETS)
     spent = spent_so_far
     for i, model_id in enumerate(MUSIC_TARGETS, start=1):
@@ -347,7 +346,7 @@ def run_music_sweep(
 
 
 def report(
-    results: List[ProbeResult],
+    results: list[ProbeResult],
     started_at: float,
     args: argparse.Namespace,
     initial_balance: float,
@@ -365,7 +364,7 @@ def report(
 
     print()
     print(">>> Modality summary")
-    by_mod: Dict[str, List[ProbeResult]] = {}
+    by_mod: dict[str, list[ProbeResult]] = {}
     for r in results:
         by_mod.setdefault(r.modality, []).append(r)
     for modality in sorted(by_mod):
@@ -421,7 +420,7 @@ def main() -> int:
     started_at = time.monotonic()
     image_client, image_pricing, music_pricing, initial_balance = preflight()
 
-    results: List[ProbeResult] = []
+    results: list[ProbeResult] = []
     spent = 0.0
     if not args.skip_image:
         image_results = run_image_sweep(image_client, image_pricing, args, spent)

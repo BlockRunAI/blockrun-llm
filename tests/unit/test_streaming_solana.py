@@ -11,7 +11,6 @@ payload — this isolates the SSE/retry logic from the cryptography.
 from __future__ import annotations
 
 import json
-from typing import List
 
 import httpx
 import pytest
@@ -23,14 +22,13 @@ pytest.importorskip("solders")
 from blockrun_llm import SolanaLLMClient
 from blockrun_llm.types import APIError, PaymentError
 
-
 # ---------------------------------------------------------------------------
 # Helpers — synthetic SSE bodies (same shape Base tests use)
 # ---------------------------------------------------------------------------
 
 
-def _sse_events(deltas: List[str], finish: str = "stop", model: str = "test/model") -> bytes:
-    lines: List[str] = []
+def _sse_events(deltas: list[str], finish: str = "stop", model: str = "test/model") -> bytes:
+    lines: list[str] = []
     lines.append(
         "data: "
         + json.dumps(
@@ -82,7 +80,7 @@ def solana_client():
     """Build a SolanaLLMClient without going through the x402 SDK signer
     init (which needs real keys + an RPC). We monkey-patch the signer
     after construction by replacing the x402_client with a fake."""
-    import unittest.mock as mock
+    from unittest import mock
 
     with (
         mock.patch("blockrun_llm.solana_client.register_exact_svm_client"),
@@ -123,7 +121,7 @@ def _patch_sse_helpers(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _free_transport(sse_body: bytes, calls: List[httpx.Request]) -> httpx.MockTransport:
+def _free_transport(sse_body: bytes, calls: list[httpx.Request]) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse_body)
@@ -131,7 +129,7 @@ def _free_transport(sse_body: bytes, calls: List[httpx.Request]) -> httpx.MockTr
     return httpx.MockTransport(handler)
 
 
-def _paid_transport(sse_body: bytes, calls: List[httpx.Request]) -> httpx.MockTransport:
+def _paid_transport(sse_body: bytes, calls: list[httpx.Request]) -> httpx.MockTransport:
     """First call → 402; second call (with PAYMENT-SIGNATURE) → 200 SSE."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -151,7 +149,7 @@ def _paid_transport(sse_body: bytes, calls: List[httpx.Request]) -> httpx.MockTr
 
 
 def _flaky_transport(
-    sse_body: bytes, fail_count: int, calls: List[httpx.Request], status: int = 503
+    sse_body: bytes, fail_count: int, calls: list[httpx.Request], status: int = 503
 ) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
@@ -169,7 +167,7 @@ def _flaky_transport(
 
 class TestSolanaStreaming:
     def test_free_model_streams_directly(self, solana_client, monkeypatch):
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         solana_client._client = httpx.Client(
             transport=_free_transport(_sse_events(["Hello", " world"]), calls)
         )
@@ -188,7 +186,7 @@ class TestSolanaStreaming:
 
     def test_paid_model_signs_and_retries(self, solana_client, monkeypatch):
         _patch_sse_helpers(monkeypatch)
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         solana_client._client = httpx.Client(
             transport=_paid_transport(_sse_events(["Paid"]), calls)
         )
@@ -210,7 +208,7 @@ class TestSolanaStreaming:
 
     def test_retries_5xx_with_backoff(self, solana_client, monkeypatch):
         monkeypatch.setattr("time.sleep", lambda _s: None)
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
         solana_client._client = httpx.Client(
             transport=_flaky_transport(_sse_events(["OK"]), fail_count=2, calls=calls)
         )
@@ -227,7 +225,7 @@ class TestSolanaStreaming:
 
     def test_raises_after_exhausting_retries(self, solana_client, monkeypatch):
         monkeypatch.setattr("time.sleep", lambda _s: None)
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             calls.append(request)
@@ -248,7 +246,7 @@ class TestSolanaStreaming:
     def test_fallback_models_walks_chain(self, solana_client, monkeypatch):
         _patch_sse_helpers(monkeypatch)
         monkeypatch.setattr("time.sleep", lambda _s: None)
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             calls.append(request)
@@ -277,7 +275,7 @@ class TestSolanaStreaming:
     def test_payment_rejected_raises_payment_error(self, solana_client, monkeypatch):
         _patch_sse_helpers(monkeypatch)
         monkeypatch.setattr("time.sleep", lambda _s: None)
-        calls: List[httpx.Request] = []
+        calls: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             calls.append(request)

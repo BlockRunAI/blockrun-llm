@@ -2,9 +2,12 @@
 Test utilities and mock builders for BlockRun LLM SDK tests.
 """
 
-import json
+from __future__ import annotations
+
 import base64
-from typing import Dict, Any, Optional
+import json
+from typing import Any
+
 from eth_account import Account
 
 # Test private key (DO NOT use in production)
@@ -23,7 +26,7 @@ def build_payment_required_response(
     amount: str = "1000000",
     recipient: str = TEST_RECIPIENT,
     network: str = "eip155:8453",
-    resource: Optional[Dict[str, str]] = None,
+    resource: dict[str, str] | None = None,
 ) -> str:
     """Build a mock 402 Payment Required response."""
     payment_required = {
@@ -54,7 +57,7 @@ def build_chat_response(
     model: str = "gpt-5.2",
     prompt_tokens: int = 10,
     completion_tokens: int = 20,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build a mock successful chat response."""
     return {
         "id": "chatcmpl-test123",
@@ -80,7 +83,7 @@ def build_error_response(
     error: str = "Test error message",
     code: str = "test_error",
     include_sensitive: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build a mock error response."""
     response = {"error": error, "code": code}
 
@@ -97,7 +100,7 @@ def build_error_response(
     return response
 
 
-def build_models_response() -> Dict[str, Any]:
+def build_models_response() -> dict[str, Any]:
     """Build a mock models list response."""
     return {
         "data": [
@@ -132,16 +135,16 @@ class MockResponse:
     def __init__(
         self,
         status_code: int,
-        json_data: Optional[Dict[str, Any]] = None,
-        text_data: Optional[str] = None,
-        headers: Optional[Dict[str, str]] = None,
+        json_data: dict[str, Any] | None = None,
+        text_data: str | None = None,
+        headers: dict[str, str] | None = None,
     ):
         self.status_code = status_code
         self._json_data = json_data
         self._text_data = text_data or (json.dumps(json_data) if json_data else "")
         self.headers = headers or {}
 
-    def json(self) -> Dict[str, Any]:
+    def json(self) -> dict[str, Any]:
         if self._json_data is None:
             raise ValueError("No JSON data available")
         return self._json_data

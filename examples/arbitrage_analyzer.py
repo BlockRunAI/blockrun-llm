@@ -13,7 +13,8 @@ Usage:
 """
 
 from dataclasses import dataclass
-from blockrun_llm import LLMClient, AsyncLLMClient, PaymentError, APIError
+
+from blockrun_llm import APIError, AsyncLLMClient, LLMClient, PaymentError
 
 
 @dataclass

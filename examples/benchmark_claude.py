@@ -43,7 +43,7 @@ import statistics
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 SOLANA_API_URL = "https://sol.blockrun.ai/api"
 BASE_API_URL = "https://blockrun.ai/api"
@@ -55,7 +55,7 @@ DEFAULT_PROMPT = (
 )
 
 
-def _percentile(values: List[float], pct: float) -> float:
+def _percentile(values: list[float], pct: float) -> float:
     """Nearest-rank percentile (pct in [0,100]). Empty → nan."""
     if not values:
         return float("nan")
@@ -85,8 +85,8 @@ def _count_tokens(text: str, model_hint: str = "") -> int:
 @dataclass
 class ReqResult:
     ok: bool
-    ttft: Optional[float] = None  # seconds to first content token
-    latency: Optional[float] = None  # seconds request → last token
+    ttft: float | None = None  # seconds to first content token
+    latency: float | None = None  # seconds request → last token
     out_tokens: int = 0
     error: str = ""
 
@@ -100,8 +100,8 @@ class Bench:
     concurrency: int
     prompt: str
     max_tokens: int
-    private_key: Optional[str] = None
-    results: List[ReqResult] = field(default_factory=list)
+    private_key: str | None = None
+    results: list[ReqResult] = field(default_factory=list)
 
     def _client(self):
         if self.chain == "solana":
@@ -122,8 +122,8 @@ class Bench:
     def _one_streaming(self, client) -> ReqResult:
         messages = [{"role": "user", "content": self.prompt}]
         start = time.perf_counter()
-        ttft: Optional[float] = None
-        text_parts: List[str] = []
+        ttft: float | None = None
+        text_parts: list[str] = []
         try:
             for chunk in client.chat_completion_stream(
                 model=self.model, messages=messages, max_tokens=self.max_tokens
@@ -139,7 +139,7 @@ class Bench:
             latency = time.perf_counter() - start
             out = _count_tokens("".join(text_parts), self.model)
             return ReqResult(ok=True, ttft=ttft, latency=latency, out_tokens=out)
-        except Exception as exc:  # noqa: BLE001 - benchmark records, never crashes
+        except Exception as exc:
             return ReqResult(ok=False, error=f"{type(exc).__name__}: {exc}")
 
     def run_throughput_phase(self) -> float:
@@ -180,7 +180,7 @@ class Bench:
         usage = getattr(resp, "usage", None)
         if usage is None:
             return 0.0
-        u: Dict[str, Any] = (
+        u: dict[str, Any] = (
             usage.model_dump(exclude_none=True) if hasattr(usage, "model_dump") else dict(usage)
         )
         prompt_tokens = u.get("prompt_tokens") or 0
@@ -198,7 +198,7 @@ class Bench:
             return 100.0 * cached / prompt_tokens
         return 0.0
 
-    def report(self, wall: float, cache_hit: Optional[float]) -> None:
+    def report(self, wall: float, cache_hit: float | None) -> None:
         ok = [r for r in self.results if r.ok]
         ttfts = [r.ttft for r in ok if r.ttft is not None]
         lats = [r.latency for r in ok if r.latency is not None]
@@ -209,7 +209,7 @@ class Bench:
         succ = 100.0 * len(ok) / self.requests if self.requests else 0.0
 
         def fmt(x: float) -> str:
-            return "nan" if x != x else f"{x:.3f}"  # x!=x → NaN
+            return "nan" if x != x else f"{x:.3f}"  # noqa: PLR0124 — x!=x is the NaN test
 
         print("\n" + "=" * 56)
         print(f" Claude E2E benchmark — {self.model}  ({self.chain})")
@@ -280,7 +280,7 @@ def main() -> None:
         print("[benchmark] cache probe (2 non-streaming calls) …")
         try:
             cache_hit = bench.cache_probe()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"[benchmark] cache probe failed (→ 0): {type(exc).__name__}: {exc}")
             cache_hit = 0.0
     bench.report(wall, cache_hit)

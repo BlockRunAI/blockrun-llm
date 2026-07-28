@@ -13,8 +13,6 @@ spins instantly.
 
 from __future__ import annotations
 
-from typing import List
-
 import httpx
 import pytest
 
@@ -47,7 +45,7 @@ def test_image_generate_polls_to_completion_on_202(monkeypatch: pytest.MonkeyPat
     status=completed, then return the image."""
     monkeypatch.setattr(ImageClient, "IMAGE_POLL_INTERVAL_SECONDS", 0.0)
 
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
     poll_state = {"count": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -210,7 +208,7 @@ def test_image_generate_fast_path_unchanged(monkeypatch: pytest.MonkeyPatch) -> 
     identically — the poll path is only entered on 202."""
     monkeypatch.setattr(ImageClient, "IMAGE_POLL_INTERVAL_SECONDS", 0.0)
 
-    calls: List[httpx.Request] = []
+    calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)

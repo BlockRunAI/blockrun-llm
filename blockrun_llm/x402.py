@@ -5,14 +5,16 @@ This module handles creating signed payment payloads for the x402 v2 protocol.
 The private key is used ONLY for local signing and NEVER leaves the client.
 """
 
-import json
-import time
+from __future__ import annotations
+
 import base64
+import json
 import secrets
-from typing import Dict, Any, Optional
+import time
+from typing import Any
+
 from eth_account import Account
 from eth_account.messages import encode_typed_data
-
 
 # Chain and token constants for mainnet
 BASE_CHAIN_ID = 8453
@@ -30,15 +32,15 @@ BLOCKRUN_SERVICE_CODE = "blockrun"
 
 
 def with_builder_code_service_code(
-    extensions: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+    extensions: dict[str, Any] | None,
+) -> dict[str, Any]:
     """Merge BlockRun's service code (``s``) into the payload's ``builder-code``
     extension, preserving any app code (``a``) the server echoed back in its 402.
 
     The CDP facilitator reads ``builder-code.info.s`` and encodes it into the
     settlement calldata suffix — no CBOR/encoding happens client-side.
     """
-    merged: Dict[str, Any] = dict(extensions or {})
+    merged: dict[str, Any] = dict(extensions or {})
     existing = dict(merged.get("builder-code") or {})
     info = dict(existing.get("info") or {})
     info["s"] = [BLOCKRUN_SERVICE_CODE]
@@ -93,9 +95,9 @@ def create_payment_payload(
     resource_url: str = "https://blockrun.ai/api/v1/chat/completions",
     resource_description: str = "BlockRun AI API call",
     max_timeout_seconds: int = 300,
-    extra: Optional[Dict[str, str]] = None,
-    extensions: Optional[Dict[str, Any]] = None,
-    asset: Optional[str] = None,
+    extra: dict[str, str] | None = None,
+    extensions: dict[str, Any] | None = None,
+    asset: str | None = None,
 ) -> str:
     """
     Create a signed x402 v2 payment payload.
@@ -205,7 +207,7 @@ def create_payment_payload(
     return base64.b64encode(json.dumps(payment_data).encode()).decode()
 
 
-def parse_payment_required(header_value: str) -> Dict[str, Any]:
+def parse_payment_required(header_value: str) -> dict[str, Any]:
     """
     Parse the X-Payment-Required header from a 402 response.
 
@@ -223,7 +225,7 @@ def parse_payment_required(header_value: str) -> Dict[str, Any]:
         raise ValueError("Failed to parse payment required header: invalid format")
 
 
-def extract_payment_details(payment_required: Dict[str, Any]) -> Dict[str, Any]:
+def extract_payment_details(payment_required: dict[str, Any]) -> dict[str, Any]:
     """
     Extract payment details from parsed payment required response.
 
