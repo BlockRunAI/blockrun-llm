@@ -49,13 +49,16 @@ def create_solana_wallet() -> dict[str, str]:
 
 def solana_key_to_bytes(private_key: str) -> bytes:
     """
-    Convert a bs58 private key string to bytes (64 bytes).
+    Convert a Solana private key string to bytes (64 bytes).
 
-    Accepts both 64-byte full keypairs and 32-byte seeds (from agentcash
-    and other providers). 32-byte seeds are automatically expanded.
+    Accepts a bs58-encoded 64-byte keypair (standard Solana format), a
+    bs58-encoded 32-byte seed from other providers (automatically expanded),
+    the Solana CLI JSON byte-array format (``~/.config/solana/id.json``), or
+    a 64-byte hex string with or without ``0x``. A 32-byte hex key is
+    rejected with an explicit hint that it is the EVM (Base) wallet format.
 
     Args:
-        private_key: bs58-encoded Solana secret key (32 or 64 bytes)
+        private_key: Solana secret key in any accepted encoding
 
     Returns:
         64-byte secret key as bytes
@@ -63,11 +66,46 @@ def solana_key_to_bytes(private_key: str) -> bytes:
     Raises:
         ValueError: If key is invalid
     """
+    key = private_key.strip()
+
+    # Solana CLI JSON array format: [12,34,...] with 64 (or 32) byte values
+    if key.startswith("["):
+        try:
+            parsed = json.loads(key)
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                "Invalid Solana private key: looks like a JSON byte array "
+                "but is not valid JSON"
+            ) from e
+        if not isinstance(parsed, list) or not all(
+            isinstance(n, int) and 0 <= n <= 255 for n in parsed
+        ):
+            raise ValueError(
+                "Invalid Solana private key: JSON array must contain only "
+                "byte values (0-255)"
+            )
+        if len(parsed) not in (32, 64):
+            raise ValueError(
+                f"Invalid Solana key length: expected 32 or 64 bytes, got {len(parsed)}"
+            )
+        return _expand_key_bytes(bytes(parsed))
+
+    # Hex forms. bs58 keys are 86-88 chars, so 64/128 hex chars are unambiguous.
+    hex_body = key[2:] if key[:2] in ("0x", "0X") else key
+    if len(hex_body) in (64, 128) and all(c in "0123456789abcdefABCDEF" for c in hex_body):
+        if len(hex_body) == 64:
+            raise ValueError(
+                "Invalid Solana private key: this is a 32-byte hex key — the "
+                "EVM (Base) wallet format, not a Solana key. Solana keys are "
+                "64 bytes, usually base58-encoded (86-88 characters)."
+            )
+        return _expand_key_bytes(bytes.fromhex(hex_body))
+
     try:
         from solders.keypair import Keypair  # type: ignore
 
         try:
-            kp = Keypair.from_base58_string(private_key)
+            kp = Keypair.from_base58_string(key)
             decoded = bytes(kp)
             if len(decoded) == 64:
                 return decoded
@@ -77,13 +115,9 @@ def solana_key_to_bytes(private_key: str) -> bytes:
         # Fallback: try as 32-byte seed
         import base58 as b58
 
-        decoded = b58.b58decode(private_key)
-        if len(decoded) == 32:
-            kp = Keypair.from_seed(decoded)
-            return bytes(kp)
-        elif len(decoded) == 64:
-            kp = Keypair.from_seed(decoded[:32])
-            return bytes(kp)
+        decoded = b58.b58decode(key)
+        if len(decoded) in (32, 64):
+            return _expand_key_bytes(decoded)
 
         raise ValueError(f"Expected 32 or 64 bytes, got {len(decoded)}")
     except Exception as e:
@@ -92,7 +126,21 @@ def solana_key_to_bytes(private_key: str) -> bytes:
         # ``except ValueError: raise`` here used to leak base58's raw
         # "Invalid character" error past the wrapper, breaking callers (and
         # the test) that match on "Invalid Solana private key".
-        raise ValueError(f"Invalid Solana private key: {e}") from e
+        raise ValueError(
+            f"Invalid Solana private key: {e}. Expected a base58-encoded "
+            "64-byte key (standard Solana format), a 64-byte hex string, or "
+            "a Solana CLI JSON byte array."
+        ) from e
+
+
+def _expand_key_bytes(decoded: bytes) -> bytes:
+    """Expand a 32-byte seed (or normalize a 64-byte keypair) to 64 bytes."""
+    _require_solders()
+    from solders.keypair import Keypair  # type: ignore
+
+    if len(decoded) == 32:
+        return bytes(Keypair.from_seed(decoded))
+    return bytes(Keypair.from_seed(decoded[:32]))
 
 
 def get_solana_public_key(private_key: str) -> str:
@@ -275,6 +323,14 @@ def load_solana_wallet() -> str | None:
     return None
 
 
+def _public_key_from(private_key: str, source: str) -> str:
+    """Derive the public key, attributing failures to where the key was loaded from."""
+    try:
+        return get_solana_public_key(private_key)
+    except ValueError as e:
+        raise ValueError(f"{e} (key loaded from {source})") from e
+
+
 def get_or_create_solana_wallet() -> dict[str, object]:
     """
     Get existing Solana wallet or create new one.
@@ -290,7 +346,11 @@ def get_or_create_solana_wallet() -> dict[str, object]:
     # 1. Environment variable
     env_key = os.environ.get("SOLANA_WALLET_KEY")
     if env_key:
-        return {"private_key": env_key, "address": get_solana_public_key(env_key), "is_new": False}
+        return {
+            "private_key": env_key,
+            "address": _public_key_from(env_key, "the SOLANA_WALLET_KEY environment variable"),
+            "is_new": False,
+        }
 
     # 2. Canonical BlockRun session file. scan_solana_wallets() is exposed
     # only for an explicit migration flow.
@@ -299,7 +359,7 @@ def get_or_create_solana_wallet() -> dict[str, object]:
         if file_key:
             return {
                 "private_key": file_key,
-                "address": get_solana_public_key(file_key),
+                "address": _public_key_from(file_key, str(SOLANA_WALLET_FILE)),
                 "is_new": False,
             }
 
