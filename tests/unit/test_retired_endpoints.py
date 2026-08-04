@@ -19,21 +19,27 @@ def _bare(cls):
     return cls.__new__(cls)
 
 
-@pytest.mark.parametrize("method,args", [
-    ("pm_markets", ()),
-    ("pm_listings", ()),
-    ("pm_outcome", ("PXM-12345",)),
-])
+@pytest.mark.parametrize(
+    "method,args",
+    [
+        ("pm_markets", ()),
+        ("pm_listings", ()),
+        ("pm_outcome", ("PXM-12345",)),
+    ],
+)
 def test_sync_helpers_raise(method, args):
     with pytest.raises(RetiredEndpointError, match="2026-07-20"):
         getattr(_bare(LLMClient), method)(*args)
 
 
-@pytest.mark.parametrize("method,args", [
-    ("pm_markets", ()),
-    ("pm_listings", ()),
-    ("pm_outcome", ("PXM-12345",)),
-])
+@pytest.mark.parametrize(
+    "method,args",
+    [
+        ("pm_markets", ()),
+        ("pm_listings", ()),
+        ("pm_outcome", ("PXM-12345",)),
+    ],
+)
 @pytest.mark.asyncio
 async def test_async_helpers_raise(method, args):
     # An async def raises on await, not on call — but still before any network
@@ -50,6 +56,4 @@ def test_message_points_at_the_replacement():
 
 def test_surviving_helper_is_untouched():
     # markets/search survived the sunset (422 on a missing q, i.e. alive).
-    assert not isinstance(
-        getattr(LLMClient, "pm_wallet_identity", None), type(None)
-    )
+    assert not isinstance(getattr(LLMClient, "pm_wallet_identity", None), type(None))
