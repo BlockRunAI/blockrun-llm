@@ -132,6 +132,7 @@ from .types import (
     RealFaceList,
     RealFaceListItem,
     RealFaceStatus,
+    RetiredEndpointError,
     # Smart routing types
     RoutingDecision,
     RpcError,
@@ -230,6 +231,7 @@ __all__ = [
     "RealFaceList",
     "RealFaceListItem",
     "RealFaceStatus",
+    "RetiredEndpointError",
     # Smart routing types
     "RoutingDecision",
     "RpcClient",
