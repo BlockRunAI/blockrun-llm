@@ -116,6 +116,7 @@ from .types import (
     MusicResponse,
     NewsSearchSource,
     PaymentError,
+    RetiredEndpointError,
     # Virtual Portrait types
     PortraitEnrollment,
     PortraitList,
@@ -212,6 +213,7 @@ __all__ = [
     "MusicResponse",
     "NewsSearchSource",
     "PaymentError",
+    "RetiredEndpointError",
     "PhoneClient",
     "PortraitClient",
     "PortraitEnrollment",

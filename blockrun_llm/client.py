@@ -64,6 +64,7 @@ from .types import (
     ChatResponse,
     ImageResponse,
     PaymentError,
+    RetiredEndpointError,
     RoutingDecision,
     RoutingProfile,
     SearchResult,
@@ -1904,22 +1905,55 @@ class LLMClient:
     # All accept arbitrary keyword filters that are forwarded as query params.
 
     def pm_markets(self, **params: Any) -> dict[str, Any]:
-        """List canonical cross-venue markets (Predexon v2).
+        """RETIRED — ``/v1/pm/markets`` no longer exists.
 
-        Filter with venue=, status=, category=, league=, event_id=,
-        pagination_key=. Tier 1 ($0.001/call).
+        Predexon sunset market matching on 2026-07-20 and the whole
+        canonical layer went with it, so this path returns 410 upstream.
+        Use ``pm("markets/search", q=...)`` for cross-venue lookups.
+
+        Kept as a raising stub rather than deleted so upgrading does not
+        break imports or attribute access; calling it fails immediately
+        instead of after a paid round trip.
+
+        :raises RetiredEndpointError: always.
         """
-        return self.pm("markets", **params)
+        raise RetiredEndpointError(
+            "/v1/pm/markets was sunset by Predexon on 2026-07-20 (upstream 410). Use pm('markets/search', q=...) for cross-venue lookups."
+        )
 
     def pm_listings(self, **params: Any) -> dict[str, Any]:
-        """List venue-native executable listings flattened across canonical
-        markets (Predexon v2). Tier 1 ($0.001/call)."""
-        return self.pm("markets/listings", **params)
+        """RETIRED — ``/v1/pm/markets/listings`` no longer exists.
+
+        Predexon sunset market matching on 2026-07-20 and the whole
+        canonical layer went with it, so this path returns 410 upstream.
+        Use ``pm("markets/search", q=...)`` for cross-venue lookups.
+
+        Kept as a raising stub rather than deleted so upgrading does not
+        break imports or attribute access; calling it fails immediately
+        instead of after a paid round trip.
+
+        :raises RetiredEndpointError: always.
+        """
+        raise RetiredEndpointError(
+            "/v1/pm/markets/listings was sunset by Predexon on 2026-07-20 (upstream 410). Use pm('markets/search', q=...) for cross-venue lookups."
+        )
 
     def pm_outcome(self, predexon_id: str) -> dict[str, Any]:
-        """Resolve a canonical Predexon outcome ID to its market context and
-        venue listings (Predexon v2). Tier 1 ($0.001/call)."""
-        return self.pm(f"outcomes/{predexon_id}")
+        """RETIRED — ``/v1/pm/outcomes/{predexon_id}`` no longer exists.
+
+        Predexon sunset market matching on 2026-07-20 and the whole
+        canonical layer went with it, so this path returns 410 upstream.
+        Use ``pm("markets/search", q=...)`` for cross-venue lookups.
+
+        Kept as a raising stub rather than deleted so upgrading does not
+        break imports or attribute access; calling it fails immediately
+        instead of after a paid round trip.
+
+        :raises RetiredEndpointError: always.
+        """
+        raise RetiredEndpointError(
+            "/v1/pm/outcomes/{predexon_id} was sunset by Predexon on 2026-07-20 (upstream 410). Use pm('markets/search', q=...) for cross-venue lookups."
+        )
 
     def pm_polymarket_markets(self, **params: Any) -> dict[str, Any]:
         """List Polymarket markets (Predexon v2). Tier 1 ($0.001/call).
@@ -1971,12 +2005,24 @@ class LLMClient:
         return self.pm("limitless/markets", **params)
 
     def pm_sports_categories(self) -> dict[str, Any]:
-        """List available sports categories. Tier 1 ($0.001/call)."""
+        """List available sports categories. Tier 1 ($0.001/call).
+
+        .. warning::
+           Upstream is returning 500 for every ``sports/*`` path as of
+           2026-08-04. The route still resolves, so this keeps working the
+           moment Predexon restores it, but do not build on it yet.
+        """
         return self.pm("sports/categories")
 
     def pm_sports_markets(self, **params: Any) -> dict[str, Any]:
         """List sports markets grouped by game. Filter with league=,
-        sport_type=, status=, venue=. Tier 1 ($0.001/call)."""
+        sport_type=, status=, venue=. Tier 1 ($0.001/call).
+
+        .. warning::
+           Upstream is returning 500 for every ``sports/*`` path as of
+           2026-08-04. The route still resolves, so this keeps working the
+           moment Predexon restores it, but do not build on it yet.
+        """
         return self.pm("sports/markets", **params)
 
     def pm_wallet_identity(self, wallet: str) -> dict[str, Any]:
@@ -3364,16 +3410,55 @@ class AsyncLLMClient:
         return await self._request_with_payment_raw(f"/v1/pm/{path}", query)
 
     async def pm_markets(self, **params: Any) -> dict[str, Any]:
-        """List canonical cross-venue markets (Predexon v2). Tier 1 ($0.001/call)."""
-        return await self.pm("markets", **params)
+        """RETIRED — ``/v1/pm/markets`` no longer exists.
+
+        Predexon sunset market matching on 2026-07-20 and the whole
+        canonical layer went with it, so this path returns 410 upstream.
+        Use ``pm("markets/search", q=...)`` for cross-venue lookups.
+
+        Kept as a raising stub rather than deleted so upgrading does not
+        break imports or attribute access; it raises before any network
+        I/O, so you never pay a round trip to learn it is gone.
+
+        :raises RetiredEndpointError: always.
+        """
+        raise RetiredEndpointError(
+            "/v1/pm/markets was sunset by Predexon on 2026-07-20 (upstream 410). Use pm('markets/search', q=...) for cross-venue lookups."
+        )
 
     async def pm_listings(self, **params: Any) -> dict[str, Any]:
-        """List venue-native executable listings (Predexon v2). Tier 1 ($0.001/call)."""
-        return await self.pm("markets/listings", **params)
+        """RETIRED — ``/v1/pm/markets/listings`` no longer exists.
+
+        Predexon sunset market matching on 2026-07-20 and the whole
+        canonical layer went with it, so this path returns 410 upstream.
+        Use ``pm("markets/search", q=...)`` for cross-venue lookups.
+
+        Kept as a raising stub rather than deleted so upgrading does not
+        break imports or attribute access; it raises before any network
+        I/O, so you never pay a round trip to learn it is gone.
+
+        :raises RetiredEndpointError: always.
+        """
+        raise RetiredEndpointError(
+            "/v1/pm/markets/listings was sunset by Predexon on 2026-07-20 (upstream 410). Use pm('markets/search', q=...) for cross-venue lookups."
+        )
 
     async def pm_outcome(self, predexon_id: str) -> dict[str, Any]:
-        """Resolve a canonical Predexon outcome ID (Predexon v2). Tier 1 ($0.001/call)."""
-        return await self.pm(f"outcomes/{predexon_id}")
+        """RETIRED — ``/v1/pm/outcomes/{predexon_id}`` no longer exists.
+
+        Predexon sunset market matching on 2026-07-20 and the whole
+        canonical layer went with it, so this path returns 410 upstream.
+        Use ``pm("markets/search", q=...)`` for cross-venue lookups.
+
+        Kept as a raising stub rather than deleted so upgrading does not
+        break imports or attribute access; it raises before any network
+        I/O, so you never pay a round trip to learn it is gone.
+
+        :raises RetiredEndpointError: always.
+        """
+        raise RetiredEndpointError(
+            "/v1/pm/outcomes/{predexon_id} was sunset by Predexon on 2026-07-20 (upstream 410). Use pm('markets/search', q=...) for cross-venue lookups."
+        )
 
     async def pm_polymarket_markets(self, **params: Any) -> dict[str, Any]:
         """List Polymarket markets (Predexon v2). Tier 1 ($0.001/call)."""
@@ -3413,11 +3498,23 @@ class AsyncLLMClient:
         return await self.pm("limitless/markets", **params)
 
     async def pm_sports_categories(self) -> dict[str, Any]:
-        """List available sports categories. Tier 1 ($0.001/call)."""
+        """List available sports categories. Tier 1 ($0.001/call).
+
+        .. warning::
+           Upstream is returning 500 for every ``sports/*`` path as of
+           2026-08-04. The route still resolves, so this keeps working the
+           moment Predexon restores it, but do not build on it yet.
+        """
         return await self.pm("sports/categories")
 
     async def pm_sports_markets(self, **params: Any) -> dict[str, Any]:
-        """List sports markets grouped by game. Tier 1 ($0.001/call)."""
+        """List sports markets grouped by game. Tier 1 ($0.001/call).
+
+        .. warning::
+           Upstream is returning 500 for every ``sports/*`` path as of
+           2026-08-04. The route still resolves, so this keeps working the
+           moment Predexon restores it, but do not build on it yet.
+        """
         return await self.pm("sports/markets", **params)
 
     async def pm_wallet_identity(self, wallet: str) -> dict[str, Any]:

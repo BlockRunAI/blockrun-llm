@@ -310,6 +310,15 @@ class BlockrunError(Exception):
     """Base exception for BlockRun SDK."""
 
 
+class RetiredEndpointError(BlockrunError):
+    """Raised by a helper whose upstream endpoint no longer exists.
+
+    Kept as a raising method rather than deleted so upgrading does not break
+    imports or attribute access — the failure is explicit and immediate instead
+    of a paid round trip that returns 410/404.
+    """
+
+
 class PaymentError(BlockrunError):
     """Payment-related error.
 
