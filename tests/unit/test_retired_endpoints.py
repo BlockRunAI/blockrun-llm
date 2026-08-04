@@ -56,4 +56,4 @@ def test_message_points_at_the_replacement():
 
 def test_surviving_helper_is_untouched():
     # markets/search survived the sunset (422 on a missing q, i.e. alive).
-    assert not isinstance(getattr(LLMClient, "pm_wallet_identity", None), type(None))
+    assert not (getattr(LLMClient, "pm_wallet_identity", None) is None)

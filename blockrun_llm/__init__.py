@@ -116,7 +116,6 @@ from .types import (
     MusicResponse,
     NewsSearchSource,
     PaymentError,
-    RetiredEndpointError,
     # Virtual Portrait types
     PortraitEnrollment,
     PortraitList,
@@ -133,6 +132,7 @@ from .types import (
     RealFaceList,
     RealFaceListItem,
     RealFaceStatus,
+    RetiredEndpointError,
     # Smart routing types
     RoutingDecision,
     RpcError,
@@ -213,7 +213,6 @@ __all__ = [
     "MusicResponse",
     "NewsSearchSource",
     "PaymentError",
-    "RetiredEndpointError",
     "PhoneClient",
     "PortraitClient",
     "PortraitEnrollment",
@@ -232,6 +231,7 @@ __all__ = [
     "RealFaceList",
     "RealFaceListItem",
     "RealFaceStatus",
+    "RetiredEndpointError",
     # Smart routing types
     "RoutingDecision",
     "RpcClient",
