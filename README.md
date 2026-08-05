@@ -145,7 +145,7 @@ print(result.model)  # 'deepseek/deepseek-reasoner'
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier — smart-routes across <!-- br:models.free -->8<!-- /br:models.free --> models (DeepSeek V4 Pro/Flash, Nemotron Nano Omni, Qwen3, GLM-4.7, Llama 4, Mistral) | Zero-cost testing, dev, prod |
+| `free` | NVIDIA free tier — smart-routes across <!-- br:models.free -->6<!-- /br:models.free --> models (DeepSeek V4 Pro/Flash, Nemotron Nano Omni, Qwen3, GLM-4.7, Llama 4, Mistral) | Zero-cost testing, dev, prod |
 | `eco` | Cheapest models per tier (DeepSeek, NVIDIA) | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
 | `premium` | Top-tier models (OpenAI, Anthropic) | Quality-critical tasks |
