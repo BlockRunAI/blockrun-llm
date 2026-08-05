@@ -88,6 +88,18 @@ class ChatUsage(BaseModel):
     # headers are sent. Reads are cheaper; writes incur a one-time surcharge.
     cache_read_input_tokens: Optional[int] = None
     cache_creation_input_tokens: Optional[int] = None
+    # Provider-native token detail. reasoning_tokens is a subset of
+    # completion_tokens and must not be added again when calculating spend.
+    prompt_tokens_details: Optional[Dict[str, Any]] = None
+    completion_tokens_details: Optional[Dict[str, Any]] = None
+
+    @property
+    def reasoning_tokens(self) -> Optional[int]:
+        """Return the upstream reasoning-token breakdown when available."""
+        if not self.completion_tokens_details:
+            return None
+        value = self.completion_tokens_details.get("reasoning_tokens")
+        return value if isinstance(value, int) and value >= 0 else None
 
     class Config:
         extra = "allow"
