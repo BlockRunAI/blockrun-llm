@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # Tool calling types (OpenAI compatible)
@@ -118,6 +118,7 @@ class ChatResponse(BaseModel):
     # returned an X-PAYMENT-RESPONSE header.
     cost_usd: Optional[float] = None
     settlement: Optional[Dict[str, Any]] = None
+    routing: Optional[Dict[str, Any]] = None
 
     class Config:
         extra = "allow"
@@ -659,7 +660,7 @@ class ChatResponseWithCost(BaseModel):
         return self.spending_report.cost_usd
 
 
-# Smart routing types (ClawRouter integration)
+# Smart routing types (BlockRun Router Core V3 integration)
 RoutingProfile = Literal["free", "eco", "auto", "premium"]
 RoutingTier = Literal["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
 
@@ -670,12 +671,17 @@ class RoutingDecision(BaseModel):
     model: str
     tier: RoutingTier
     confidence: float
-    method: Literal["rules"]
+    method: Literal["rules", "portfolio"]
     reasoning: str
     cost_estimate: float
     baseline_cost: float
     savings: float  # 0-1 percentage
-    fallbacks: List[str] = []  # remaining models in tier order, for runtime fallback
+    profile: str = "auto"
+    task_type: str = "chat"
+    router_version: str = "legacy"
+    candidates: List[str] = Field(default_factory=list)
+    candidate_scores: List[Dict[str, Any]] = Field(default_factory=list)
+    fallbacks: List[str] = Field(default_factory=list)
 
 
 class SmartChatResponse(BaseModel):

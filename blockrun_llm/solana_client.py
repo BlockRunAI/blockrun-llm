@@ -33,9 +33,11 @@ from typing_extensions import Self
 # "already paid, do not retry on another model" tag has to mean the same thing
 # in both fallback chains. client.py does not import this module, so there is
 # no cycle.
-from .client import _SETTLED_ATTR, _enforce_spend_limits, _mark_settled
+from .client import _SETTLED_ATTR, _enforce_spend_limits, _mark_settled, _should_fallback
 from .price import Category, Market, Resolution, Session
 from .realface import _GROUP_ID_RE
+from .router_v3 import message_routing_inputs, routing_profile_for_model
+from .router_v3 import route as route_request
 from .solana_wallet import get_solana_public_key
 from .tx_log import (
     TransactionLogger,
@@ -60,8 +62,11 @@ from .types import (
     RealFaceList,
     RealFaceStatus,
     RetiredEndpointError,
+    RoutingDecision,
+    RoutingProfile,
     RpcResponse,
     SearchResult,
+    SmartChatResponse,
     SpeechResponse,
     SymbolListResponse,
     VideoResponse,
@@ -386,7 +391,7 @@ def _safe_path_segment(value: str, field: str) -> str:
     """Return ``value`` if it is a single safe URL path segment, else raise."""
     if not value or not _SAFE_PATH_SEGMENT_RE.match(value):
         raise ValueError(
-            f"{field} must contain only letters, digits, '.', '_' or '-' " f"(got {value!r})"
+            f"{field} must contain only letters, digits, '.', '_' or '-' (got {value!r})"
         )
     return value
 
@@ -539,6 +544,7 @@ class SolanaLLMClient:
         self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
         self._session_calls = 0
         self._last_call_cost: float = 0.0
+        self._model_pricing_cache: dict[str, dict[str, float]] | None = None
         self._address: str | None = None
 
         log_dir = _resolve_log_dir(transaction_log)
@@ -561,7 +567,7 @@ class SolanaLLMClient:
             # front: turn a malformed key (incl. one auto-loaded from disk) into
             # a clean error instead of a raw base58/solders exception.
             raise ValueError(
-                "Invalid Solana private key (expected a base58-encoded keypair " "or 32-byte seed)."
+                "Invalid Solana private key (expected a base58-encoded keypair or 32-byte seed)."
             ) from e
         _register_svm_with_headers(self._x402_client, signer, resolved_url, resolved_headers)
         # x402ClientSync is NOT thread-safe: concurrent payment signing on one
@@ -666,6 +672,106 @@ class SolanaLLMClient:
         except Exception:
             pass
 
+    def _get_model_pricing(self) -> dict[str, dict[str, float]]:
+        if self._model_pricing_cache is not None:
+            return self._model_pricing_cache
+        pricing: dict[str, dict[str, float]] = {}
+        for model in self.list_models():
+            block = model.get("pricing") or {}
+            model_id = model.get("id", "")
+            pricing[model_id] = {
+                "input_price": float(block.get("input", model.get("inputPrice", 0)) or 0),
+                "output_price": float(block.get("output", model.get("outputPrice", 0)) or 0),
+                "flat_price": float(block.get("flat", model.get("flatPrice", 0)) or 0),
+            }
+        self._model_pricing_cache = pricing
+        return pricing
+
+    def route(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        routing_profile: RoutingProfile = "auto",
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        has_vision: bool = False,
+    ) -> RoutingDecision:
+        decision = route_request(
+            prompt=prompt,
+            system_prompt=system,
+            max_output_tokens=max_tokens,
+            model_pricing=self._get_model_pricing(),
+            routing_profile=routing_profile,
+            tools=tools,
+            tool_choice=tool_choice,
+            requires_structured_output=response_format is not None,
+            has_vision=has_vision,
+            minimum_payment_usd=0.001,
+        )
+        return RoutingDecision(**decision)
+
+    def smart_chat(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: float | None = None,
+        routing_profile: RoutingProfile = "auto",
+    ) -> SmartChatResponse:
+        decision = self.route(
+            prompt, system=system, max_tokens=max_tokens, routing_profile=routing_profile
+        )
+        response = self.chat(
+            decision.model,
+            prompt,
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            fallback_models=decision.fallbacks,
+        )
+        return SmartChatResponse(response=response, model=decision.model, routing=decision)
+
+    def smart_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        routing_profile: RoutingProfile = "auto",
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> ChatResponse:
+        prompt, system, has_vision = message_routing_inputs(messages)
+        decision = self.route(
+            prompt,
+            system=system,
+            max_tokens=max_tokens,
+            routing_profile=routing_profile,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            has_vision=has_vision,
+        )
+        response = self.chat_completion(
+            decision.model,
+            messages,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            fallback_models=decision.fallbacks,
+            **kwargs,
+        )
+        response.routing = (
+            decision.model_dump() if hasattr(decision, "model_dump") else decision.dict()
+        )
+        return response
+
     def chat(
         self,
         model: str,
@@ -677,6 +783,7 @@ class SolanaLLMClient:
         timeout: float | None = None,
         response_format: dict[str, Any] | None = None,
         stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
     ) -> str:
         """Simple 1-line chat."""
         messages: list[dict[str, str]] = []
@@ -692,6 +799,7 @@ class SolanaLLMClient:
             timeout=timeout,
             response_format=response_format,
             stop=stop,
+            fallback_models=fallback_models,
         )
         return result.choices[0].message.content or ""
 
@@ -709,6 +817,7 @@ class SolanaLLMClient:
         timeout: float | None = None,
         response_format: dict[str, Any] | None = None,
         stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
     ) -> ChatResponse:
         """Full chat completion (OpenAI-compatible).
 
@@ -721,6 +830,24 @@ class SolanaLLMClient:
         client's chat baseline, ``DEFAULT_CHAT_TIMEOUT``). Raise it for
         large ``max_tokens`` runs against slow models.
         """
+        routing_decision: RoutingDecision | None = None
+        alias_profile = routing_profile_for_model(model)
+        if alias_profile is not None:
+            prompt, system, has_vision = message_routing_inputs(messages)
+            routing_decision = self.route(
+                prompt,
+                system=system,
+                max_tokens=max_tokens,
+                routing_profile=alias_profile,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                has_vision=has_vision,
+            )
+            model = routing_decision.model
+            if fallback_models is None:
+                fallback_models = routing_decision.fallbacks
+
         validate_max_tokens(max_tokens)
         body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
@@ -739,7 +866,25 @@ class SolanaLLMClient:
             body["response_format"] = response_format
         if stop is not None:
             body["stop"] = stop
-        return self._request_with_payment("/v1/chat/completions", body, timeout=timeout)
+        attempts = [model, *(fallback_models or [])]
+        last_exc: Exception | None = None
+        for attempt_model in attempts:
+            body["model"] = attempt_model
+            try:
+                response = self._request_with_payment("/v1/chat/completions", body, timeout=timeout)
+                if routing_decision is not None:
+                    response.routing = (
+                        routing_decision.model_dump()
+                        if hasattr(routing_decision, "model_dump")
+                        else routing_decision.dict()
+                    )
+                return response
+            except Exception as exc:
+                if not _should_fallback(exc):
+                    raise
+                last_exc = exc
+        assert last_exc is not None
+        raise last_exc
 
     def close(self) -> None:
         """Close the HTTP client."""
@@ -822,6 +967,23 @@ class SolanaLLMClient:
         Note: ``search_parameters`` is rejected by the BlockRun gateway in
         stream mode (HTTP 400). Codex / GPT-5.4-Pro also can't stream.
         """
+        alias_profile = routing_profile_for_model(model)
+        if alias_profile is not None:
+            prompt, system, has_vision = message_routing_inputs(messages)
+            decision = self.route(
+                prompt,
+                system=system,
+                max_tokens=max_tokens,
+                routing_profile=alias_profile,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                has_vision=has_vision,
+            )
+            model = decision.model
+            if fallback_models is None:
+                fallback_models = decision.fallbacks
+
         validate_max_tokens(max_tokens)
         body: dict[str, Any] = {
             "model": model,
@@ -2926,6 +3088,7 @@ class AsyncSolanaLLMClient:
         self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
         self._session_calls = 0
         self._last_call_cost: float = 0.0
+        self._model_pricing_cache: dict[str, dict[str, float]] | None = None
         self._address: str | None = None
 
         log_dir = _resolve_log_dir(transaction_log)
@@ -2950,7 +3113,7 @@ class AsyncSolanaLLMClient:
             # front: turn a malformed key (incl. one auto-loaded from disk) into
             # a clean error instead of a raw base58/solders exception.
             raise ValueError(
-                "Invalid Solana private key (expected a base58-encoded keypair " "or 32-byte seed)."
+                "Invalid Solana private key (expected a base58-encoded keypair or 32-byte seed)."
             ) from e
         _register_svm_with_headers(self._x402_client, signer, resolved_url, resolved_headers)
         # Lazily created on first sign (avoids binding asyncio.Lock to a loop at
@@ -3052,6 +3215,107 @@ class AsyncSolanaLLMClient:
     # Non-streaming chat
     # ------------------------------------------------------------------
 
+    async def _get_model_pricing(self) -> dict[str, dict[str, float]]:
+        if self._model_pricing_cache is not None:
+            return self._model_pricing_cache
+        models = await self.list_models()
+        pricing: dict[str, dict[str, float]] = {}
+        for model in models:
+            block = model.get("pricing") or {}
+            model_id = model.get("id", "")
+            pricing[model_id] = {
+                "input_price": float(block.get("input", model.get("inputPrice", 0)) or 0),
+                "output_price": float(block.get("output", model.get("outputPrice", 0)) or 0),
+                "flat_price": float(block.get("flat", model.get("flatPrice", 0)) or 0),
+            }
+        self._model_pricing_cache = pricing
+        return pricing
+
+    async def route(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        routing_profile: RoutingProfile = "auto",
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        has_vision: bool = False,
+    ) -> RoutingDecision:
+        decision = route_request(
+            prompt=prompt,
+            system_prompt=system,
+            max_output_tokens=max_tokens,
+            model_pricing=await self._get_model_pricing(),
+            routing_profile=routing_profile,
+            tools=tools,
+            tool_choice=tool_choice,
+            requires_structured_output=response_format is not None,
+            has_vision=has_vision,
+            minimum_payment_usd=0.001,
+        )
+        return RoutingDecision(**decision)
+
+    async def smart_chat(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        temperature: float | None = None,
+        routing_profile: RoutingProfile = "auto",
+    ) -> SmartChatResponse:
+        decision = await self.route(
+            prompt, system=system, max_tokens=max_tokens, routing_profile=routing_profile
+        )
+        response = await self.chat(
+            decision.model,
+            prompt,
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            fallback_models=decision.fallbacks,
+        )
+        return SmartChatResponse(response=response, model=decision.model, routing=decision)
+
+    async def smart_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+        routing_profile: RoutingProfile = "auto",
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> ChatResponse:
+        prompt, system, has_vision = message_routing_inputs(messages)
+        decision = await self.route(
+            prompt,
+            system=system,
+            max_tokens=max_tokens,
+            routing_profile=routing_profile,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            has_vision=has_vision,
+        )
+        response = await self.chat_completion(
+            decision.model,
+            messages,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            fallback_models=decision.fallbacks,
+            **kwargs,
+        )
+        response.routing = (
+            decision.model_dump() if hasattr(decision, "model_dump") else decision.dict()
+        )
+        return response
+
     async def chat(
         self,
         model: str,
@@ -3063,6 +3327,7 @@ class AsyncSolanaLLMClient:
         timeout: float | None = None,
         response_format: dict[str, Any] | None = None,
         stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
     ) -> str:
         messages: list[dict[str, str]] = []
         if system:
@@ -3077,6 +3342,7 @@ class AsyncSolanaLLMClient:
             timeout=timeout,
             response_format=response_format,
             stop=stop,
+            fallback_models=fallback_models,
         )
         return result.choices[0].message.content or ""
 
@@ -3094,7 +3360,26 @@ class AsyncSolanaLLMClient:
         timeout: float | None = None,
         response_format: dict[str, Any] | None = None,
         stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
     ) -> ChatResponse:
+        routing_decision: RoutingDecision | None = None
+        alias_profile = routing_profile_for_model(model)
+        if alias_profile is not None:
+            prompt, system, has_vision = message_routing_inputs(messages)
+            routing_decision = await self.route(
+                prompt,
+                system=system,
+                max_tokens=max_tokens,
+                routing_profile=alias_profile,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                has_vision=has_vision,
+            )
+            model = routing_decision.model
+            if fallback_models is None:
+                fallback_models = routing_decision.fallbacks
+
         validate_max_tokens(max_tokens)
         body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
@@ -3113,7 +3398,27 @@ class AsyncSolanaLLMClient:
             body["response_format"] = response_format
         if stop is not None:
             body["stop"] = stop
-        return await self._request_with_payment("/v1/chat/completions", body, timeout=timeout)
+        attempts = [model, *(fallback_models or [])]
+        last_exc: Exception | None = None
+        for attempt_model in attempts:
+            body["model"] = attempt_model
+            try:
+                response = await self._request_with_payment(
+                    "/v1/chat/completions", body, timeout=timeout
+                )
+                if routing_decision is not None:
+                    response.routing = (
+                        routing_decision.model_dump()
+                        if hasattr(routing_decision, "model_dump")
+                        else routing_decision.dict()
+                    )
+                return response
+            except Exception as exc:
+                if not _should_fallback(exc):
+                    raise
+                last_exc = exc
+        assert last_exc is not None
+        raise last_exc
 
     async def list_models(self) -> list[dict[str, Any]]:
         resp = await self._client.get(f"{self._api_url}/v1/models")
@@ -3144,6 +3449,23 @@ class AsyncSolanaLLMClient:
         """Async streaming. Same protocol semantics as the sync
         :meth:`SolanaLLMClient.chat_completion_stream`; only the iteration
         protocol differs (``async for``)."""
+        alias_profile = routing_profile_for_model(model)
+        if alias_profile is not None:
+            prompt, system, has_vision = message_routing_inputs(messages)
+            decision = await self.route(
+                prompt,
+                system=system,
+                max_tokens=max_tokens,
+                routing_profile=alias_profile,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                has_vision=has_vision,
+            )
+            model = decision.model
+            if fallback_models is None:
+                fallback_models = decision.fallbacks
+
         validate_max_tokens(max_tokens)
         body: dict[str, Any] = {
             "model": model,

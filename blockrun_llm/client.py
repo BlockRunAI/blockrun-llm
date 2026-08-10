@@ -50,7 +50,8 @@ import httpx
 from dotenv import load_dotenv
 from eth_account import Account
 
-from .router import route as route_request
+from .router_v3 import message_routing_inputs, routing_profile_for_model
+from .router_v3 import route as route_request
 from .tx_log import (
     TransactionLogger,
     _resolve_log_dir,
@@ -516,8 +517,9 @@ class LLMClient:
         """
         Smart chat with automatic model routing.
 
-        Routes requests to the cheapest capable model using ClawRouter's
-        14-dimension rule-based scoring algorithm (<1ms, 100% local).
+        Routes requests locally with BlockRun Router Core V3. Hard capability
+        constraints run first, then eligible models are portfolio-ranked for
+        quality, task affinity, price, speed, and reliability.
 
         Args:
             prompt: User message
@@ -556,6 +558,7 @@ class LLMClient:
             max_output_tokens=max_output_tokens,
             model_pricing=model_pricing,
             routing_profile=routing_profile,
+            minimum_payment_usd=0.002,
         )
 
         # Make the chat request with selected model. Pass the tier's remaining
@@ -575,6 +578,73 @@ class LLMClient:
             model=decision["model"],
             routing=RoutingDecision(**decision),
         )
+
+    def route(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        routing_profile: RoutingProfile = "auto",
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        has_vision: bool = False,
+    ) -> RoutingDecision:
+        """Return a local Router V3 decision without spending or inference."""
+
+        decision = route_request(
+            prompt=prompt,
+            system_prompt=system,
+            max_output_tokens=max_tokens or self.DEFAULT_MAX_TOKENS,
+            model_pricing=self._get_model_pricing(),
+            routing_profile=routing_profile,
+            tools=tools,
+            tool_choice=tool_choice,
+            requires_structured_output=response_format is not None,
+            has_vision=has_vision,
+            minimum_payment_usd=0.002,
+        )
+        return RoutingDecision(**decision)
+
+    def smart_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+        routing_profile: RoutingProfile = "auto",
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> ChatResponse:
+        """Route and execute an OpenAI-compatible agent/tool turn."""
+
+        prompt, system, has_vision = message_routing_inputs(messages)
+        decision = self.route(
+            prompt,
+            system=system,
+            max_tokens=max_tokens,
+            routing_profile=routing_profile,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            has_vision=has_vision,
+        )
+        response = self.chat_completion(
+            decision.model,
+            messages,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            fallback_models=decision.fallbacks,
+            **kwargs,
+        )
+        response.routing = (
+            decision.model_dump() if hasattr(decision, "model_dump") else decision.dict()
+        )
+        return response
 
     def get_spending(self) -> dict[str, Any]:
         """
@@ -744,6 +814,24 @@ class LLMClient:
                 for tc in result.choices[0].message.tool_calls:
                     print(f"Call: {tc.function.name}({tc.function.arguments})")
         """
+        routing_decision: RoutingDecision | None = None
+        alias_profile = routing_profile_for_model(model)
+        if alias_profile is not None:
+            prompt, system, has_vision = message_routing_inputs(messages)
+            routing_decision = self.route(
+                prompt,
+                system=system,
+                max_tokens=max_tokens,
+                routing_profile=alias_profile,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                has_vision=has_vision,
+            )
+            model = routing_decision.model
+            if fallback_models is None:
+                fallback_models = routing_decision.fallbacks
+
         # Validate inputs
         validate_model(model)
         validate_max_tokens(max_tokens)
@@ -795,7 +883,14 @@ class LLMClient:
         for i, attempt_model in enumerate(attempts):
             body["model"] = attempt_model
             try:
-                return self._request_with_payment("/v1/chat/completions", body)
+                response = self._request_with_payment("/v1/chat/completions", body)
+                if routing_decision is not None:
+                    response.routing = (
+                        routing_decision.model_dump()
+                        if hasattr(routing_decision, "model_dump")
+                        else routing_decision.dict()
+                    )
+                return response
             except Exception as exc:
                 if not _should_fallback(exc):
                     raise
@@ -869,6 +964,23 @@ class LLMClient:
         mode by the BlockRun backend — the server will reject with 400.
         Codex / GPT-5.4 Pro also do not support streaming.
         """
+        alias_profile = routing_profile_for_model(model)
+        if alias_profile is not None:
+            prompt, system, has_vision = message_routing_inputs(messages)
+            decision = self.route(
+                prompt,
+                system=system,
+                max_tokens=max_tokens,
+                routing_profile=alias_profile,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                has_vision=has_vision,
+            )
+            model = decision.model
+            if fallback_models is None:
+                fallback_models = decision.fallbacks
+
         validate_model(model)
         validate_max_tokens(max_tokens)
         validate_temperature(temperature)
@@ -2362,9 +2474,9 @@ class LLMClient:
         else:
             usdc_contract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
             rpcs = [
-                "https://base.publicnode.com",
+                "https://base-rpc.publicnode.com",
                 "https://mainnet.base.org",
-                "https://base.meowrpc.com",
+                "https://base.llamarpc.com",
             ]
 
         # balanceOf(address) function selector
@@ -2493,6 +2605,7 @@ class AsyncLLMClient:
             limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
         )
         self._last_call_cost: float = 0.0
+        self._model_pricing_cache: dict[str, dict[str, float]] | None = None
         # This client tracks no session total (see chat_completion), so the
         # session limit has nothing to accumulate against; the per-call limit
         # still applies. Kept as an attribute so the shared check is uniform.
@@ -2517,6 +2630,108 @@ class AsyncLLMClient:
         settlement = decode_settlement_header(header)
         self._last_settlement = settlement
         return settlement
+
+    async def _get_model_pricing(self) -> dict[str, dict[str, float]]:
+        if self._model_pricing_cache is not None:
+            return self._model_pricing_cache
+        response = await self._client.get(f"{self.api_url}/v1/models")
+        response.raise_for_status()
+        pricing: dict[str, dict[str, float]] = {}
+        for model in response.json().get("data", []):
+            block = model.get("pricing") or {}
+            model_id = model.get("id", "")
+            pricing[model_id] = {
+                "input_price": float(block.get("input", model.get("inputPrice", 0)) or 0),
+                "output_price": float(block.get("output", model.get("outputPrice", 0)) or 0),
+                "flat_price": float(block.get("flat", model.get("flatPrice", 0)) or 0),
+            }
+        self._model_pricing_cache = pricing
+        return pricing
+
+    async def route(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        routing_profile: RoutingProfile = "auto",
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        has_vision: bool = False,
+    ) -> RoutingDecision:
+        decision = route_request(
+            prompt=prompt,
+            system_prompt=system,
+            max_output_tokens=max_tokens or self.DEFAULT_MAX_TOKENS,
+            model_pricing=await self._get_model_pricing(),
+            routing_profile=routing_profile,
+            tools=tools,
+            tool_choice=tool_choice,
+            requires_structured_output=response_format is not None,
+            has_vision=has_vision,
+            minimum_payment_usd=0.002,
+        )
+        return RoutingDecision(**decision)
+
+    async def smart_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+        routing_profile: RoutingProfile = "auto",
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> ChatResponse:
+        prompt, system, has_vision = message_routing_inputs(messages)
+        decision = await self.route(
+            prompt,
+            system=system,
+            max_tokens=max_tokens,
+            routing_profile=routing_profile,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            has_vision=has_vision,
+        )
+        response = await self.chat_completion(
+            decision.model,
+            messages,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            fallback_models=decision.fallbacks,
+            **kwargs,
+        )
+        response.routing = (
+            decision.model_dump() if hasattr(decision, "model_dump") else decision.dict()
+        )
+        return response
+
+    async def smart_chat(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        routing_profile: RoutingProfile = "auto",
+    ) -> SmartChatResponse:
+        decision = await self.route(
+            prompt, system=system, max_tokens=max_tokens, routing_profile=routing_profile
+        )
+        response = await self.chat(
+            decision.model,
+            prompt,
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            fallback_models=decision.fallbacks,
+        )
+        return SmartChatResponse(response=response, model=decision.model, routing=decision)
 
     async def chat(
         self,
@@ -2574,6 +2789,24 @@ class AsyncLLMClient:
         **extra: Any,
     ) -> ChatResponse:
         """Async full chat completion interface with optional xAI Live Search and tool calling."""
+        routing_decision: RoutingDecision | None = None
+        alias_profile = routing_profile_for_model(model)
+        if alias_profile is not None:
+            prompt, system, has_vision = message_routing_inputs(messages)
+            routing_decision = await self.route(
+                prompt,
+                system=system,
+                max_tokens=max_tokens,
+                routing_profile=alias_profile,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                has_vision=has_vision,
+            )
+            model = routing_decision.model
+            if fallback_models is None:
+                fallback_models = routing_decision.fallbacks
+
         # Validate inputs
         validate_model(model)
         validate_max_tokens(max_tokens)
@@ -2622,7 +2855,14 @@ class AsyncLLMClient:
         for i, attempt_model in enumerate(attempts):
             body["model"] = attempt_model
             try:
-                return await self._request_with_payment("/v1/chat/completions", body)
+                response = await self._request_with_payment("/v1/chat/completions", body)
+                if routing_decision is not None:
+                    response.routing = (
+                        routing_decision.model_dump()
+                        if hasattr(routing_decision, "model_dump")
+                        else routing_decision.dict()
+                    )
+                return response
             except Exception as exc:
                 if not _should_fallback(exc):
                     raise
@@ -2662,6 +2902,23 @@ class AsyncLLMClient:
         for protocol details and the ``fallback_models`` semantics —
         identical here, only the iteration protocol differs (``async for``).
         """
+        alias_profile = routing_profile_for_model(model)
+        if alias_profile is not None:
+            prompt, system, has_vision = message_routing_inputs(messages)
+            decision = await self.route(
+                prompt,
+                system=system,
+                max_tokens=max_tokens,
+                routing_profile=alias_profile,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                has_vision=has_vision,
+            )
+            model = decision.model
+            if fallback_models is None:
+                fallback_models = decision.fallbacks
+
         validate_model(model)
         validate_max_tokens(max_tokens)
         validate_temperature(temperature)

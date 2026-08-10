@@ -2,6 +2,24 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## Unreleased
+
+### Added — Router Core V3 across Base and Solana
+
+- Added a native Python adapter pinned to Router Core commit `d430804`, with
+  constraint-first task classification, portfolio ranking, live-catalog
+  filtering, and ordered transient fallbacks.
+- Base and Solana, sync and async, now expose `route()`, `smart_chat()`, and
+  `smart_chat_completion()`.
+- `blockrun/auto`, `blockrun/eco`, and `blockrun/premium` work anywhere a chat
+  model id is accepted, including tool/agent and streaming requests. Routing is
+  local and completes before the first x402 quote.
+
+### Fixed
+
+- Base balance lookup now uses the valid PublicNode Base RPC hostname and a
+  working public fallback.
+
 ## 1.10.0 — 2026-07-28
 
 ### Added

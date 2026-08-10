@@ -121,7 +121,7 @@ export SOLANA_WALLET_KEY="your-bs58-solana-key"
 > what to switch to instead of failing with a cryptic "must be 66 characters"
 > error.
 
-## Smart Routing (ClawRouter)
+## Smart Routing (Router Core V3)
 
 Let the SDK automatically pick the cheapest capable model for each request:
 
@@ -139,6 +139,15 @@ print(f"Saved {result.routing.savings * 100:.0f}%")  # 'Saved 94%'
 # Complex reasoning task -> routes to reasoning model
 result = client.smart_chat("Prove the Riemann hypothesis step by step")
 print(result.model)  # 'deepseek/deepseek-reasoner'
+
+# Use Auto as a normal model id for an OpenAI-compatible agent/tool turn.
+response = client.chat_completion(
+    "blockrun/auto",
+    messages,
+    tools=tools,
+    tool_choice="auto",
+)
+print(response.routing["task_type"])
 ```
 
 ### Routing Profiles
@@ -161,7 +170,9 @@ print(result.model)  # 'openai/gpt-5.4'
 
 ### How It Works
 
-ClawRouter uses a 14-dimension rule-based classifier to analyze each request:
+The bundled Router Core V3 adapter first applies hard capability constraints,
+then ranks eligible models using task affinity, quality, token-normalized cost,
+speed, and reliability. It uses request text and tool metadata only:
 
 - **Token count** - Short vs long prompts
 - **Code presence** - Programming keywords
@@ -170,7 +181,9 @@ ClawRouter uses a 14-dimension rule-based classifier to analyze each request:
 - **Creative markers** - Story, poem, brainstorm, etc.
 - **Agentic patterns** - Multi-step, tool use indicators
 
-The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
+Routing is deterministic and 100% local: there is no classifier model call and
+no additional x402 payment. The same engine is used by Base and Solana, sync
+and async. It routes to one of four capability tiers:
 
 | Tier | Example Tasks | Auto Profile Model |
 |------|---------------|-------------------|
@@ -400,8 +413,8 @@ model fails. Useful before a release or after router/catalog changes.
 
 `smart_chat()` and `chat()` accept an optional `fallback_models=[...]` list —
 on timeout / 5xx / network error the SDK transparently walks the chain
-before raising. `smart_chat()` populates this from the tier's fallback list
-automatically.
+before raising. Router V3 populates this from its live-catalog-filtered
+portfolio order automatically and never advances after a settled payment.
 
 ### Image Generation
 
@@ -1675,8 +1688,8 @@ blockrun-llm is a Python SDK that provides pay-per-request access to 43+ large l
 ### How does payment work?
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
 
-### What is smart routing / ClawRouter?
-ClawRouter is a built-in smart routing engine that analyzes your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and automatically picks the cheapest model capable of handling it. Routing happens locally in under 1ms. It can save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
+### What is smart routing / Router Core?
+Router Core V3 is the SDK's bundled, product-neutral model picker. It analyzes request and tool metadata, filters models that cannot satisfy hard requirements, and ranks the remaining portfolio locally. Use `smart_chat()`, `smart_chat_completion()`, or `blockrun/auto`; no second model call or separate package is required.
 
 ### How much does it cost?
 Pay only for what you use. Prices start at **FREE** (11 NVIDIA-hosted models). Paid models start at $0.10/M tokens. There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
