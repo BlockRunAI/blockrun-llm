@@ -50,11 +50,11 @@ from blockrun_llm import LLMClient
 client = LLMClient()  # Wallet still required for signing, but $0 charged
 
 # Option 1: call a free model directly
-response = client.chat("nvidia/deepseek-v4-flash", "Explain x402 in 1 sentence")
+response = client.chat("nvidia/step-3.7-flash", "Explain x402 in 1 sentence")
 
 # Option 2: let the smart router pick the best free model per request
 result = client.smart_chat("What is 2+2?", routing_profile="free")
-print(result.model)     # e.g. 'nvidia/deepseek-v4-flash' (cheapest capable for SIMPLE tier)
+print(result.model)     # e.g. 'nvidia/step-3.7-flash' (cheapest capable for SIMPLE tier)
 print(result.response)  # '4'
 ```
 
@@ -62,19 +62,19 @@ print(result.response)  # '4'
 
 | Model ID | Context | Best For |
 |----------|---------|----------|
-| `nvidia/deepseek-v4-flash` | 1M | DeepSeek V4 Flash — 284B / 13B active MoE, ~5× faster than V4 Pro. Best free chat / summarization / light reasoning |
+| `nvidia/step-3.7-flash` | 131K | Fast general-purpose chat + reasoning |
+| `nvidia/mistral-nemotron` | 131K | Fast free Mistral (Mistral × NVIDIA) |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Only vision-capable free model — text + images + video (≤2 min) + audio (≤1 hr) |
-| `nvidia/llama-4-maverick` | 131K | Meta Llama 4 Maverick MoE |
-| `nvidia/qwen3-coder-480b` | 131K | Coding-optimised 480B MoE |
-| `nvidia/mistral-small-4-119b` | 131K | ⚠️ Upstream timing out as of 2026-06-07 — avoid until NVIDIA recovers it |
-| `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models` (so SmartChat won't auto-pick it) but direct calls still work |
+| `nvidia/nemotron-nano-9b-v2` | 131K | Compact fast chat |
+| `nvidia/nemotron-nano-12b-v2-vl` | 131K | Compact vision |
+| `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B — the free workhorse. Hidden from `/v1/models` (so SmartChat won't auto-pick it) but direct calls still work |
 | `nvidia/gpt-oss-20b` | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models` but direct calls still work |
 
 > Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.435/$0.87 — the 75% launch promo became the permanent list price after 2026-05-31) — `nvidia/deepseek-v4-pro` is hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash.
 
 > **Privacy note for `gpt-oss-120b/20b`**: NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement. The models are hidden from `/v1/models` so SmartChat won't auto-route to them, but direct calls still work — use them only when prompts contain no sensitive data.
 
-> **Retired**: `nvidia/qwen3-next-80b-a3b-thinking` hit NVIDIA end-of-life 2026-05-21 (HTTP 410). The gateway auto-redirects pinned callers to `nvidia/llama-4-maverick`.
+> **Retired**: NVIDIA has EOL'd (HTTP 410) most of its early free lineup — the free DeepSeek family (last: `nvidia/deepseek-v4-flash`, 2026-08-12), `llama-4-maverick`, the qwen3 SKUs, free Mistral small/large, and more. The gateway auto-redirects pinned callers to a healthy free model, so old model IDs still return 200.
 
 ## Solana Support
 
@@ -203,7 +203,7 @@ print(link["url"])  # open https://pay.coinbase.com/... to buy USDC on Base
 print(client.get_wallet_address())  # send USDC on Base to this 0x… address
 
 # (c) Skip funding entirely — the free NVIDIA models cost $0
-client.chat("nvidia/deepseek-v4-flash", "Hello!")  # routing_profile="free" also works
+client.chat("nvidia/step-3.7-flash", "Hello!")  # routing_profile="free" also works
 ```
 
 `$5` of USDC covers thousands of paid requests. Check your balance any time:
@@ -314,7 +314,7 @@ thinking modes. V4 Pro is the new flagship paid SKU — 1.6T MoE / 49B active,
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
 | `deepseek/deepseek-v4-pro` | $0.435/M | $0.87/M | 1M | V4 flagship — strongest open-weight reasoner. The 75% launch promo became the permanent list price after 2026-05-31 |
-| `deepseek/deepseek-chat` | $0.20/M | $0.40/M | 1M | V4 Flash non-thinking (paid endpoint with 5MB request bodies; same upstream as `nvidia/deepseek-v4-flash`) |
+| `deepseek/deepseek-chat` | $0.14/M | $0.28/M | 1M | V4 Flash non-thinking (paid endpoint with 5MB request bodies) |
 | `deepseek/deepseek-reasoner` | $0.20/M | $0.40/M | 1M | V4 Flash thinking (same upstream as `deepseek-chat`, thinking enabled by default) |
 
 ### MiniMax
@@ -349,26 +349,22 @@ glm-5 and glm-5-turbo on 2026-06-06) — the whole family now bills per-token.
 
 ### NVIDIA (Free & Hosted)
 
-Free tier refreshed 2026-04-28: added `nvidia/deepseek-v4-flash` (1M context)
-and `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` (vision). `nvidia/gpt-oss-120b`
-and `nvidia/gpt-oss-20b` were briefly delisted over privacy concerns
-(NVIDIA's free build.nvidia.com tier reserves the right to use prompts for
-service improvement) but **re-enabled 2026-04-30 with `available: true` +
-`hidden: true`** — they no longer appear in `/v1/models` (so SmartChat won't
-auto-pick them) but direct calls by full ID still return HTTP 200.
-`nvidia/deepseek-v4-pro`, `nvidia/deepseek-v3.2`, and `nvidia/glm-4.7` are
-hidden because NVIDIA's NIM deployment is hung — backend MODEL_REDIRECTS
-auto-forwards calls to V4 Flash / qwen3-coder. `nvidia/qwen3-next-80b-a3b-thinking`
-hit NVIDIA end-of-life 2026-05-21 (HTTP 410) and is auto-redirected to
-`nvidia/llama-4-maverick`.
+Free tier refreshed 2026-08-12. NVIDIA has retired (HTTP 410 end-of-life)
+the entire free DeepSeek family — `nvidia/deepseek-v4-flash` was the last to
+go — along with `llama-4-maverick`, `qwen3-coder-480b`, the free Mistral
+small/large SKUs, and others. Retired models stay callable by ID: the gateway
+auto-redirects them to a healthy free model, so pinned callers still get a
+200. `nvidia/gpt-oss-120b` and `nvidia/gpt-oss-20b` remain callable by direct
+ID but are hidden from `/v1/models` over the NVIDIA free tier's
+prompt-retention terms (so SmartChat won't auto-pick them). The live list is
+`GET /v1/models` filtered on the free flag.
 
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `nvidia/deepseek-v4-flash` | **FREE** | **FREE** | 1M | DeepSeek V4 Flash — 284B / 13B active MoE, ~5× faster than V4 Pro. Best free chat / summarization |
+| `nvidia/step-3.7-flash` | **FREE** | **FREE** | 131K | Fast general-purpose chat + reasoning |
+| `nvidia/mistral-nemotron` | **FREE** | **FREE** | 131K | Fast free Mistral |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | **FREE** | **FREE** | 256K | First vision-capable free model — RGB images, mp4 video |
-| `nvidia/mistral-small-4-119b` | **FREE** | **FREE** | 131K | ⚠️ Upstream timing out as of 2026-06-07 |
-| `nvidia/llama-4-maverick` | **FREE** | **FREE** | 131K | Meta Llama 4 Maverick MoE |
-| `nvidia/qwen3-coder-480b` | **FREE** | **FREE** | 131K | Coding-optimised 480B MoE |
+| `nvidia/nemotron-nano-9b-v2` | **FREE** | **FREE** | 131K | Compact fast chat |
 | `nvidia/gpt-oss-120b` | **FREE** | **FREE** | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models`; direct calls work |
 | `nvidia/gpt-oss-20b` | **FREE** | **FREE** | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models`; direct calls work |
 | `moonshot/kimi-k2.5` | $0.60/M | $3.00/M | 262K | Kimi K2.5 direct from Moonshot (replaces `nvidia/kimi-k2.5`) |
