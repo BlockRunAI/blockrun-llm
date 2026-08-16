@@ -50,7 +50,7 @@ import httpx
 from dotenv import load_dotenv
 from eth_account import Account
 
-from .router import route as route_request
+from .router_adapter import BASE_MINIMUM_PAYMENT_USD, route_with_catalog
 from .tx_log import (
     TransactionLogger,
     _resolve_log_dir,
@@ -490,6 +490,10 @@ class LLMClient:
         pricing: dict[str, dict[str, float]] = {}
         for model in models:
             model_id = model.get("id", "")
+            # A model the catalog marks unavailable must not win routing — every
+            # smart call to it would fail with a non-transient error.
+            if model.get("available") is False:
+                continue
             block = model.get("pricing") or {}
             input_price = block.get("input", model.get("inputPrice", model.get("input_price", 0)))
             output_price = block.get(
@@ -504,6 +508,38 @@ class LLMClient:
         self._model_pricing_cache = pricing
         return pricing
 
+    def route(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        routing_profile: RoutingProfile = "auto",
+        requires_structured_output: bool = False,
+    ) -> RoutingDecision:
+        """
+        Inspect a routing decision without making or paying for a model call.
+
+        The first invocation may fetch the public model catalog for current
+        prices; routing itself is local and costs nothing.
+
+        Example:
+            decision = client.route("Prove the Riemann hypothesis")
+            print(decision.model)       # 'deepseek/deepseek-v4-pro'
+            print(decision.task_type)   # 'reasoning'
+            print(decision.candidates)  # ordered fallback chain
+        """
+        decision = route_with_catalog(
+            prompt,
+            system,
+            max_tokens or self.DEFAULT_MAX_TOKENS,
+            self._get_model_pricing(),
+            routing_profile=routing_profile,
+            requires_structured_output=requires_structured_output,
+            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+        )
+        return RoutingDecision(**decision)
+
     def smart_chat(
         self,
         prompt: str,
@@ -516,8 +552,12 @@ class LLMClient:
         """
         Smart chat with automatic model routing.
 
-        Routes requests to the cheapest capable model using ClawRouter's
-        14-dimension rule-based scoring algorithm (<1ms, 100% local).
+        Uses BlockRun's product-neutral Router Core portfolio strategy — the
+        same engine the TypeScript SDK and the gateway run. It classifies the
+        task shape locally (<1ms, no extra model call), enforces capability
+        constraints as hard filters, and ranks an ordered candidate portfolio:
+        the cheapest model that can handle the request wins, and the rest become
+        the transient-error fallback chain.
 
         Args:
             prompt: User message
@@ -525,18 +565,19 @@ class LLMClient:
             max_tokens: Max tokens to generate (default: 1024)
             temperature: Sampling temperature
             routing_profile: "free" | "eco" | "auto" | "premium"
-                - free: nvidia/gpt-oss-120b only (FREE)
-                - eco: Cheapest models per tier (DeepSeek, xAI)
+                - free: NVIDIA's $0 models only — no wallet needed
+                - eco: Cheapest capable model per tier
                 - auto: Best balance of cost/quality (default)
-                - premium: Top-tier models (OpenAI, Anthropic)
+                - premium: Top-tier models (Anthropic, OpenAI, Moonshot)
 
         Returns:
             SmartChatResponse with response, model, and routing decision
 
         Example:
             result = client.smart_chat("What is 2+2?")
-            print(result.response)  # '4'
-            print(result.model)     # 'google/gemini-2.5-flash'
+            print(result.response)         # '4'
+            print(result.model)            # 'google/gemini-3.5-flash'
+            print(result.routing.method)   # 'portfolio'
             print(f"Saved {result.routing.savings * 100:.0f}%")
 
             # With routing profile
@@ -545,22 +586,18 @@ class LLMClient:
                 routing_profile="premium"  # Use top-tier models for complex tasks
             )
         """
-        # Get model pricing for routing decision
-        model_pricing = self._get_model_pricing()
-        max_output_tokens = max_tokens or self.DEFAULT_MAX_TOKENS
-
-        # Route the request
-        decision = route_request(
-            prompt=prompt,
-            system_prompt=system,
-            max_output_tokens=max_output_tokens,
-            model_pricing=model_pricing,
+        decision = route_with_catalog(
+            prompt,
+            system,
+            max_tokens or self.DEFAULT_MAX_TOKENS,
+            self._get_model_pricing(),
             routing_profile=routing_profile,
+            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
         )
 
-        # Make the chat request with selected model. Pass the tier's remaining
-        # models as fallbacks so a hung upstream (e.g. NVIDIA NIM) doesn't
-        # hard-fail when smart_chat could just walk to the next visible model.
+        # Make the chat request with selected model. Pass the remaining ranked
+        # candidates as fallbacks so a hung upstream (e.g. NVIDIA NIM) doesn't
+        # hard-fail when smart_chat could just walk to the next capable model.
         response = self.chat(
             model=decision["model"],
             prompt=prompt,

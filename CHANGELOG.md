@@ -2,6 +2,71 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.11.0 — 2026-08-15
+
+### Added
+- **Router Core lands in the Python SDK.** `blockrun_llm/router_core/` is a
+  faithful port of [`@blockrun/router-core`](https://github.com/BlockRunAI/router-core)
+  (upstream commit `18bf4ab`) — the product-neutral routing engine the
+  TypeScript SDK bundles and the gateway runs. The same request now routes
+  identically across all three. `blockrun_llm/router_adapter.py` is the host
+  glue (catalog id resolution, x402 payment floors, capacity filtering), ported
+  from the TypeScript SDK's `src/router-adapter.ts`.
+
+  What the Python SDK did not have before:
+  - **Portfolio (V3) ranking**, not just tier lookup: candidates are scored on
+    task affinity, cost, speed and reliability, so the cheapest *capable* model
+    wins instead of a hardcoded tier primary.
+  - **Hard capability filtering.** A model that cannot hold the conversation,
+    emit the requested `max_tokens`, call tools, or read images is dropped
+    before scoring — previously `smart_chat` could route to a model the request
+    would fail on with a non-transient 400.
+  - **Task classification** (`chat`, `code_edit`, `code_agent`, `tool_agent`,
+    `tool_agent_parallel`, `reasoning_math`, `reasoning_mcq`, `long_context`,
+    `extraction`, `vision`, `debug`) with per-task calibrated model evidence.
+  - **Explainable decisions**: `routing.candidates`, `routing.candidate_scores`
+    (quality / cost / speed / reliability per model), `routing.task_type`,
+    `routing.profile` and `routing.router_version` are now on the response.
+  - **Live tier configuration**, shared with the other products, replacing this
+    SDK's separately hand-maintained tables.
+
+- **`client.route(prompt, ...)`** returns the routing decision without making or
+  paying for a model call (TypeScript SDK parity). The first call may fetch the
+  public catalog for prices; routing itself is local and free.
+
+### Fixed
+- **The `free` profile pointed at models NVIDIA has retired.** Its tier table
+  led with `nvidia/deepseek-v4-flash` (EOL 2026-08-12, HTTP 410) and fell back
+  to `nvidia/llama-4-maverick` and `nvidia/qwen3-coder-480b` (also EOL), so free
+  routing depended entirely on the gateway's redirect safety net. It now routes
+  over the live free lineup (Step 3.7 Flash, Mistral Nemotron, Nemotron Nano
+  Omni / 9B / 12B VL), and the adapter drops any candidate the catalog does not
+  price at $0 — a paid model can no longer leak into a free-profile call.
+- **Models the catalog marks unavailable no longer win routing.** `/v1/models`
+  rows with `available: false` are skipped when building the pricing map; every
+  smart call to one would have failed with a non-transient error.
+
+### Changed
+- `routing.method` is now `"portfolio"` for the default strategy (`"rules"` for
+  the free profile and the config-only V2 rollback). Code that asserted
+  `method == "rules"` needs updating.
+- `blockrun_llm/router.py` is now a thin compatibility shim over the core:
+  `route()` and `classify_by_rules()` keep working, and `RoutingDecision` keeps
+  its previous keys plus the new metadata. Its hand-maintained `AUTO_TIERS` /
+  `ECO_TIERS` / `PREMIUM_TIERS` tables are gone — tier configuration lives in
+  `router_core.DEFAULT_ROUTING_CONFIG`, and `FREE_TIERS` moved to
+  `router_adapter`.
+- Routing cost estimates now include the server margin and the x402 minimum
+  payment, so `routing.cost_estimate` matches what the gateway actually
+  charges. Free models are never floored up to the paid minimum.
+
+### Tests
+- `tests/unit/test_router_core.py` ports all four upstream vitest suites
+  (88 cases) as the parity guard — the Python port must keep choosing the same
+  models as the TypeScript SDK. `tests/unit/test_router_adapter.py` covers the
+  host layer: `free/*` → `nvidia/*` id resolution, the payment floor, capacity
+  filtering, and the free-profile guarantees.
+
 ## 1.10.0 — 2026-07-28
 
 ### Added
