@@ -121,7 +121,7 @@ export SOLANA_WALLET_KEY="your-bs58-solana-key"
 > what to switch to instead of failing with a cryptic "must be 66 characters"
 > error.
 
-## Smart Routing (ClawRouter)
+## Smart Routing (Router Core)
 
 Let the SDK automatically pick the cheapest capable model for each request:
 
@@ -130,25 +130,38 @@ from blockrun_llm import LLMClient
 
 client = LLMClient()
 
-# Auto-routes to cheapest capable model
-result = client.smart_chat("What is 2+2?")
-print(result.response)  # '4'
-print(result.model)     # 'moonshot/kimi-k2.6' (Moonshot flagship — vision + reasoning_content)
-print(f"Saved {result.routing.savings * 100:.0f}%")  # 'Saved 94%'
+# Auto-routes to the cheapest capable model
+result = client.smart_chat("Summarize this changelog entry in one line")
+print(result.response)
+print(result.model)             # 'google/gemini-2.5-flash'
+print(result.routing.task_type) # 'chat'
+print(f"Saved {result.routing.savings * 100:.0f}%")  # 'Saved 90%'
 
-# Complex reasoning task -> routes to reasoning model
+# Complex reasoning task -> routes to a reasoning model
 result = client.smart_chat("Prove the Riemann hypothesis step by step")
-print(result.model)  # 'deepseek/deepseek-reasoner'
+print(result.model)  # 'deepseek/deepseek-v4-pro'
+```
+
+Want to see the decision without paying for a call? `client.route(...)` runs the
+same routing locally and returns the decision only:
+
+```python
+decision = client.route("Prove the Riemann hypothesis step by step")
+print(decision.model)       # 'deepseek/deepseek-v4-pro'
+print(decision.tier)        # 'REASONING'
+print(decision.task_type)   # 'reasoning'
+print(decision.candidates)  # ordered chain; smart_chat walks it on a 5xx/timeout
+print(decision.reasoning)   # human-readable explanation of the pick
 ```
 
 ### Routing Profiles
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier — smart-routes across <!-- br:models.free -->5<!-- /br:models.free --> models (DeepSeek V4 Pro/Flash, Nemotron Nano Omni, Qwen3, GLM-4.7, Llama 4, Mistral) | Zero-cost testing, dev, prod |
-| `eco` | Cheapest models per tier (DeepSeek, NVIDIA) | Cost-sensitive production |
+| `free` | NVIDIA free tier — smart-routes across the <!-- br:models.free -->5<!-- /br:models.free --> $0 models (Step 3.7 Flash, Mistral Nemotron, Nemotron Nano Omni / 9B / 12B VL) | Zero-cost testing, dev, prod |
+| `eco` | Cheapest capable model per tier | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
-| `premium` | Top-tier models (OpenAI, Anthropic) | Quality-critical tasks |
+| `premium` | Top-tier models (Anthropic, OpenAI, Moonshot) | Quality-critical tasks |
 
 ```python
 # Use premium models for complex tasks
@@ -156,28 +169,45 @@ result = client.smart_chat(
     "Write production-grade async Python code",
     routing_profile="premium"
 )
-print(result.model)  # 'openai/gpt-5.4'
+print(result.model)  # 'openai/gpt-5.3-codex'
 ```
 
 ### How It Works
 
-ClawRouter uses a 14-dimension rule-based classifier to analyze each request:
+Routing runs on [Router Core](https://github.com/BlockRunAI/router-core) — the
+same product-neutral engine the TypeScript SDK and the BlockRun gateway use, so
+an identical request routes identically across all three. It is 100% local and
+takes <1ms; no extra model call is made to decide.
 
-- **Token count** - Short vs long prompts
-- **Code presence** - Programming keywords
-- **Reasoning markers** - "prove", "step by step", etc.
-- **Technical terms** - Architecture, optimization, etc.
-- **Creative markers** - Story, poem, brainstorm, etc.
-- **Agentic patterns** - Multi-step, tool use indicators
+Three stages:
 
-The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
+1. **Classify** — a <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions -->-dimension weighted
+   scorer maps the request onto a capability tier (token count, code presence,
+   reasoning markers, technical terms, creative markers, agentic patterns, and
+   more), and a task classifier labels the *shape* of the work: `chat`,
+   `code_edit`, `code_agent`, `tool_agent`, `reasoning_math`, `long_context`,
+   `extraction`, `vision`, …
+2. **Filter** — capability constraints are hard filters, not preferences. A
+   model that cannot hold the conversation, emit the requested output length,
+   call tools, or read images is dropped before scoring, so the router never
+   picks a model the request would fail on.
+3. **Rank** — surviving candidates are scored on task affinity, cost, speed and
+   reliability. The winner serves the request; the rest become the ordered
+   fallback chain that `smart_chat` walks on a timeout or 5xx.
+
+The four capability tiers:
 
 | Tier | Example Tasks | Auto Profile Model |
 |------|---------------|-------------------|
-| SIMPLE | "What is 2+2?", definitions | moonshot/kimi-k2.6 |
-| MEDIUM | Code snippets, explanations | google/gemini-2.5-flash |
+| SIMPLE | Short questions, definitions | google/gemini-2.5-flash |
+| MEDIUM | Code snippets, explanations | moonshot/kimi-k2.7 |
 | COMPLEX | Architecture, long documents | google/gemini-3.1-pro |
-| REASONING | Proofs, multi-step reasoning | deepseek/deepseek-reasoner |
+| REASONING | Proofs, math, multi-step reasoning | deepseek/deepseek-v4-pro |
+
+Every decision is explainable — `result.routing` carries the tier, the task
+type, the confidence, the ranked `candidates`, the per-candidate
+`candidate_scores` (quality / cost / speed / reliability) and a `reasoning`
+string describing why that model won.
 
 ## How Payment Works
 
@@ -1671,8 +1701,8 @@ blockrun-llm is a Python SDK that provides pay-per-request access to 43+ large l
 ### How does payment work?
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
 
-### What is smart routing / ClawRouter?
-ClawRouter is a built-in smart routing engine that analyzes your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and automatically picks the cheapest model capable of handling it. Routing happens locally in under 1ms. It can save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
+### What is smart routing / Router Core?
+Router Core is BlockRun's built-in routing engine — shared with the TypeScript SDK and the gateway, so the same request routes the same way everywhere. It scores your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, drops every model that can't actually handle it (context, output length, tools, vision), then picks the cheapest capable one and keeps the rest as a fallback chain. Routing happens locally in under 1ms and makes no extra model call. It can save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
 
 ### How much does it cost?
 Pay only for what you use. Prices start at **FREE** (11 NVIDIA-hosted models). Paid models start at $0.10/M tokens. There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.

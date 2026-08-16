@@ -101,6 +101,8 @@ from .types import (
     APIError,
     AudioModel,
     AudioTrack,
+    # Smart routing types
+    CandidateScore,
     ChatChunkChoice,
     ChatChunkDelta,
     ChatChunkFunctionCall,
@@ -184,7 +186,7 @@ from .wallet import (
     create_wallet as generate_wallet,  # User-friendly alias
 )
 
-__version__ = "1.10.1"
+__version__ = "1.11.0"
 __all__ = [
     "NETWORK_ALIASES",
     "SUPPORTED_NETWORKS",
@@ -196,6 +198,8 @@ __all__ = [
     "AsyncSolanaLLMClient",
     "AudioModel",
     "AudioTrack",
+    # Smart routing types
+    "CandidateScore",
     "ChatChunkChoice",
     "ChatChunkDelta",
     "ChatChunkFunctionCall",
