@@ -50,7 +50,13 @@ import httpx
 from dotenv import load_dotenv
 from eth_account import Account
 
-from .router_adapter import BASE_MINIMUM_PAYMENT_USD, route_with_catalog
+from .router_adapter import (
+    BASE_MINIMUM_PAYMENT_USD,
+    build_model_pricing,
+    route_with_catalog,
+    routing_profile_for_model,
+    routing_text,
+)
 from .tx_log import (
     TransactionLogger,
     _resolve_log_dir,
@@ -68,6 +74,7 @@ from .types import (
     RoutingDecision,
     RoutingProfile,
     SearchResult,
+    SmartChatCompletionResponse,
     SmartChatResponse,
     chunk_meta,
     chunk_usage_dict,
@@ -213,7 +220,13 @@ def _should_fallback(exc: Exception) -> bool:
         return True
     if isinstance(exc, httpx.NetworkError):
         return True
-    return bool(isinstance(exc, APIError) and exc.status_code in (502, 503, 504, 522, 524))
+    # 429 is retriable here for the same reason the TypeScript adapter treats it
+    # as transient: it means THIS upstream is saturated, and the next model in
+    # the chain is a different upstream. Observed live on the free tier — a
+    # rate-limited free model returned 429 and the three remaining free models
+    # in the ranked chain were never tried. Permanent payment failures and
+    # settled calls are refused above, before this line.
+    return bool(isinstance(exc, APIError) and exc.status_code in (429, 502, 503, 504, 522, 524))
 
 
 # The gateway states the output-token ceiling it actually quoted in the 402's
@@ -472,39 +485,17 @@ class LLMClient:
 
     def _get_model_pricing(self) -> dict[str, dict[str, float]]:
         """
-        Get model pricing for smart routing.
+        Get model pricing for smart routing (cached for the client's lifetime).
 
         Returns:
             Dict mapping model_id -> {"input_price": x, "output_price": y,
             "flat_price": z}. ``flat_price`` is 0 for per-token billing and
             non-zero (USD per call) for flat-billed models.
-
-        The /v1/models response uses the nested ``pricing.input``/``pricing.output``
-        shape today; older snapshots used top-level ``inputPrice``/``outputPrice``.
-        Both are accepted so the SDK keeps working through backend transitions.
         """
         if self._model_pricing_cache is not None:
             return self._model_pricing_cache
 
-        models = self.list_models()
-        pricing: dict[str, dict[str, float]] = {}
-        for model in models:
-            model_id = model.get("id", "")
-            # A model the catalog marks unavailable must not win routing — every
-            # smart call to it would fail with a non-transient error.
-            if model.get("available") is False:
-                continue
-            block = model.get("pricing") or {}
-            input_price = block.get("input", model.get("inputPrice", model.get("input_price", 0)))
-            output_price = block.get(
-                "output", model.get("outputPrice", model.get("output_price", 0))
-            )
-            flat_price = block.get("flat", model.get("flatPrice", 0))
-            pricing[model_id] = {
-                "input_price": float(input_price or 0),
-                "output_price": float(output_price or 0),
-                "flat_price": float(flat_price or 0),
-            }
+        pricing = build_model_pricing(self.list_models())
         self._model_pricing_cache = pricing
         return pricing
 
@@ -608,6 +599,81 @@ class LLMClient:
         )
 
         return SmartChatResponse(
+            response=response,
+            model=decision["model"],
+            routing=RoutingDecision(**decision),
+        )
+
+    def smart_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        search: bool | None = None,
+        search_parameters: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
+        routing_profile: RoutingProfile = "auto",
+        **extra: Any,
+    ) -> SmartChatCompletionResponse:
+        """
+        Smart routing for a full message list (OpenAI-compatible).
+
+        The routing counterpart of ``chat_completion``: tools, tool_choice and
+        response_format are part of the routing decision, not just the request.
+        A turn that must call a tool routes to a tool-capable model, a JSON
+        schema forces a structured-output-capable tier, and image parts route to
+        a vision model.
+
+        Capacity is checked against the WHOLE transcript, not the last message —
+        an agent conversation can be 100x its final turn, and a context overflow
+        is a non-transient error the fallback chain cannot rescue.
+
+        Example:
+            result = client.smart_chat_completion(
+                [{"role": "user", "content": "Cancel order B-42"}],
+                tools=[{"type": "function", "function": {"name": "cancel_order", ...}}],
+                tool_choice="required",
+            )
+            print(result.model)                 # a tool-capable model
+            print(result.routing.task_type)     # 'tool_agent'
+        """
+        view = routing_text(messages)
+        decision = route_with_catalog(
+            view["prompt"],
+            view["system_prompt"],
+            max_tokens or self.DEFAULT_MAX_TOKENS,
+            self._get_model_pricing(),
+            routing_profile=routing_profile,
+            requires_structured_output=response_format is not None,
+            tools=tools,
+            tool_choice=tool_choice,
+            conversation_chars=view["conversation_chars"],
+            has_vision=view["has_vision"],
+            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+        )
+        response = self.chat_completion(
+            decision["model"],
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            search=search,
+            search_parameters=search_parameters,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            stop=stop,
+            # An explicit caller-supplied chain wins over the routed one.
+            fallback_models=fallback_models or decision.get("fallbacks") or None,
+            **extra,
+        )
+        return SmartChatCompletionResponse(
             response=response,
             model=decision["model"],
             routing=RoutingDecision(**decision),
@@ -780,7 +846,31 @@ class LLMClient:
             if result.choices[0].message.tool_calls:
                 for tc in result.choices[0].message.tool_calls:
                     print(f"Call: {tc.function.name}({tc.function.arguments})")
+
+            # Virtual routing ids pick the model for you
+            result = client.chat_completion("blockrun/auto", messages)
         """
+        # `blockrun/auto` | `blockrun/eco` | `blockrun/premium` are not models —
+        # they select a routing profile. Hand the turn to the routed path, which
+        # also supplies the ranked fallback chain.
+        virtual_profile = routing_profile_for_model(model)
+        if virtual_profile is not None:
+            return self.smart_chat_completion(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                search=search,
+                search_parameters=search_parameters,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                stop=stop,
+                fallback_models=fallback_models,
+                routing_profile=virtual_profile,  # type: ignore[arg-type]
+                **extra,
+            ).response
+
         # Validate inputs
         validate_model(model)
         validate_max_tokens(max_tokens)
@@ -2546,6 +2636,8 @@ class AsyncLLMClient:
         self._tx_logger: TransactionLogger | None = (
             TransactionLogger(log_dir) if log_dir is not None else None
         )
+        # Model pricing cache for smart routing
+        self._model_pricing_cache: dict[str, dict[str, float]] | None = None
         self._last_settlement: dict[str, Any] | None = None
 
     def _capture_settlement(self, response: httpx.Response) -> dict[str, Any] | None:
@@ -2554,6 +2646,125 @@ class AsyncLLMClient:
         settlement = decode_settlement_header(header)
         self._last_settlement = settlement
         return settlement
+
+    async def _get_model_pricing(self) -> dict[str, dict[str, float]]:
+        """Model pricing for smart routing (cached for the client's lifetime)."""
+        if self._model_pricing_cache is not None:
+            return self._model_pricing_cache
+        pricing = build_model_pricing(await self.list_models())
+        self._model_pricing_cache = pricing
+        return pricing
+
+    async def route(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        routing_profile: RoutingProfile = "auto",
+        requires_structured_output: bool = False,
+    ) -> RoutingDecision:
+        """Inspect a routing decision without making or paying for a call."""
+        decision = route_with_catalog(
+            prompt,
+            system,
+            max_tokens or self.DEFAULT_MAX_TOKENS,
+            await self._get_model_pricing(),
+            routing_profile=routing_profile,
+            requires_structured_output=requires_structured_output,
+            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+        )
+        return RoutingDecision(**decision)
+
+    async def smart_chat(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        routing_profile: RoutingProfile = "auto",
+    ) -> SmartChatResponse:
+        """Async smart chat with automatic model routing.
+
+        Same Router Core portfolio strategy as the sync client — see
+        :meth:`LLMClient.smart_chat`.
+        """
+        decision = route_with_catalog(
+            prompt,
+            system,
+            max_tokens or self.DEFAULT_MAX_TOKENS,
+            await self._get_model_pricing(),
+            routing_profile=routing_profile,
+            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+        )
+        response = await self.chat(
+            decision["model"],
+            prompt,
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            fallback_models=decision.get("fallbacks") or None,
+        )
+        return SmartChatResponse(
+            response=response,
+            model=decision["model"],
+            routing=RoutingDecision(**decision),
+        )
+
+    async def smart_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        search: bool | None = None,
+        search_parameters: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
+        routing_profile: RoutingProfile = "auto",
+        **extra: Any,
+    ) -> SmartChatCompletionResponse:
+        """Async smart routing for a full message list — see
+        :meth:`LLMClient.smart_chat_completion`."""
+        view = routing_text(messages)
+        decision = route_with_catalog(
+            view["prompt"],
+            view["system_prompt"],
+            max_tokens or self.DEFAULT_MAX_TOKENS,
+            await self._get_model_pricing(),
+            routing_profile=routing_profile,
+            requires_structured_output=response_format is not None,
+            tools=tools,
+            tool_choice=tool_choice,
+            conversation_chars=view["conversation_chars"],
+            has_vision=view["has_vision"],
+            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+        )
+        response = await self.chat_completion(
+            decision["model"],
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            search=search,
+            search_parameters=search_parameters,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            stop=stop,
+            fallback_models=fallback_models or decision.get("fallbacks") or None,
+            **extra,
+        )
+        return SmartChatCompletionResponse(
+            response=response,
+            model=decision["model"],
+            routing=RoutingDecision(**decision),
+        )
 
     async def chat(
         self,
@@ -2610,7 +2821,32 @@ class AsyncLLMClient:
         fallback_models: list[str] | None = None,
         **extra: Any,
     ) -> ChatResponse:
-        """Async full chat completion interface with optional xAI Live Search and tool calling."""
+        """Async full chat completion interface with optional xAI Live Search and tool calling.
+
+        ``blockrun/auto`` | ``blockrun/eco`` | ``blockrun/premium`` are routing
+        profiles rather than models: passing one routes the turn and returns the
+        routed response, ranked fallback chain included.
+        """
+        virtual_profile = routing_profile_for_model(model)
+        if virtual_profile is not None:
+            return (
+                await self.smart_chat_completion(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    search=search,
+                    search_parameters=search_parameters,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    response_format=response_format,
+                    stop=stop,
+                    fallback_models=fallback_models,
+                    routing_profile=virtual_profile,  # type: ignore[arg-type]
+                    **extra,
+                )
+            ).response
+
         # Validate inputs
         validate_model(model)
         validate_max_tokens(max_tokens)
