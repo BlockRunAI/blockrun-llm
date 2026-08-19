@@ -107,6 +107,37 @@ FREE_TIERS: dict[str, TierConfig] = {
 }
 
 
+def build_model_pricing(models: list[dict[str, Any]]) -> dict[str, ModelPricing]:
+    """Build the router's pricing map from a ``/v1/models`` payload.
+
+    Shared by every client (Base and Solana, sync and async) so the four copies
+    cannot drift. Rows the catalog marks unavailable are skipped: a model that
+    cannot serve a request must not win routing, since every call to it would
+    fail with a non-transient error.
+
+    The catalog uses the nested ``pricing.input`` / ``pricing.output`` shape;
+    older snapshots used top-level ``inputPrice`` / ``outputPrice``. Both are
+    accepted so the SDK keeps working through backend transitions.
+    """
+    pricing: dict[str, ModelPricing] = {}
+    for model in models:
+        if model.get("available") is False:
+            continue
+        model_id = model.get("id", "")
+        if not model_id:
+            continue
+        block = model.get("pricing") or {}
+        input_price = block.get("input", model.get("inputPrice", model.get("input_price", 0)))
+        output_price = block.get("output", model.get("outputPrice", model.get("output_price", 0)))
+        flat_price = block.get("flat", model.get("flatPrice", model.get("flat_price", 0)))
+        pricing[model_id] = {
+            "input_price": float(input_price or 0),
+            "output_price": float(output_price or 0),
+            "flat_price": float(flat_price or 0),
+        }
+    return pricing
+
+
 def routing_profile_for_model(model: str) -> str | None:
     """Map a ``blockrun/auto``-style virtual model id to a routing profile."""
     return AUTO_ROUTING_PROFILES.get(model.lower())

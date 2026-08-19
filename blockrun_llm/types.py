@@ -713,6 +713,25 @@ class RoutingDecision(BaseModel):
     agentic_score: Optional[float] = None
 
 
+class SmartChatCompletionResponse(BaseModel):
+    """
+    Response from smart_chat_completion — the routed full completion.
+
+    ``response`` is the ordinary ChatResponse (choices, usage, citations), so
+    tool calls and structured output work exactly as with chat_completion.
+
+    Example:
+        result = client.smart_chat_completion([{"role": "user", "content": "hi"}])
+        print(result.model)                     # the model routing picked
+        print(result.response.choices[0].message.content)
+        print(result.routing.task_type)         # 'chat'
+    """
+
+    response: ChatResponse
+    model: str
+    routing: RoutingDecision
+
+
 class SmartChatResponse(BaseModel):
     """
     Response from smart_chat with routing information.
