@@ -1235,3 +1235,46 @@ class TestInferToolRequirement:
         )
 
         assert not infer_tool_requirement("What is 17 times 9?", system_prompt)
+
+
+class TestDimensionWeightKeys:
+    """Every scored dimension must find its weight.
+
+    The config transpile that produced ``config.py`` snake_cased key names, and
+    ``imperativeVerbs`` is both a keyword-list field *and* a dimension name — so
+    the weight landed under ``imperative_verbs`` while the classifier emitted
+    ``imperativeVerbs``. ``weights.get(name, 0)`` then silently scored that
+    dimension at zero, diverging from the TypeScript SDK on any prompt whose
+    imperative verbs would have crossed a tier boundary.
+    """
+
+    def test_every_emitted_dimension_has_a_weight(self):
+        from blockrun_llm.router_core.rules import classify_by_rules
+
+        scoring = DEFAULT_ROUTING_CONFIG["scoring"]
+        result = classify_by_rules("Build and deploy the service", None, 10, scoring)
+        emitted = {dimension["name"] for dimension in result["dimensions"]}
+        weighted = set(scoring["dimension_weights"])
+
+        assert emitted - weighted == set(), "scored dimensions with no weight"
+        assert weighted - emitted == set(), "weights that match no scored dimension"
+
+    def test_the_weights_match_the_upstream_values(self):
+        # Ported verbatim from router-core config.ts at 18bf4ab.
+        assert DEFAULT_ROUTING_CONFIG["scoring"]["dimension_weights"] == {
+            "tokenCount": 0.08,
+            "codePresence": 0.15,
+            "reasoningMarkers": 0.18,
+            "technicalTerms": 0.1,
+            "creativeMarkers": 0.05,
+            "simpleIndicators": 0.02,
+            "multiStepPatterns": 0.12,
+            "questionComplexity": 0.05,
+            "imperativeVerbs": 0.03,
+            "constraintCount": 0.04,
+            "outputFormat": 0.03,
+            "referenceComplexity": 0.02,
+            "negationComplexity": 0.01,
+            "domainSpecificity": 0.02,
+            "agenticTask": 0.04,
+        }

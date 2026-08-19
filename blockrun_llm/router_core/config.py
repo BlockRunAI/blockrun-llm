@@ -1048,7 +1048,7 @@ DEFAULT_ROUTING_CONFIG: RoutingConfig = {
             "simpleIndicators": 0.02,  # Reduced from 0.12 to make room for agenticTask
             "multiStepPatterns": 0.12,
             "questionComplexity": 0.05,
-            "imperative_verbs": 0.03,
+            "imperativeVerbs": 0.03,
             "constraintCount": 0.04,
             "outputFormat": 0.03,
             "referenceComplexity": 0.02,
