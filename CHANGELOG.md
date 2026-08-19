@@ -2,6 +2,57 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.12.0 — 2026-08-19
+
+### Added
+- **Smart routing on the Solana clients.** `SolanaLLMClient` and
+  `AsyncSolanaLLMClient` had no routing at all — `smart_chat`, `route` and the
+  routing profiles were Base-only, so a Solana user got no model selection while
+  the TypeScript SDK offered it on both chains. All four Python clients (Base and
+  Solana, sync and async) now expose the same surface: `route()`, `smart_chat()`
+  and `smart_chat_completion()`. Both chains run the same Router Core engine
+  against the same catalog, so an identical request picks an identical model;
+  only the x402 payment floor in the cost metadata differs ($0.002 Base,
+  $0.001 Solana). Pinned by `tests/unit/test_routing_parity.py`.
+
+- **`smart_chat_completion(messages, ...)`** on every client — routing for a full
+  message list rather than a single prompt. `tools`, `tool_choice` and
+  `response_format` are inputs to the *decision*, not just the request: a turn
+  that must call a tool routes to a tool-capable model, a JSON schema forces the
+  structured-output tier, and image parts route to a vision model. Capacity is
+  checked against the whole transcript, because an agent conversation can be
+  100x its final turn and a context overflow is a non-transient error the
+  fallback chain cannot rescue.
+
+- **`blockrun/auto`, `blockrun/eco` and `blockrun/premium` virtual model ids.**
+  Passing one to `chat()` or `chat_completion()` routes the turn instead of
+  calling a model of that name, ranked fallback chain included — TypeScript SDK
+  parity, and it lets OpenAI-compatible code opt into routing by changing one
+  string.
+
+- **`fallback_models` on the Solana `chat()` / `chat_completion()`.** The
+  parameter existed only on the Solana streaming path, so a routed Solana call
+  had a recovery chain it could not walk. The chain now steps to the next ranked
+  model on a timeout, network error or 5xx, using the same
+  `_should_fallback_solana` classifier as the stream path — a settled payment is
+  never retried, so a second model cannot sign a second transfer for one call.
+
+### Fixed
+- **A 429 now walks the fallback chain instead of failing the call.** Both
+  clients treated only 5xx as retriable, so a saturated upstream ended the
+  request even with capable models left in the chain. Found live: a rate-limited
+  free model answered 429 and the three remaining free models were never tried.
+  The TypeScript adapter has always counted 429 as transient — the next model in
+  the chain is a different upstream. Settled payments and permanent payment
+  failures are still refused before the status check, so no call can pay twice.
+
+### Changed
+- The `/v1/models` → pricing-map conversion moved to
+  `router_adapter.build_model_pricing()`, shared by all four clients instead of
+  being written out per client. Rows the catalog marks `available: false` are
+  skipped everywhere now (previously only the Base sync client did this, as of
+  1.11.0).
+
 ## 1.11.0 — 2026-08-15
 
 ### Added

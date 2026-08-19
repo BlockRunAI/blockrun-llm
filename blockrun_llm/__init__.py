@@ -145,6 +145,7 @@ from .types import (
     SearchParameters,
     # Standalone search
     SearchResult,
+    SmartChatCompletionResponse,
     SmartChatResponse,
     SpeechAudio,
     # Speech (TTS / sound effects) types
@@ -186,7 +187,7 @@ from .wallet import (
     create_wallet as generate_wallet,  # User-friendly alias
 )
 
-__version__ = "1.11.0"
+__version__ = "1.12.0"
 __all__ = [
     "NETWORK_ALIASES",
     "SUPPORTED_NETWORKS",
@@ -248,6 +249,7 @@ __all__ = [
     "SearchParameters",
     # Standalone search
     "SearchResult",
+    "SmartChatCompletionResponse",
     "SmartChatResponse",
     "SolanaLLMClient",
     "SpeechAudio",

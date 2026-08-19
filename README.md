@@ -142,6 +142,27 @@ result = client.smart_chat("Prove the Riemann hypothesis step by step")
 print(result.model)  # 'deepseek/deepseek-v4-pro'
 ```
 
+Routing works the same on every client — `LLMClient`, `AsyncLLMClient`,
+`SolanaLLMClient` and `AsyncSolanaLLMClient` all expose `route()`,
+`smart_chat()` and `smart_chat_completion()`. Both chains run the same engine
+against the same catalog, so an identical request picks an identical model; only
+the x402 minimum in the cost estimate differs.
+
+```python
+# Route a full message list — tools and response_format shape the decision,
+# not just the request
+result = client.smart_chat_completion(
+    [{"role": "user", "content": "Cancel order B-42"}],
+    tools=[{"type": "function", "function": {"name": "cancel_order", "parameters": {}}}],
+    tool_choice="required",
+)
+print(result.model)               # a tool-capable model
+print(result.routing.task_type)   # 'tool_agent'
+
+# Or opt in from OpenAI-compatible code by changing one string
+response = client.chat_completion("blockrun/auto", messages)
+```
+
 Want to see the decision without paying for a call? `client.route(...)` runs the
 same routing locally and returns the decision only:
 

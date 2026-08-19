@@ -36,6 +36,13 @@ from typing_extensions import Self
 from .client import _SETTLED_ATTR, _enforce_spend_limits, _mark_settled
 from .price import Category, Market, Resolution, Session
 from .realface import _GROUP_ID_RE
+from .router_adapter import (
+    SOLANA_MINIMUM_PAYMENT_USD,
+    build_model_pricing,
+    route_with_catalog,
+    routing_profile_for_model,
+    routing_text,
+)
 from .solana_wallet import get_solana_public_key
 from .tx_log import (
     TransactionLogger,
@@ -60,8 +67,12 @@ from .types import (
     RealFaceList,
     RealFaceStatus,
     RetiredEndpointError,
+    RoutingDecision,
+    RoutingProfile,
     RpcResponse,
     SearchResult,
+    SmartChatCompletionResponse,
+    SmartChatResponse,
     SpeechResponse,
     SymbolListResponse,
     VideoResponse,
@@ -371,7 +382,13 @@ def _should_fallback_solana(exc: Exception) -> bool:
         return True
     if isinstance(exc, httpx.NetworkError):
         return True
-    return bool(isinstance(exc, APIError) and exc.status_code in (502, 503, 504, 522, 524))
+    # 429 is retriable here for the same reason the TypeScript adapter treats it
+    # as transient: it means THIS upstream is saturated, and the next model in
+    # the chain is a different upstream. Observed live on the free tier — a
+    # rate-limited free model returned 429 and the three remaining free models
+    # in the ranked chain were never tried. Permanent payment failures and
+    # settled calls are refused above, before this line.
+    return bool(isinstance(exc, APIError) and exc.status_code in (429, 502, 503, 504, 522, 524))
 
 
 # Characters safe to interpolate into a single URL path segment. network /
@@ -517,6 +534,8 @@ class SolanaLLMClient:
         self._private_key = key
         validate_api_url(api_url)
         self._api_url = api_url.rstrip("/")
+        # Model pricing cache for smart routing
+        self._model_pricing_cache: dict[str, dict[str, float]] | None = None
 
         # Resolve effective RPC URL + headers (explicit args > env vars > default).
         resolved_url, resolved_headers = _resolve_rpc_config(rpc_url, rpc_headers)
@@ -666,6 +685,142 @@ class SolanaLLMClient:
         except Exception:
             pass
 
+    def _get_model_pricing(self) -> dict[str, dict[str, float]]:
+        """Model pricing for smart routing (cached for the client's lifetime)."""
+        if self._model_pricing_cache is not None:
+            return self._model_pricing_cache
+        pricing = build_model_pricing(self.list_models())
+        self._model_pricing_cache = pricing
+        return pricing
+
+    def route(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        routing_profile: RoutingProfile = "auto",
+        requires_structured_output: bool = False,
+    ) -> RoutingDecision:
+        """Inspect a Solana routing decision without making or paying for a call.
+
+        Identical routing to the Base client — same Router Core engine, same
+        catalog — with the Solana x402 minimum applied to the cost estimate.
+        """
+        decision = route_with_catalog(
+            prompt,
+            system,
+            max_tokens or DEFAULT_MAX_TOKENS,
+            self._get_model_pricing(),
+            routing_profile=routing_profile,
+            requires_structured_output=requires_structured_output,
+            minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
+        )
+        return RoutingDecision(**decision)
+
+    def smart_chat(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        routing_profile: RoutingProfile = "auto",
+        timeout: float | None = None,
+    ) -> SmartChatResponse:
+        """Smart chat with automatic model routing, paid on Solana.
+
+        Uses BlockRun's Router Core portfolio strategy — the same engine the
+        Base client, the TypeScript SDK and the gateway run. Routing is local
+        (<1ms, no extra model call); only the payment leg differs by chain.
+
+        Example:
+            result = client.smart_chat("What is 2+2?")
+            print(result.model)            # 'google/gemini-2.5-flash'
+            print(result.routing.method)   # 'portfolio'
+        """
+        decision = route_with_catalog(
+            prompt,
+            system,
+            max_tokens or DEFAULT_MAX_TOKENS,
+            self._get_model_pricing(),
+            routing_profile=routing_profile,
+            minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
+        )
+        response = self.chat(
+            decision["model"],
+            prompt,
+            system=system,
+            max_tokens=max_tokens or DEFAULT_MAX_TOKENS,
+            temperature=temperature,
+            timeout=timeout,
+            fallback_models=decision.get("fallbacks") or None,
+        )
+        return SmartChatResponse(
+            response=response,
+            model=decision["model"],
+            routing=RoutingDecision(**decision),
+        )
+
+    def smart_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        search: bool = False,
+        search_parameters: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        timeout: float | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
+        routing_profile: RoutingProfile = "auto",
+    ) -> SmartChatCompletionResponse:
+        """Smart routing for a full message list, paid on Solana.
+
+        Tools, tool_choice and response_format are part of the routing
+        decision, and capacity is checked against the whole transcript — see
+        :meth:`blockrun_llm.LLMClient.smart_chat_completion`.
+        """
+        view = routing_text(messages)
+        decision = route_with_catalog(
+            view["prompt"],
+            view["system_prompt"],
+            max_tokens or DEFAULT_MAX_TOKENS,
+            self._get_model_pricing(),
+            routing_profile=routing_profile,
+            requires_structured_output=response_format is not None,
+            tools=tools,
+            tool_choice=tool_choice,
+            conversation_chars=view["conversation_chars"],
+            has_vision=view["has_vision"],
+            minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
+        )
+        response = self.chat_completion(
+            decision["model"],
+            messages,
+            max_tokens=max_tokens or DEFAULT_MAX_TOKENS,
+            temperature=temperature,
+            top_p=top_p,
+            search=search,
+            search_parameters=search_parameters,
+            tools=tools,
+            tool_choice=tool_choice,
+            timeout=timeout,
+            response_format=response_format,
+            stop=stop,
+            # An explicit caller-supplied chain wins over the routed one.
+            fallback_models=fallback_models or decision.get("fallbacks") or None,
+        )
+        return SmartChatCompletionResponse(
+            response=response,
+            model=decision["model"],
+            routing=RoutingDecision(**decision),
+        )
+
     def chat(
         self,
         model: str,
@@ -677,6 +832,7 @@ class SolanaLLMClient:
         timeout: float | None = None,
         response_format: dict[str, Any] | None = None,
         stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
     ) -> str:
         """Simple 1-line chat."""
         messages: list[dict[str, str]] = []
@@ -692,6 +848,7 @@ class SolanaLLMClient:
             timeout=timeout,
             response_format=response_format,
             stop=stop,
+            fallback_models=fallback_models,
         )
         return result.choices[0].message.content or ""
 
@@ -709,6 +866,7 @@ class SolanaLLMClient:
         timeout: float | None = None,
         response_format: dict[str, Any] | None = None,
         stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
     ) -> ChatResponse:
         """Full chat completion (OpenAI-compatible).
 
@@ -721,6 +879,26 @@ class SolanaLLMClient:
         client's chat baseline, ``DEFAULT_CHAT_TIMEOUT``). Raise it for
         large ``max_tokens`` runs against slow models.
         """
+        # `blockrun/auto` | `blockrun/eco` | `blockrun/premium` are routing
+        # profiles rather than models — hand the turn to the routed path.
+        virtual_profile = routing_profile_for_model(model)
+        if virtual_profile is not None:
+            return self.smart_chat_completion(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                search=search,
+                search_parameters=search_parameters,
+                tools=tools,
+                tool_choice=tool_choice,
+                timeout=timeout,
+                response_format=response_format,
+                stop=stop,
+                fallback_models=fallback_models,
+                routing_profile=virtual_profile,  # type: ignore[arg-type]
+            ).response
+
         validate_max_tokens(max_tokens)
         body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
@@ -739,7 +917,28 @@ class SolanaLLMClient:
             body["response_format"] = response_format
         if stop is not None:
             body["stop"] = stop
-        return self._request_with_payment("/v1/chat/completions", body, timeout=timeout)
+
+        # Walk [model, *fallback_models] on retriable errors (timeouts, 5xx,
+        # network) exactly as the streaming path and the Base client do. A
+        # settled payment is never retried — _should_fallback_solana refuses
+        # anything tagged as settled, so the next model cannot sign a second
+        # transfer for the same call.
+        attempts = [model, *(fallback_models or [])]
+        last_exc: Exception | None = None
+        for i, attempt_model in enumerate(attempts):
+            body["model"] = attempt_model
+            try:
+                return self._request_with_payment("/v1/chat/completions", body, timeout=timeout)
+            except Exception as exc:
+                if not _should_fallback_solana(exc) or i + 1 >= len(attempts):
+                    raise
+                last_exc = exc
+                sys.stderr.write(
+                    f"[blockrun_llm] solana {attempt_model} -> {attempts[i + 1]} "
+                    f"({type(exc).__name__}: {str(exc)[:80]})\n"
+                )
+        assert last_exc is not None
+        raise last_exc
 
     def close(self) -> None:
         """Close the HTTP client."""
@@ -2907,6 +3106,8 @@ class AsyncSolanaLLMClient:
         self._private_key = key
         validate_api_url(api_url)
         self._api_url = api_url.rstrip("/")
+        # Model pricing cache for smart routing
+        self._model_pricing_cache: dict[str, dict[str, float]] | None = None
 
         resolved_url, resolved_headers = _resolve_rpc_config(rpc_url, rpc_headers)
         self._rpc_url = resolved_url
@@ -3052,6 +3253,122 @@ class AsyncSolanaLLMClient:
     # Non-streaming chat
     # ------------------------------------------------------------------
 
+    async def _get_model_pricing(self) -> dict[str, dict[str, float]]:
+        """Model pricing for smart routing (cached for the client's lifetime)."""
+        if self._model_pricing_cache is not None:
+            return self._model_pricing_cache
+        pricing = build_model_pricing(await self.list_models())
+        self._model_pricing_cache = pricing
+        return pricing
+
+    async def route(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        routing_profile: RoutingProfile = "auto",
+        requires_structured_output: bool = False,
+    ) -> RoutingDecision:
+        """Inspect a Solana routing decision without making or paying for a call."""
+        decision = route_with_catalog(
+            prompt,
+            system,
+            max_tokens or DEFAULT_MAX_TOKENS,
+            await self._get_model_pricing(),
+            routing_profile=routing_profile,
+            requires_structured_output=requires_structured_output,
+            minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
+        )
+        return RoutingDecision(**decision)
+
+    async def smart_chat(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        routing_profile: RoutingProfile = "auto",
+        timeout: float | None = None,
+    ) -> SmartChatResponse:
+        """Async smart chat with automatic model routing, paid on Solana."""
+        decision = route_with_catalog(
+            prompt,
+            system,
+            max_tokens or DEFAULT_MAX_TOKENS,
+            await self._get_model_pricing(),
+            routing_profile=routing_profile,
+            minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
+        )
+        response = await self.chat(
+            decision["model"],
+            prompt,
+            system=system,
+            max_tokens=max_tokens or DEFAULT_MAX_TOKENS,
+            temperature=temperature,
+            timeout=timeout,
+            fallback_models=decision.get("fallbacks") or None,
+        )
+        return SmartChatResponse(
+            response=response,
+            model=decision["model"],
+            routing=RoutingDecision(**decision),
+        )
+
+    async def smart_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        search: bool = False,
+        search_parameters: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        timeout: float | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
+        routing_profile: RoutingProfile = "auto",
+    ) -> SmartChatCompletionResponse:
+        """Async smart routing for a full message list, paid on Solana."""
+        view = routing_text(messages)
+        decision = route_with_catalog(
+            view["prompt"],
+            view["system_prompt"],
+            max_tokens or DEFAULT_MAX_TOKENS,
+            await self._get_model_pricing(),
+            routing_profile=routing_profile,
+            requires_structured_output=response_format is not None,
+            tools=tools,
+            tool_choice=tool_choice,
+            conversation_chars=view["conversation_chars"],
+            has_vision=view["has_vision"],
+            minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
+        )
+        response = await self.chat_completion(
+            decision["model"],
+            messages,
+            max_tokens=max_tokens or DEFAULT_MAX_TOKENS,
+            temperature=temperature,
+            top_p=top_p,
+            search=search,
+            search_parameters=search_parameters,
+            tools=tools,
+            tool_choice=tool_choice,
+            timeout=timeout,
+            response_format=response_format,
+            stop=stop,
+            fallback_models=fallback_models or decision.get("fallbacks") or None,
+        )
+        return SmartChatCompletionResponse(
+            response=response,
+            model=decision["model"],
+            routing=RoutingDecision(**decision),
+        )
+
     async def chat(
         self,
         model: str,
@@ -3063,6 +3380,7 @@ class AsyncSolanaLLMClient:
         timeout: float | None = None,
         response_format: dict[str, Any] | None = None,
         stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
     ) -> str:
         messages: list[dict[str, str]] = []
         if system:
@@ -3077,6 +3395,7 @@ class AsyncSolanaLLMClient:
             timeout=timeout,
             response_format=response_format,
             stop=stop,
+            fallback_models=fallback_models,
         )
         return result.choices[0].message.content or ""
 
@@ -3094,7 +3413,30 @@ class AsyncSolanaLLMClient:
         timeout: float | None = None,
         response_format: dict[str, Any] | None = None,
         stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
     ) -> ChatResponse:
+        # `blockrun/auto` | `blockrun/eco` | `blockrun/premium` select a routing
+        # profile rather than a model.
+        virtual_profile = routing_profile_for_model(model)
+        if virtual_profile is not None:
+            return (
+                await self.smart_chat_completion(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    search=search,
+                    search_parameters=search_parameters,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    timeout=timeout,
+                    response_format=response_format,
+                    stop=stop,
+                    fallback_models=fallback_models,
+                    routing_profile=virtual_profile,  # type: ignore[arg-type]
+                )
+            ).response
+
         validate_max_tokens(max_tokens)
         body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
@@ -3113,7 +3455,27 @@ class AsyncSolanaLLMClient:
             body["response_format"] = response_format
         if stop is not None:
             body["stop"] = stop
-        return await self._request_with_payment("/v1/chat/completions", body, timeout=timeout)
+
+        # Same recovery walk as the sync client: transient upstream failures
+        # step to the next ranked model, a settled payment never retries.
+        attempts = [model, *(fallback_models or [])]
+        last_exc: Exception | None = None
+        for i, attempt_model in enumerate(attempts):
+            body["model"] = attempt_model
+            try:
+                return await self._request_with_payment(
+                    "/v1/chat/completions", body, timeout=timeout
+                )
+            except Exception as exc:
+                if not _should_fallback_solana(exc) or i + 1 >= len(attempts):
+                    raise
+                last_exc = exc
+                sys.stderr.write(
+                    f"[blockrun_llm] solana {attempt_model} -> {attempts[i + 1]} "
+                    f"({type(exc).__name__}: {str(exc)[:80]})\n"
+                )
+        assert last_exc is not None
+        raise last_exc
 
     async def list_models(self) -> list[dict[str, Any]]:
         resp = await self._client.get(f"{self._api_url}/v1/models")
