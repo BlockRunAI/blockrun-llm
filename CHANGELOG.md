@@ -38,6 +38,18 @@ All notable changes to blockrun-llm will be documented in this file.
   never retried, so a second model cannot sign a second transfer for one call.
 
 ### Fixed
+- **One scoring dimension was silently weighted zero.** The config transpile that
+  produced `router_core/config.py` snake_cased key names, and `imperativeVerbs`
+  is both a keyword-list field *and* a dimension name — so its 0.03 weight
+  landed under `imperative_verbs` while the classifier emitted `imperativeVerbs`,
+  and `weights.get(name, 0)` scored it zero. Build/deploy-shaped requests were
+  under-classified: 3 of 8 sampled imperative prompts ("Create and deploy the
+  service", "Set up the config and deploy it", "Develop a CLI that generates
+  reports") landed in SIMPLE where they should have been ambiguous and defaulted
+  up to MEDIUM. Now guarded by a test asserting the weight keys and the emitted
+  dimension names are the same set, plus the verbatim upstream weight table.
+  Cross-SDK parity re-verified at 24/24 after the fix.
+
 - **A 429 now walks the fallback chain instead of failing the call.** Both
   clients treated only 5xx as retriable, so a saturated upstream ended the
   request even with capable models left in the chain. Found live: a rate-limited
