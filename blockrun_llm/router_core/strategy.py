@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import math
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
@@ -56,6 +57,33 @@ def sample_prompt(value: str, scan_limit: int) -> str:
 
 def scan_limit_for(options: RouterOptions) -> int:
     return max(1, min(8_000, options["config"]["classifier"]["prompt_truncation_chars"]))
+
+
+def apply_unavailable_models(
+    tier_configs: dict[str, TierConfig],
+    unavailable_models: Sequence[str] | None,
+) -> dict[str, TierConfig]:
+    """Remove host-declared-dead models from every tier chain.
+
+    Promotes the first surviving rung to primary. A tier whose chain is
+    entirely dead keeps its original config — the router has nothing live to
+    offer there, and inventing a model would hide the outage from the host
+    that reported it.
+    """
+    if not unavailable_models:
+        return tier_configs
+    dead = set(unavailable_models)
+    result = tier_configs
+    for tier, config in tier_configs.items():
+        alive = [model for model in [config["primary"], *config["fallback"]] if model not in dead]
+        if not alive or (
+            alive[0] == config["primary"] and len(alive) == len(config["fallback"]) + 1
+        ):
+            continue
+        if result is tier_configs:
+            result = dict(tier_configs)
+        result[tier] = {"primary": alive[0], "fallback": alive[1:]}
+    return result
 
 
 def apply_promotions(
@@ -191,6 +219,10 @@ class RulesStrategy:
         # Apply time-windowed promotions
         now = as_utc(options.get("now"))
         tier_configs = apply_promotions(tier_configs, config.get("promotions"), profile, now)
+
+        # Hard-remove models the host has observed dead at the gateway. After
+        # promotions, so a promo cannot resurrect a rung the host just killed.
+        tier_configs = apply_unavailable_models(tier_configs, options.get("unavailable_models"))
 
         agentic_score_value = rule_result.get("agentic_score")
 

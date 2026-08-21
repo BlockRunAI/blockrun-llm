@@ -89,18 +89,6 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": False,
             "supports_vision": False,
         },
-        "free/gpt-oss-120b": {
-            "context_window": 128_000,
-            "max_output_tokens": 16_384,
-            "supports_tools": False,
-            "supports_vision": False,
-        },
-        "free/gpt-oss-20b": {
-            "context_window": 128_000,
-            "max_output_tokens": 16_384,
-            "supports_tools": False,
-            "supports_vision": False,
-        },
         "free/seed-oss-36b": {
             "context_window": 131_072,
             "max_output_tokens": 16_384,
@@ -172,6 +160,18 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "max_output_tokens": 65_536,
             "supports_tools": True,
             "supports_vision": True,
+        },
+        "nvidia/nemotron-nano-9b-v2": {
+            "context_window": 131_072,
+            "max_output_tokens": 16_384,
+            "supports_tools": False,
+            "supports_vision": False,
+        },
+        "nvidia/step-3.7-flash": {
+            "context_window": 131_072,
+            "max_output_tokens": 16_384,
+            "supports_tools": False,
+            "supports_vision": False,
         },
         "openai/gpt-4.1": {
             "context_window": 128_000,

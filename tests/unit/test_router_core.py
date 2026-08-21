@@ -3,7 +3,8 @@ Parity tests for the Router Core port.
 
 Every case here is a 1:1 port of an upstream ``@blockrun/router-core`` vitest
 case (``portfolio.test.ts``, ``selector.test.ts``, ``strategy.test.ts``,
-``tool-intent.test.ts`` at commit ``18bf4ab``). They are the regression guard
+``tool-intent.test.ts``, ``unavailable-models.test.ts`` at commit
+``d7bc10c``). They are the regression guard
 that the Python port keeps choosing the same models as the TypeScript SDK —
 when upstream is re-synced, re-port these alongside the source.
 """
@@ -18,6 +19,7 @@ import pytest
 from blockrun_llm.router_core import (
     DEFAULT_ROUTING_CONFIG,
     RulesStrategy,
+    apply_unavailable_models,
     calculate_model_cost,
     filter_by_exclude_list,
     filter_by_tool_calling,
@@ -1260,7 +1262,7 @@ class TestDimensionWeightKeys:
         assert weighted - emitted == set(), "weights that match no scored dimension"
 
     def test_the_weights_match_the_upstream_values(self):
-        # Ported verbatim from router-core config.ts at 18bf4ab.
+        # Ported verbatim from router-core config.ts at d7bc10c.
         assert DEFAULT_ROUTING_CONFIG["scoring"]["dimension_weights"] == {
             "tokenCount": 0.08,
             "codePresence": 0.15,
@@ -1278,3 +1280,99 @@ class TestDimensionWeightKeys:
             "domainSpecificity": 0.02,
             "agenticTask": 0.04,
         }
+
+
+class TestUnavailableModels:
+    """1:1 port of ``unavailable-models.test.ts`` (d7bc10c)."""
+
+    TIERS = {
+        "SIMPLE": {"primary": "a/one", "fallback": ["a/two", "a/three"]},
+        "MEDIUM": {"primary": "b/one", "fallback": ["b/two"]},
+        "COMPLEX": {"primary": "c/one", "fallback": []},
+        "REASONING": {"primary": "d/one", "fallback": ["d/two"]},
+    }
+
+    @staticmethod
+    def _options(**overrides):
+        from blockrun_llm.router_core import DEFAULT_MODEL_CAPABILITIES
+
+        pricing = {
+            model: {"input_price": 1.0, "output_price": 3.0} for model in DEFAULT_MODEL_CAPABILITIES
+        }
+        base = {
+            "config": DEFAULT_ROUTING_CONFIG,
+            "model_pricing": pricing,
+            "now": datetime(2026, 8, 20, tzinfo=timezone.utc),
+        }
+        base.update(overrides)
+        return base
+
+    def test_is_the_identity_for_an_absent_or_empty_list(self):
+        assert apply_unavailable_models(self.TIERS, None) is self.TIERS
+        assert apply_unavailable_models(self.TIERS, []) is self.TIERS
+
+    def test_promotes_the_first_surviving_fallback_when_the_primary_is_dead(self):
+        result = apply_unavailable_models(self.TIERS, ["a/one"])
+        assert result["SIMPLE"] == {"primary": "a/two", "fallback": ["a/three"]}
+        # Untouched tiers keep their original config objects.
+        assert result["MEDIUM"] is self.TIERS["MEDIUM"]
+
+    def test_removes_dead_rungs_from_the_middle_of_a_chain(self):
+        result = apply_unavailable_models(self.TIERS, ["a/two"])
+        assert result["SIMPLE"] == {"primary": "a/one", "fallback": ["a/three"]}
+
+    def test_keeps_the_original_config_when_a_tiers_whole_chain_is_dead(self):
+        result = apply_unavailable_models(self.TIERS, ["c/one"])
+        assert result["COMPLEX"] is self.TIERS["COMPLEX"]
+
+    def test_does_not_mutate_its_input(self):
+        apply_unavailable_models(self.TIERS, ["a/one", "b/one"])
+        assert self.TIERS["SIMPLE"]["primary"] == "a/one"
+        assert self.TIERS["MEDIUM"]["primary"] == "b/one"
+
+    def test_never_selects_or_lists_a_model_the_host_declared_dead(self):
+        baseline = route("What is the capital of France?", None, 256, self._options())
+        dead = baseline["model"]
+        decision = route(
+            "What is the capital of France?",
+            None,
+            256,
+            self._options(unavailable_models=[dead]),
+        )
+        assert decision["model"] != dead
+        assert dead not in (decision.get("candidates") or [])
+
+    def test_keeps_dead_evidence_candidates_out_of_the_portfolio_chain(self):
+        math_prompt = "Solve for x: 3x^2 - 12x + 9 = 0. Show your work."
+        baseline = route(math_prompt, None, 1024, self._options())
+        evidence = baseline.get("candidates") or []
+        assert len(evidence) > 1
+        dead = evidence[0]
+        decision = route(math_prompt, None, 1024, self._options(unavailable_models=[dead]))
+        assert decision["model"] != dead
+        assert dead not in (decision.get("candidates") or [])
+
+    def test_applies_to_the_rules_strategy_as_well(self):
+        config = {**DEFAULT_ROUTING_CONFIG, "strategy": "rules"}
+        baseline = route("What is the capital of France?", None, 256, self._options(config=config))
+        dead = baseline["model"]
+        decision = route(
+            "What is the capital of France?",
+            None,
+            256,
+            self._options(config=config, unavailable_models=[dead]),
+        )
+        assert decision["model"] != dead
+
+    def test_survives_killing_an_entire_tier_chain(self):
+        chain = [
+            DEFAULT_ROUTING_CONFIG["tiers"]["SIMPLE"]["primary"],
+            *DEFAULT_ROUTING_CONFIG["tiers"]["SIMPLE"]["fallback"],
+        ]
+        decision = route(
+            "What is the capital of France?",
+            None,
+            256,
+            self._options(unavailable_models=chain),
+        )
+        assert len(decision["model"]) > 0

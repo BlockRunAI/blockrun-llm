@@ -60,14 +60,17 @@ CATALOG = {
 
 
 class TestCatalogResolution:
-    def test_maps_the_routers_free_namespace_onto_gateway_nvidia_ids(self):
-        catalog = {**CATALOG, "nvidia/gpt-oss-120b": _price(0, 0)}
+    def test_heads_eco_with_the_gateway_native_free_tier(self):
+        # Since d7bc10c the chains carry gateway-native nvidia/* ids directly,
+        # so the adapter's free/*->nvidia/* mapping branch is dormant with the
+        # current pin. It stays because pins move independently; the dropped-
+        # unpriced-ids test below keeps the drop path honest. (Mirrors the
+        # TypeScript SDK's retargeting of the same guard.)
+        catalog = {**CATALOG, "nvidia/step-3.7-flash": _price(0, 0)}
 
         decision = route("hi", None, 512, catalog, "eco")
 
-        # eco's SIMPLE chain leads with free/gpt-oss-120b, which the gateway
-        # serves as nvidia/gpt-oss-120b.
-        assert "nvidia/gpt-oss-120b" in [decision["model"], *decision["fallbacks"]]
+        assert "nvidia/step-3.7-flash" in [decision["model"], *decision["fallbacks"]]
         assert not any(
             model.startswith("free/") for model in [decision["model"], *decision["fallbacks"]]
         )
