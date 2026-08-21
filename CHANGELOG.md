@@ -2,6 +2,37 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.13.0 — 2026-08-21
+
+### Added
+- **Dead-model kill-switch: `unavailable_models`.** A host that observes a model
+  answering 400/404/410 at the gateway can pass its id in
+  `options["unavailable_models"]` and it is hard-removed from every routing
+  chain before selection — the first surviving rung is promoted to primary, and
+  an eligibility fail-open can never resurrect it. This is the operational
+  answer to a dead chain rung: effective on the next request instead of waiting
+  for a Router Core release plus SDK repins. `apply_unavailable_models` is
+  exported for hosts that manage tier maps directly. Port of upstream
+  `d7bc10c`, with the case suite ported 1:1.
+
+- **Cross-language decision-snapshot parity.**
+  `tests/unit/test_router_core_snapshot.py` recomputes the upstream frozen
+  corpus — 88 complete decisions (22 prompts × 4 profiles with rotating
+  tool/vision/structured-output shapes) — and compares every pinned field
+  against the TypeScript engine's committed fixture, floats and reasoning
+  strings included. Parity is now proven decision-by-decision rather than
+  test-case-by-test-case.
+
+### Changed
+- **Router Core re-synced to upstream `d7bc10c`** (was `18bf4ab`, four commits
+  behind — the same pin the TypeScript SDK bundles). The visible routing
+  change: the free rungs retarget from the retired `free/gpt-oss-120b/20b`
+  pair (400 Unknown model at the gateway, probed 2026-08-21) to the current
+  NVIDIA free tier — `nvidia/step-3.7-flash` heads eco SIMPLE and the three
+  ultimate-backstop slots, `nvidia/nemotron-nano-9b-v2` takes the fast rung.
+  Both verified live by direct gateway calls. eco once again reaches a $0
+  model on its first candidate; capability entries updated to match.
+
 ## 1.12.0 — 2026-08-19
 
 ### Added

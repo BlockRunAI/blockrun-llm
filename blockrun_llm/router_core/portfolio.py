@@ -1180,12 +1180,16 @@ class PortfolioStrategy:
         )
         tier_config = tier_configs.get(target_tier)
         configured_candidates = get_fallback_chain(target_tier, tier_configs) if tier_config else []
+        # Evidence candidates join the configured chain, but the host's
+        # unavailable set applies to both: the configured side arrives filtered
+        # through RulesStrategy, and a dead evidence model must not re-enter here.
+        unavailable = set(options.get("unavailable_models") or ())
         chain = [
             model
             for model in dict.fromkeys(
                 [*configured_candidates, *evidence_candidates(features.task_type)]
             )
-            if isinstance(model, str) and model
+            if isinstance(model, str) and model and model not in unavailable
         ]
         eligible = [
             model for model in chain if is_eligible(model, features, max_output_tokens, options)

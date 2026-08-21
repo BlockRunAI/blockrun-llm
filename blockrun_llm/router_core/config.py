@@ -2,8 +2,8 @@
 Default Routing Config
 
 Python port of ``@blockrun/router-core`` ``config.ts`` (upstream commit
-``18bf4ab``, 2026-08-12 — one commit ahead of the pin the TypeScript SDK
-bundles, which predates the deepseek-v4-flash NVIDIA EOL).
+``d7bc10c``, 2026-08-21 — the same pin the TypeScript SDK
+bundles).
 
 All routing parameters as a module constant. Hosts override by passing their
 own ``RoutingConfig`` in ``RouterOptions["config"]``.
@@ -1080,7 +1080,7 @@ DEFAULT_ROUTING_CONFIG: RoutingConfig = {
                 "google/gemini-2.5-flash-lite",  # 1,353ms, $0.10/$0.40
                 "openai/gpt-5.4-nano",  # $0.20/$1.25, 1M context
                 "xai/grok-4-fast-non-reasoning",  # 1,143ms, $0.20/$0.50 — fast fallback
-                "free/gpt-oss-120b",  # 1,252ms, FREE fallback (hidden from /v1/models but direct calls work)
+                "nvidia/step-3.7-flash",  # FREE backstop — new NVIDIA free tier (gpt-oss-120b now 400s; probed 2026-08-21)
             ],
         },
         "MEDIUM": {
@@ -1126,12 +1126,13 @@ DEFAULT_ROUTING_CONFIG: RoutingConfig = {
     # Eco tier configs - absolute cheapest (blockrun/eco)
     "eco_tiers": {
         "SIMPLE": {
-            "primary": "free/gpt-oss-120b",  # FREE! $0.00/$0.00 — heavy user default
+            "primary": "nvidia/step-3.7-flash",  # FREE! $0.00/$0.00 — new NVIDIA free tier flagship
             "fallback": [
-                "free/gpt-oss-20b",  # FREE — smaller, faster
-                # deepseek-v4-flash and seed-oss-36b sat here until NVIDIA EOL'd them
-                # (410; 2026-08-12 and 2026-08-03 respectively). gpt-oss-120b/20b already
-                # head this chain, so the rungs are dropped, not retargeted.
+                "nvidia/nemotron-nano-9b-v2",  # FREE — compact + fast (~0.7s), high-volume light tasks
+                # This head keeps rotting with NVIDIA's free hosting: deepseek-v4-flash
+                # (410, 2026-08-12), seed-oss-36b (410, 2026-08-03), then gpt-oss-120b/20b
+                # (400 Unknown model, probed 2026-08-21). Each retirement retargets the
+                # two free rungs to the current free tier; the paid rungs below never move.
                 "google/gemini-3.1-flash-lite",  # $0.25/$1.50 — newest flash-lite
                 "openai/gpt-5.4-nano",  # $0.20/$1.25 — fast nano
                 "google/gemini-2.5-flash-lite",  # $0.10/$0.40
@@ -1217,7 +1218,7 @@ DEFAULT_ROUTING_CONFIG: RoutingConfig = {
                 "openai/gpt-5.4",  # Previous flagship (slow but stable, benchmarked at 6,213ms)
                 "openai/gpt-5.3-codex",
                 "deepseek/deepseek-chat",  # Cheap, reliable
-                "free/gpt-oss-120b",  # NVIDIA free ultimate backstop (was seed-oss-36b; EOL'd 2026-08-03)
+                "nvidia/step-3.7-flash",  # NVIDIA free ultimate backstop (was gpt-oss-120b; 400s since ~2026-08)
             ],
         },
         "REASONING": {
@@ -1273,7 +1274,7 @@ DEFAULT_ROUTING_CONFIG: RoutingConfig = {
                 "openai/gpt-5.5",  # Prior flagship — native agent + computer use (exactly the agentic-tier use case)
                 "openai/gpt-5.4",  # Previous flagship — 6,213ms, reliable
                 "deepseek/deepseek-chat",  # 1,431ms — cheap, reliable
-                "free/gpt-oss-120b",  # NVIDIA free ultimate backstop (was seed-oss-36b; EOL'd 2026-08-03)
+                "nvidia/step-3.7-flash",  # NVIDIA free ultimate backstop (was gpt-oss-120b; 400s since ~2026-08)
             ],
         },
         "REASONING": {

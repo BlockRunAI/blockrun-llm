@@ -300,6 +300,15 @@ class RouterOptions(_RouterOptionsRequired, total=False):
     has_vision: bool
     #: ``response_format`` / JSON schema requires reliable structured output.
     requires_structured_output: bool
+    #: Model ids the host has observed to be unavailable at the gateway (a
+    #: 400/404/410 on a direct call, a provider EOL). Hard-removed from every
+    #: chain before selection and never restored by an eligibility fail-open —
+    #: the operational kill-switch for a dead chain rung, usable the moment the
+    #: host observes the failure instead of waiting on a core release and two
+    #: consumer repins. Distinct from user-preference exclusion
+    #: (``filter_by_exclude_list``), which deliberately fail-opens rather than
+    #: empty a chain.
+    unavailable_models: Sequence[str]
     #: Override current time for promotion window checks (for testing). Naive
     #: values are read as UTC. ``datetime.datetime``.
     now: object
