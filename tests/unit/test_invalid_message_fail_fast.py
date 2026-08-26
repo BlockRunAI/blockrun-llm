@@ -61,6 +61,20 @@ class TestInvalidMessageReachesTheClassifier:
         assert exc.response is not None
         assert "invalidMessage" not in exc.response
 
+    def test_machine_readable_code_and_reason_are_preserved(self) -> None:
+        exc = build_payment_rejected_error(
+            _FakeResponse(
+                {
+                    "error": "Payment verification failed",
+                    "code": "PAYMENT_INVALID",
+                    "reason": "expired_signature",
+                }
+            )
+        )
+        assert exc.response is not None
+        assert exc.response["code"] == "PAYMENT_INVALID"
+        assert exc.response["reason"] == "expired_signature"
+
 
 class TestUnrecoverableClassification:
     def test_invalid_account_data_is_unrecoverable(self) -> None:
