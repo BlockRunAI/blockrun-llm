@@ -2,7 +2,38 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
-## 1.13.0 — 2026-08-21
+## 1.13.0 — 2026-08-26
+
+### Fixed
+- **Solana paid-leg re-sign is gated on payment PHASE, not on the failure
+  cause.** A settlement failure may already have broadcast the transfer, so a
+  lost acknowledgement could previously authorize a *second* payment for one
+  request. Settlement failures are now terminal on every paid path — sync and
+  async, streaming, non-streaming, raw POST and raw GET.
+
+  Everything the gateway rejects **before** broadcast stays retryable, because
+  re-signing there costs the payer nothing and is what each rejection's own
+  message asks for: `PAYMENT_UNDERPAID` ("re-fetch the 402 quote and sign the
+  amount it specifies"), `PAYMENT_REPLAY` ("sign a new payment for each
+  request"), and every verification-phase rejection including
+  `expired_signature`, `verification_unavailable` and the `verification_failed`
+  catch-all that carries facilitator timeouts. These are exactly the concurrent
+  single-wallet failures the whole-request retry exists to fix, so the ~100%
+  success rate under concurrent load is preserved; gating on stale-blockhash
+  alone would have silently reverted it, since `_should_fallback_solana` refuses
+  every `PaymentError` and they would reach the caller with no second model
+  tried.
+
+  `insufficient_funds` and the unrecoverable `invalidMessage` causes (no USDC
+  token account, bad signing key, denylisted payer) remain terminal — no fresh
+  signature makes them pass.
+
+- **`build_payment_rejected_error` preserves the gateway's `code` and `reason`.**
+  These are gateway-owned enums, length-bounded like `details` and
+  `invalidMessage`; `debug` stays filtered. Without them the client could only
+  classify a 402 by prose, and the gateway's two 402 body families disagree on
+  which fields exist: `/v1/chat/completions` sends `code` + `message` +
+  `reason`, while the other paid routes send `error` + `reason` only.
 
 ### Added
 - **Dead-model kill-switch: `unavailable_models`.** A host that observes a model
