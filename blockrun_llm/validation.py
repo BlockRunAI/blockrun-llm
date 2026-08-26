@@ -417,6 +417,15 @@ def build_payment_rejected_error(response: Any) -> PaymentError:
     raw_invalid_message = body.get("invalidMessage")
     if isinstance(raw_invalid_message, str) and 0 < len(raw_invalid_message) < 256:
         sanitized["invalidMessage"] = raw_invalid_message
+    # Machine-readable payment classification used by the Solana client's
+    # bounded re-sign policy. These are gateway-owned enums, not raw upstream
+    # text. Preserve only short strings; debug remains intentionally filtered.
+    raw_reason = body.get("reason")
+    if isinstance(raw_reason, str) and 0 < len(raw_reason) < 128:
+        sanitized["reason"] = raw_reason
+    raw_code = body.get("code")
+    if isinstance(raw_code, str) and 0 < len(raw_code) < 128:
+        sanitized["code"] = raw_code
     detail_part = sanitized.get("details") or sanitized.get("message") or ""
     invalid_message = sanitized.get("invalidMessage")
     if invalid_message:
