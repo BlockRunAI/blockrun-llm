@@ -206,8 +206,8 @@ _UNRECOVERABLE_PAYMENT_PATTERNS = (
 # NOTE the asymmetry with the gateway's list (blockrun-sol x402-solana.ts): it
 # ALSO fails fast on BlockhashNotFound, because retrying the SAME dead header is
 # futile there. Here the opposite holds — re-signing with a FRESH blockhash is
-# precisely what this retry does, and it fixes it — so blockhash messages must
-# stay OUT of this list.
+# precisely what a pre-broadcast retry does, and it fixes it — so blockhash
+# messages must stay OUT of this list.
 _UNRECOVERABLE_INVALID_MESSAGES = (
     "invalidaccountdata",
     "accountnotfound",
@@ -240,48 +240,99 @@ def _is_unrecoverable_payment_error(reason: str) -> bool:
     return any(p in _normalize_reason(reason) for p in _UNRECOVERABLE_INVALID_MESSAGES)
 
 
-def _is_safe_stale_resign_error(exc: PaymentError) -> bool:
+# --- Paid-leg re-sign policy -------------------------------------------------
+#
+# The safe/unsafe line is the PAYMENT PHASE, not the specific cause.
+#
+#   pre-broadcast  — the gateway rejected the authorization before any transfer
+#                    was submitted on-chain. Nothing settled, so re-running the
+#                    whole request with a fresh nonce/amount/blockhash costs the
+#                    payer nothing and is the documented cure.
+#   settlement     — settle was attempted. If its acknowledgement was lost,
+#                    re-signing pays twice for one request. Never re-signed.
+#
+# The gateway (blockrun-sol) emits two 402 body families and the policy has to
+# read both:
+#
+#   /v1/chat/completions   {error, message, code, reason}
+#   the other paid routes  {error, reason}      — no `code`, no `message`
+#
+# `error` is the phase-bearing field in BOTH; validation.sanitize_error_response
+# promotes it into `message` for the flat shape, which is why the title match
+# below is against `message`. Titles are matched by PREFIX, never by substring:
+# `_normalize_reason` strips separators, so a substring test can straddle word
+# boundaries ("...verification failed before settlement; failed..." contains
+# "settlementfailed"). blockrun-sol/src/lib/payment-rejection.ts documents that
+# same over-match hazard and avoids it for the same reason.
+
+# Gateway `code` values that prove the rejection landed before any broadcast.
+#   PAYMENT_UNDERPAID — pre-verify amount-binding rejection
+#   PAYMENT_REPLAY    — nonce claim rejected after verify, before inference
+#   PAYMENT_INVALID   — facilitator verify rejection
+_PRE_BROADCAST_CODES = frozenset({"paymentunderpaid", "paymentreplay", "paymentinvalid"})
+
+# Normalized `error` titles for the same three, for the routes that send no code.
+_PRE_BROADCAST_TITLES = (
+    "paymentverificationfailed",
+    "paymentauthorizationalreadyused",
+    "paymentbelowquotedprice",
+)
+
+_SETTLEMENT_CODE = "settlementfailed"
+_SETTLEMENT_TITLE = "paymentsettlementfailed"
+
+# Verify-phase `reason` values a fresh signature can never satisfy.
+_TERMINAL_VERIFY_REASONS = frozenset({"insufficientfunds"})
+
+
+def _is_safe_resign_error(exc: PaymentError) -> bool:
     """Return whether a paid-leg 402 is safe to retry with a fresh signature.
 
-    Re-sign only an explicit *verification-phase* stale-blockhash rejection.
-    Settlement has already attempted an irreversible broadcast; if its response
-    was lost, re-signing can pay twice for one request. A bare
-    ``transaction_simulation_failed`` is deliberately terminal because it also
-    covers balance, account-data, and signature failures.
+    Retry iff the gateway proves the rejection was PRE-BROADCAST. Settlement
+    failures are terminal: settle has attempted an irreversible transfer, so a
+    lost acknowledgement must never authorize a second payment.
 
-    Recognized gateway signals mirror the Go SDK, with the stricter requirement
-    that every one also carry a positive verification-phase marker:
+    Pre-broadcast rejections are exactly the concurrent single-wallet failures
+    the whole-request retry exists to fix, and each one's own gateway message
+    asks for the retry:
 
-    * ``PAYMENT_BLOCKHASH_STALE``
-    * ``PAYMENT_INVALID`` + ``expired_signature``
-    * legacy ``invalidMessage=BlockhashNotFound|BlockHeightExceeded``
-    * Anthropic/OpenAI messages containing ``verification failed: expired_signature``
+    * ``PAYMENT_UNDERPAID`` — "Re-fetch the 402 quote and sign the amount it
+      specifies." Emitted before verify runs.
+    * ``PAYMENT_REPLAY`` — "Sign a new payment for each request." The nonce
+      claim is taken after verify and before the result is served.
+    * ``PAYMENT_INVALID`` / ``Payment verification failed`` — every verify-phase
+      rejection, including ``expired_signature`` (stale blockhash),
+      ``verification_unavailable`` (the gateway's own docs: "Retry the request;
+      the signed payment was not rejected") and the ``verification_failed``
+      catch-all that carries facilitator timeouts. Verify never broadcasts.
+
+    ``insufficient_funds`` and the unrecoverable ``invalidMessage`` causes
+    (no USDC token account, bad signing key, denylisted payer) stay terminal —
+    no fresh signature makes them pass, and each wasted attempt costs the
+    gateway its own verify retries.
     """
     body = exc.response if isinstance(exc.response, dict) else {}
     code = _normalize_reason(str(body.get("code") or ""))
     reason = _normalize_reason(str(body.get("reason") or ""))
-    detail = _normalize_reason(str(body.get("invalidMessage") or ""))
     message = _normalize_reason(str(body.get("message") or str(exc)))
 
-    # Phase gate: an explicit settlement failure is never re-signed.
-    if "settlementfailed" in code or "settlementfailed" in message:
+    # Settlement phase is never re-signed. Checked first, and on all three
+    # fields, so no single missing field can turn a broadcast into a re-sign.
+    if code == _SETTLEMENT_CODE or reason == _SETTLEMENT_CODE:
+        return False
+    if message.startswith(_SETTLEMENT_TITLE):
         return False
 
-    verify_phase = code == "paymentinvalid" or "verificationfailed" in message
-    # Every stale signal still requires a positive verification-phase marker.
-    # Older gateways occasionally returned BlockhashNotFound during settlement;
-    # treating that detail alone as safe could authorize a second payment after
-    # the first broadcast merely lost its acknowledgement.
-    return bool(
-        verify_phase
-        and (
-            code == "paymentblockhashstale"
-            or "blockhashnotfound" in detail
-            or "blockheightexceeded" in detail
-            or reason == "expiredsignature"
-            or "expiredsignature" in message
-        )
-    )
+    # Fail fast on causes a fresh payment cannot cure (#23: payer has no USDC
+    # token account). These arrive as `reason` on newer routes and as folded
+    # `invalidMessage` text on older ones, so check both.
+    if reason in _TERMINAL_VERIFY_REASONS or _is_unrecoverable_payment_error(str(exc)):
+        return False
+
+    # Positive pre-broadcast proof required — silence is terminal.
+    if code in _PRE_BROADCAST_CODES:
+        return True
+    return message.startswith(_PRE_BROADCAST_TITLES)
 
 
 def _get_user_agent() -> str:
@@ -1018,11 +1069,19 @@ class SolanaLLMClient:
     _STREAM_5XX_STATUSES = (500, 502, 503, 504)
     _STREAM_5XX_BACKOFFS = (1.0, 2.0, 4.0)
 
-    # Whole-request re-sign is bounded and only allowed for an explicit
-    # verification-phase stale blockhash. Every other paid-leg failure is
-    # terminal because settlement may already have broadcast the transaction.
-    _MAX_PAYMENT_RETRIES = 2
-    _PAYMENT_RETRY_BACKOFFS = (0.5, 2.0)
+    # Whole-request payment retry: on a PRE-BROADCAST payment rejection
+    # (concurrent single-wallet replay-nonce / underpaid amount binding /
+    # verify-phase flake), re-run the ENTIRE paid request — fresh 402 probe +
+    # fresh signature (new nonce, correct amount, current blockhash) — but only
+    # before the first chunk is yielded. This is what gets concurrent load to
+    # ~100% success; the per-call signing lock alone can't recover a transient
+    # or amount failure once it has happened.
+    #
+    # A settlement failure is NEVER retried (see _is_safe_resign_error), so no
+    # attempt here can pay twice: every retried rejection is one the gateway
+    # refused before broadcasting.
+    _MAX_PAYMENT_RETRIES = 4
+    _PAYMENT_RETRY_BACKOFFS = (0.25, 0.5, 1.0, 2.0)
 
     def chat_completion_stream(
         self,
@@ -1122,9 +1181,10 @@ class SolanaLLMClient:
         """Whole-request payment-retry wrapper around :meth:`_stream_once`.
 
         Re-runs the entire paid request (fresh 402 probe + fresh signature) on a
-        non-permanent payment rejection, but only before the first chunk is
-        yielded — once the 200 stream starts, :meth:`_stream_once` returns
-        without raising, so output is never replayed. See _MAX_PAYMENT_RETRIES.
+        PRE-BROADCAST payment rejection (:func:`_is_safe_resign_error`), but only
+        before the first chunk is yielded — once the 200 stream starts,
+        :meth:`_stream_once` returns without raising, so output is never
+        replayed. A settlement failure is terminal. See _MAX_PAYMENT_RETRIES.
         """
         import time
 
@@ -1138,7 +1198,7 @@ class SolanaLLMClient:
             except PaymentError as exc:
                 if (
                     yielded > 0
-                    or not _is_safe_stale_resign_error(exc)
+                    or not _is_safe_resign_error(exc)
                     or payment_attempt >= self._MAX_PAYMENT_RETRIES
                 ):
                     raise
@@ -1147,8 +1207,6 @@ class SolanaLLMClient:
                         min(payment_attempt, len(self._PAYMENT_RETRY_BACKOFFS) - 1)
                     ]
                 )
-
-        raise AssertionError("unreachable: bounded payment retry loop exhausted")
 
     def _stream_once(
         self,
@@ -1367,9 +1425,12 @@ class SolanaLLMClient:
     ) -> ChatResponse:
         """Whole-request payment-retry wrapper around :meth:`_request_once`.
 
-        Re-runs the entire paid request (fresh 402 probe + fresh signature) only
-        for an explicit verification-phase stale blockhash. Settlement failures
-        are terminal to avoid a possible double charge. See _MAX_PAYMENT_RETRIES.
+        Re-runs the entire paid request (fresh 402 probe + fresh signature) on a
+        PRE-BROADCAST payment rejection — concurrent replay-nonce, underpaid
+        amount binding, or a verify-phase flake — so a shared client under
+        concurrent load reaches ~100%. Settlement failures are terminal: settle
+        may already have broadcast, so re-signing could pay twice for one
+        request. See :func:`_is_safe_resign_error` and _MAX_PAYMENT_RETRIES.
         """
         import time
 
@@ -1377,10 +1438,7 @@ class SolanaLLMClient:
             try:
                 return self._request_once(endpoint, body, timeout=timeout)
             except PaymentError as exc:
-                if (
-                    not _is_safe_stale_resign_error(exc)
-                    or payment_attempt >= self._MAX_PAYMENT_RETRIES
-                ):
+                if not _is_safe_resign_error(exc) or payment_attempt >= self._MAX_PAYMENT_RETRIES:
                     raise
                 time.sleep(
                     self._PAYMENT_RETRY_BACKOFFS[
@@ -1388,7 +1446,9 @@ class SolanaLLMClient:
                     ]
                 )
 
-        raise AssertionError("unreachable: bounded payment retry loop exhausted")
+        raise PaymentError(  # pragma: no cover - bounded loop always returns or raises
+            "Payment retry loop exhausted without a result."
+        )
 
     def _request_once(
         self, endpoint: str, body: dict[str, Any], timeout: float | None = None
@@ -1512,10 +1572,7 @@ class SolanaLLMClient:
             try:
                 return self._request_with_payment_raw_once(endpoint, body, timeout=timeout)
             except PaymentError as exc:
-                if (
-                    not _is_safe_stale_resign_error(exc)
-                    or payment_attempt >= self._MAX_PAYMENT_RETRIES
-                ):
+                if not _is_safe_resign_error(exc) or payment_attempt >= self._MAX_PAYMENT_RETRIES:
                     raise
                 time.sleep(
                     self._PAYMENT_RETRY_BACKOFFS[
@@ -1523,7 +1580,9 @@ class SolanaLLMClient:
                     ]
                 )
 
-        raise AssertionError("unreachable: bounded payment retry loop exhausted")
+        raise PaymentError(  # pragma: no cover - bounded loop always returns or raises
+            "Payment retry loop exhausted without a result."
+        )
 
     def _request_with_payment_raw_once(
         self, endpoint: str, body: dict[str, Any], timeout: float | None = None
@@ -1662,10 +1721,7 @@ class SolanaLLMClient:
             try:
                 return self._get_with_payment_raw_once(endpoint, params=params, timeout=timeout)
             except PaymentError as exc:
-                if (
-                    not _is_safe_stale_resign_error(exc)
-                    or payment_attempt >= self._MAX_PAYMENT_RETRIES
-                ):
+                if not _is_safe_resign_error(exc) or payment_attempt >= self._MAX_PAYMENT_RETRIES:
                     raise
                 time.sleep(
                     self._PAYMENT_RETRY_BACKOFFS[
@@ -1673,7 +1729,9 @@ class SolanaLLMClient:
                     ]
                 )
 
-        raise AssertionError("unreachable: bounded payment retry loop exhausted")
+        raise PaymentError(  # pragma: no cover - bounded loop always returns or raises
+            "Payment retry loop exhausted without a result."
+        )
 
     def _get_with_payment_raw_once(
         self,
@@ -3657,8 +3715,9 @@ class AsyncSolanaLLMClient:
         timeout: float | None = None,
     ):
         """Whole-request payment-retry wrapper around :meth:`_stream_once`
-        (async). Re-runs the paid request on a recoverable payment rejection,
-        only before the first chunk is yielded. See _MAX_PAYMENT_RETRIES."""
+        (async). Re-runs the paid request on a PRE-BROADCAST payment rejection,
+        only before the first chunk is yielded; a settlement failure is
+        terminal. See _MAX_PAYMENT_RETRIES."""
         for payment_attempt in range(self._MAX_PAYMENT_RETRIES + 1):
             yielded = 0
             try:
@@ -3669,7 +3728,7 @@ class AsyncSolanaLLMClient:
             except PaymentError as exc:
                 if (
                     yielded > 0
-                    or not _is_safe_stale_resign_error(exc)
+                    or not _is_safe_resign_error(exc)
                     or payment_attempt >= self._MAX_PAYMENT_RETRIES
                 ):
                     raise
@@ -3678,8 +3737,6 @@ class AsyncSolanaLLMClient:
                         min(payment_attempt, len(self._PAYMENT_RETRY_BACKOFFS) - 1)
                     ]
                 )
-
-        raise AssertionError("unreachable: bounded payment retry loop exhausted")
 
     async def _stream_once(
         self,
@@ -3871,17 +3928,14 @@ class AsyncSolanaLLMClient:
         self, endpoint: str, body: dict[str, Any], timeout: float | None = None
     ) -> ChatResponse:
         """Whole-request payment-retry wrapper around :meth:`_request_once`
-        (async). Same policy as the sync path — recoverable payment rejections
-        re-run the entire request with a fresh signature only for an explicit
-        verification-phase stale blockhash. See _MAX_PAYMENT_RETRIES."""
+        (async). Same policy as the sync path — a PRE-BROADCAST payment
+        rejection re-runs the entire request with a fresh signature; a
+        settlement failure is terminal. See _MAX_PAYMENT_RETRIES."""
         for payment_attempt in range(self._MAX_PAYMENT_RETRIES + 1):
             try:
                 return await self._request_once(endpoint, body, timeout=timeout)
             except PaymentError as exc:
-                if (
-                    not _is_safe_stale_resign_error(exc)
-                    or payment_attempt >= self._MAX_PAYMENT_RETRIES
-                ):
+                if not _is_safe_resign_error(exc) or payment_attempt >= self._MAX_PAYMENT_RETRIES:
                     raise
                 await asyncio.sleep(
                     self._PAYMENT_RETRY_BACKOFFS[
@@ -3889,7 +3943,9 @@ class AsyncSolanaLLMClient:
                     ]
                 )
 
-        raise AssertionError("unreachable: bounded payment retry loop exhausted")
+        raise PaymentError(  # pragma: no cover - bounded loop always returns or raises
+            "Payment retry loop exhausted without a result."
+        )
 
     async def _request_once(
         self, endpoint: str, body: dict[str, Any], timeout: float | None = None
@@ -3990,10 +4046,7 @@ class AsyncSolanaLLMClient:
             try:
                 return await self._request_with_payment_raw_once(endpoint, body, timeout=timeout)
             except PaymentError as exc:
-                if (
-                    not _is_safe_stale_resign_error(exc)
-                    or payment_attempt >= self._MAX_PAYMENT_RETRIES
-                ):
+                if not _is_safe_resign_error(exc) or payment_attempt >= self._MAX_PAYMENT_RETRIES:
                     raise
                 await asyncio.sleep(
                     self._PAYMENT_RETRY_BACKOFFS[
@@ -4001,7 +4054,9 @@ class AsyncSolanaLLMClient:
                     ]
                 )
 
-        raise AssertionError("unreachable: bounded payment retry loop exhausted")
+        raise PaymentError(  # pragma: no cover - bounded loop always returns or raises
+            "Payment retry loop exhausted without a result."
+        )
 
     async def _request_with_payment_raw_once(
         self, endpoint: str, body: dict[str, Any], timeout: float | None = None
@@ -4084,10 +4139,7 @@ class AsyncSolanaLLMClient:
                     endpoint, params=params, timeout=timeout
                 )
             except PaymentError as exc:
-                if (
-                    not _is_safe_stale_resign_error(exc)
-                    or payment_attempt >= self._MAX_PAYMENT_RETRIES
-                ):
+                if not _is_safe_resign_error(exc) or payment_attempt >= self._MAX_PAYMENT_RETRIES:
                     raise
                 await asyncio.sleep(
                     self._PAYMENT_RETRY_BACKOFFS[
@@ -4095,7 +4147,9 @@ class AsyncSolanaLLMClient:
                     ]
                 )
 
-        raise AssertionError("unreachable: bounded payment retry loop exhausted")
+        raise PaymentError(  # pragma: no cover - bounded loop always returns or raises
+            "Payment retry loop exhausted without a result."
+        )
 
     async def _get_with_payment_raw_once(
         self,

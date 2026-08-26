@@ -412,14 +412,16 @@ def build_payment_rejected_error(response: Any) -> PaymentError:
     # stale blockhash both arrive as transaction_simulation_failed). Same
     # provenance and safety rationale as `details` above: a facilitator error
     # string, not upstream text, so it's safe to surface verbatim — bounded
-    # defensively all the same. Folded into the message because the retry
-    # classifiers in solana_client only ever see `str(exc)`.
+    # defensively all the same. Still folded into the message for human-readable
+    # errors and for `str(exc)` consumers; `_is_safe_resign_error` reads the
+    # structured `exc.response` keys directly.
     raw_invalid_message = body.get("invalidMessage")
     if isinstance(raw_invalid_message, str) and 0 < len(raw_invalid_message) < 256:
         sanitized["invalidMessage"] = raw_invalid_message
     # Machine-readable payment classification used by the Solana client's
-    # bounded re-sign policy. These are gateway-owned enums, not raw upstream
-    # text. Preserve only short strings; debug remains intentionally filtered.
+    # re-sign phase gate (:func:`solana_client._is_safe_resign_error`). These are
+    # gateway-owned enums, not raw upstream text. Preserve only short strings;
+    # debug remains intentionally filtered.
     raw_reason = body.get("reason")
     if isinstance(raw_reason, str) and 0 < len(raw_reason) < 128:
         sanitized["reason"] = raw_reason
