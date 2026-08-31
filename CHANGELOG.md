@@ -2,7 +2,7 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
-## Unreleased
+## 1.14.0 — 2026-08-31
 
 ### Changed
 - **Router Core re-synced to upstream `5ee7c23`** (was `d7bc10c`, two commits
