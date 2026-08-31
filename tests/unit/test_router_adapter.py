@@ -20,12 +20,15 @@ from blockrun_llm.router_adapter import (
 from blockrun_llm.router_core import DEFAULT_ROUTING_CONFIG
 from blockrun_llm.types import RoutingDecision
 
+# The free chat models that answer as themselves, not via a gateway redirect.
+# Verified with a two-pass model-echo probe on 2026-08-31; keep in step with
+# router_adapter.FREE_TIERS.
 FREE_MODELS = [
-    "nvidia/step-3.7-flash",
-    "nvidia/mistral-nemotron",
-    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-    "nvidia/nemotron-nano-9b-v2",
-    "nvidia/nemotron-nano-12b-v2-vl",
+    "nvidia/nemotron-3.5-lightning",
+    "nvidia/nemotron-3-nano-30b",
+    "nvidia/llama-3.2-11b-vision",
+    "cohere/north-mini-code",
+    "poolside/laguna-xs-2.1",
 ]
 
 
@@ -66,11 +69,11 @@ class TestCatalogResolution:
         # current pin. It stays because pins move independently; the dropped-
         # unpriced-ids test below keeps the drop path honest. (Mirrors the
         # TypeScript SDK's retargeting of the same guard.)
-        catalog = {**CATALOG, "nvidia/step-3.7-flash": _price(0, 0)}
+        catalog = {**CATALOG, "nvidia/nemotron-3.5-lightning": _price(0, 0)}
 
         decision = route("hi", None, 512, catalog, "eco")
 
-        assert "nvidia/step-3.7-flash" in [decision["model"], *decision["fallbacks"]]
+        assert "nvidia/nemotron-3.5-lightning" in [decision["model"], *decision["fallbacks"]]
         assert not any(
             model.startswith("free/") for model in [decision["model"], *decision["fallbacks"]]
         )
@@ -151,6 +154,18 @@ class TestFreeProfile:
         for model in [decision["model"], *decision["fallbacks"]]:
             assert CATALOG[model]["input_price"] == 0
             assert CATALOG[model]["output_price"] == 0
+
+    def test_every_free_tier_keeps_real_fallback_depth(self):
+        # Membership alone did not catch the 2026-08 rot: the table stayed
+        # internally consistent while the gateway retired four of its five ids,
+        # leaving every tier on one model with no fallback. Depth is the signal
+        # that survives that, so assert it per tier and across the table.
+        for name, tier in FREE_TIERS.items():
+            candidates = [tier["primary"], *tier["fallback"]]
+            assert len(set(candidates)) >= 3, f"{name} has no fallback depth: {candidates}"
+
+        used = {m for tier in FREE_TIERS.values() for m in [tier["primary"], *tier["fallback"]]}
+        assert used == set(FREE_MODELS), sorted(set(FREE_MODELS) ^ used)
 
     def test_every_free_tier_entry_is_live_in_the_catalog(self):
         # The previous hand-maintained table rotted silently when NVIDIA EOL'd

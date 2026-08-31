@@ -913,7 +913,7 @@ def affinity(
             match(["gpt-5.3-codex"], 1),
             match(["claude-sonnet-4.6"], 0.94),
             match(["glm-5.2"], 0.9),
-            match(["kimi-k2.7", "deepseek-v4-pro"], 0.86),
+            match(["deepseek-v4-pro"], 0.86),
         )
 
     if task == "reasoning":
@@ -949,14 +949,13 @@ def affinity(
             match(["gemini-3.5-flash"], 1),
             match(["grok-4.5"], 0.93),
             match(["claude-sonnet-5", "deepseek-v4-pro", "kimi-k3"], 0.9),
-            match(["kimi-k2.7"], 0.84),
         )
 
     if task == "vision":
         return max(
             base,
             match(["gemini-3.1-pro"], 0.96),
-            match(["qwen3.7-max", "claude-sonnet-4.6", "kimi-k2.7", "grok-4.3"], 0.9),
+            match(["qwen3.7-max", "claude-sonnet-4.6", "kimi-k3", "grok-4.3"], 0.9),
         )
 
     if task == "long_context":
@@ -979,15 +978,23 @@ def affinity(
         # Kimi candidate in a distinct affinity band. This is deliberately a
         # candidate-pool decision (rather than a brittle post-hoc override): it
         # still falls back normally if that model is unavailable or ineligible.
+        # Kimi K3 costs ~5x its retired sibling K2.7, so the band must be wider
+        # than the auto affinity_floor_gap (0.10) or price alone re-selects a
+        # non-native model for Mandarin input; 0.12 keeps K3 alone in the
+        # primary band for zh and leaves every other language untouched.
         kimi_extraction_affinity = 1.0 if language == "zh" else 0.9
+        other_extraction_affinity = 0.88 if language == "zh" else 0.9
         return max(
             base,
-            match(["gemini-3.5-flash", "gemini-2.5-flash", "gpt-4o-mini"], 0.9),
-            match(["claude-sonnet-5", "claude-sonnet-4.6"], 0.9),
-            match(["kimi-k3", "kimi-k2.7"], kimi_extraction_affinity),
+            match(
+                ["gemini-3.5-flash", "gemini-2.5-flash", "gpt-4o-mini"],
+                other_extraction_affinity,
+            ),
+            match(["claude-sonnet-5", "claude-sonnet-4.6"], other_extraction_affinity),
+            match(["kimi-k3"], kimi_extraction_affinity),
         )
 
-    return max(base, match(["gemini-3.5-flash", "gemini-2.5-flash", "kimi-k3", "kimi-k2.7"], 0.86))
+    return max(base, match(["gemini-3.5-flash", "gemini-2.5-flash", "kimi-k3"], 0.86))
 
 
 def evidence_candidates(task: TaskType) -> list[str]:
@@ -1041,6 +1048,10 @@ def evidence_candidates(task: TaskType) -> list[str]:
             "anthropic/claude-sonnet-5",
             "deepseek/deepseek-v4-pro",
         ]
+    if task == "extraction":
+        # Kimi K3 is no longer on the auto MEDIUM chain (K2.7 was); the
+        # language-native extraction band in affinity() needs it in the pool.
+        return ["moonshot/kimi-k3", "google/gemini-3.5-flash", "anthropic/claude-sonnet-5"]
     if task == "reasoning_math":
         return [
             "google/gemini-3.5-flash",

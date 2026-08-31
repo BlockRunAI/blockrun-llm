@@ -2,7 +2,7 @@
 Router Core — deterministic, constraint-first model routing.
 
 Python port of `@blockrun/router-core <https://github.com/BlockRunAI/router-core>`_
-(upstream commit ``d7bc10c``), the same routing engine the TypeScript SDK and
+(upstream commit ``5ee7c23``), the same routing engine the TypeScript SDK and
 the BlockRun gateway use. The package is deliberately product-neutral: task
 classification, hard capability filtering, portfolio scoring, ordered
 fallbacks, and routing configuration. It contains no wallet, gateway client,

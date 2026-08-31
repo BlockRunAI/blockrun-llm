@@ -32,10 +32,11 @@ CATALOG = [
     {"id": "openai/gpt-5.3-codex", "pricing": {"input": 1.75, "output": 14}},
     {"id": "deepseek/deepseek-v4-pro", "pricing": {"input": 0.435, "output": 0.87}},
     {"id": "moonshot/kimi-k2.7", "pricing": {"input": 0.95, "output": 4}},
-    {"id": "nvidia/step-3.7-flash", "pricing": {"input": 0, "output": 0}},
-    {"id": "nvidia/mistral-nemotron", "pricing": {"input": 0, "output": 0}},
-    {"id": "nvidia/nemotron-nano-9b-v2", "pricing": {"input": 0, "output": 0}},
-    {"id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "pricing": {"input": 0, "output": 0}},
+    {"id": "nvidia/nemotron-3.5-lightning", "pricing": {"input": 0, "output": 0}},
+    {"id": "nvidia/nemotron-3-nano-30b", "pricing": {"input": 0, "output": 0}},
+    {"id": "nvidia/llama-3.2-11b-vision", "pricing": {"input": 0, "output": 0}},
+    {"id": "cohere/north-mini-code", "pricing": {"input": 0, "output": 0}},
+    {"id": "poolside/laguna-xs-2.1", "pricing": {"input": 0, "output": 0}},
     # Unavailable rows must never win routing.
     {"id": "dead/model", "pricing": {"input": 0.01, "output": 0.01}, "available": False},
 ]
