@@ -61,47 +61,59 @@ SOLANA_MINIMUM_PAYMENT_USD = 0.001
 #: The BlockRun free tier is a gateway concept, not a Router Core profile: the
 #: core's tiers rank paid models by task affinity, and its evidence candidates
 #: are paid ids. ``routing_profile="free"`` therefore routes on the rules
-#: strategy over this NVIDIA-only tier table, and the adapter additionally
-#: drops any candidate the catalog does not price at $0.
+#: strategy over this tier table, and the adapter additionally drops any
+#: candidate the catalog does not price at $0.
 #:
-#: Refreshed 2026-08-15 against the live catalog. NVIDIA has EOL'd (HTTP 410)
-#: the free DeepSeek family — ``deepseek-v4-flash`` was the last to go on
-#: 2026-08-12 — plus ``llama-4-maverick`` and the qwen3 SKUs, which is what the
-#: previous table pointed at. ``gpt-oss-120b/20b`` stay out of the primaries:
-#: they are hidden from ``/v1/models`` (so they carry no catalog price) over
+#: Refreshed 2026-08-31. Every id below was verified by asking the gateway for
+#: it twice and reading back the ``model`` field of the reply, because a 200 is
+#: not proof: blockrun server-redirects a retired free id to a live one, so a
+#: dead rung answers normally while quietly serving something else. That is the
+#: shape that defeats a host's ``/exclude``, and it is why the previous table
+#: went stale unnoticed. Substituting on 2026-08-31, hence absent here:
+#: ``step-3.7-flash``, ``nemotron-nano-9b-v2``, ``nemotron-nano-12b-v2-vl`` and
+#: ``mistral-nemotron`` (retired upstream 2026-08-30), plus ``nemotron-3-ultra-550b``
+#: and ``nemotron-3-nano-omni-30b-a3b-reasoning`` — the latter two still list at
+#: $0 in ``/v1/models`` but both answer as ``nemotron-3-nano-30b``.
+#:
+#: The table is no longer NVIDIA-only: ``cohere/north-mini-code`` and
+#: ``poolside/laguna-xs-2.1`` serve at $0 and carry the free coding load.
+#: ``gpt-oss-120b/20b`` stay out — proxy-only ids with no catalog price, under
 #: the NVIDIA free tier's prompt-retention policy.
 FREE_TIERS: dict[str, TierConfig] = {
     "SIMPLE": {
-        "primary": "nvidia/step-3.7-flash",  # 131K ctx, fast general chat + reasoning
+        # Fastest free model (~121 tok/s), and latency is the only axis that
+        # separates free rungs — they all cost $0.
+        "primary": "nvidia/nemotron-3-nano-30b",  # 131K ctx
         "fallback": [
-            "nvidia/nemotron-nano-9b-v2",
-            "nvidia/mistral-nemotron",
-            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+            "nvidia/nemotron-3.5-lightning",
+            "nvidia/llama-3.2-11b-vision",
+            "poolside/laguna-xs-2.1",
         ],
     },
     "MEDIUM": {
-        "primary": "nvidia/step-3.7-flash",
+        "primary": "nvidia/nemotron-3.5-lightning",  # 1M ctx — free tier flagship
         "fallback": [
-            "nvidia/mistral-nemotron",
-            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-            "nvidia/nemotron-nano-9b-v2",
+            "nvidia/nemotron-3-nano-30b",
+            "poolside/laguna-xs-2.1",
+            "cohere/north-mini-code",
         ],
     },
     "COMPLEX": {
-        # Largest free context (256K) and the only free vision model, so it also
-        # absorbs long or multi-modal requests.
-        "primary": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        # Only free model above 256K, so it absorbs long inputs; the vision rung
+        # behind it absorbs multi-modal ones.
+        "primary": "nvidia/nemotron-3.5-lightning",
         "fallback": [
-            "nvidia/step-3.7-flash",
-            "nvidia/mistral-nemotron",
-            "nvidia/nemotron-nano-12b-v2-vl",
+            "cohere/north-mini-code",  # 256K ctx
+            "nvidia/nemotron-3-nano-30b",
+            "nvidia/llama-3.2-11b-vision",  # free vision
         ],
     },
     "REASONING": {
-        "primary": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+        "primary": "nvidia/nemotron-3.5-lightning",
         "fallback": [
-            "nvidia/step-3.7-flash",
-            "nvidia/nemotron-nano-9b-v2",
+            "nvidia/nemotron-3-nano-30b",
+            "cohere/north-mini-code",
+            "poolside/laguna-xs-2.1",
         ],
     },
 }
