@@ -179,7 +179,7 @@ print(decision.reasoning)   # human-readable explanation of the pick
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier — smart-routes across the <!-- br:models.free -->5<!-- /br:models.free --> $0 models (Step 3.7 Flash, Mistral Nemotron, Nemotron Nano Omni / 9B / 12B VL) | Zero-cost testing, dev, prod |
+| `free` | NVIDIA free tier — smart-routes across the <!-- br:models.free -->7<!-- /br:models.free --> $0 models (Step 3.7 Flash, Mistral Nemotron, Nemotron Nano Omni / 9B / 12B VL) | Zero-cost testing, dev, prod |
 | `eco` | Cheapest capable model per tier | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
 | `premium` | Top-tier models (Anthropic, OpenAI, Moonshot) | Quality-critical tasks |
@@ -1723,7 +1723,7 @@ blockrun-llm is a Python SDK that provides pay-per-request access to 43+ large l
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
 
 ### What is smart routing / Router Core?
-Router Core is BlockRun's built-in routing engine — shared with the TypeScript SDK and the gateway, so the same request routes the same way everywhere. It scores your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, drops every model that can't actually handle it (context, output length, tools, vision), then picks the cheapest capable one and keeps the rest as a fallback chain. Routing happens locally in under 1ms and makes no extra model call. It can save up to <!-- br:savings.autoVsBaselinePct -->88<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
+Router Core is BlockRun's built-in routing engine — shared with the TypeScript SDK and the gateway, so the same request routes the same way everywhere. It scores your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, drops every model that can't actually handle it (context, output length, tools, vision), then picks the cheapest capable one and keeps the rest as a fallback chain. Routing happens locally in under 1ms and makes no extra model call. It can save up to <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
 
 ### How much does it cost?
 Pay only for what you use. Prices start at **FREE** (11 NVIDIA-hosted models). Paid models start at $0.10/M tokens. There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
