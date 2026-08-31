@@ -65,11 +65,6 @@ HISTORICAL_MODEL_PROFILES: Mapping[str, ModelPerformanceProfile] = MappingProxyT
             "latency_ms": 2305,
             "output_tokens_per_second": 140.6,
         },
-        "anthropic/claude-opus-4.6": {
-            "measured_at": "2026-03-16T13:50:48Z",
-            "latency_ms": 2139,
-            "output_tokens_per_second": 119.7,
-        },
         "anthropic/claude-sonnet-4.6": {
             "measured_at": "2026-03-16T13:50:48Z",
             "latency_ms": 2110,
@@ -103,11 +98,6 @@ HISTORICAL_MODEL_PROFILES: Mapping[str, ModelPerformanceProfile] = MappingProxyT
             "latency_ms": 1609,
             "output_tokens_per_second": 167.2,
         },
-        "moonshot/kimi-k2.5": {
-            "measured_at": "2026-03-16T13:50:48Z",
-            "latency_ms": 1646,
-            "output_tokens_per_second": 155.7,
-        },
         "openai/gpt-4o-mini": {
             "measured_at": "2026-03-16T13:50:48Z",
             "latency_ms": 2764,
@@ -117,18 +107,6 @@ HISTORICAL_MODEL_PROFILES: Mapping[str, ModelPerformanceProfile] = MappingProxyT
             "measured_at": "2026-03-16T13:50:48Z",
             "latency_ms": 7935,
             "output_tokens_per_second": 32.3,
-        },
-        "xai/grok-4-1-fast-non-reasoning": {
-            "measured_at": "2026-03-16T13:50:48Z",
-            "latency_ms": 1244,
-            "output_tokens_per_second": 205.8,
-            "intelligence_index": 41,
-        },
-        "xai/grok-4-1-fast-reasoning": {
-            "measured_at": "2026-03-16T13:50:48Z",
-            "latency_ms": 1454,
-            "output_tokens_per_second": 176.2,
-            "intelligence_index": 41,
         },
     }
 )

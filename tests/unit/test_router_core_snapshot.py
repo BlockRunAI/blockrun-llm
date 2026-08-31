@@ -2,7 +2,7 @@
 Cross-language decision-snapshot parity.
 
 ``router_core_decisions.snapshot.json`` is a verbatim copy of upstream
-``decisions.snapshot.json`` at commit ``d7bc10c`` — 88 complete decisions the
+``decisions.snapshot.json`` at commit ``5ee7c23`` — 88 complete decisions the
 TypeScript engine produced for a frozen corpus (22 prompts x 4 profiles with
 rotating tool/vision/structured-output shapes, frozen pricing, frozen clock).
 This test recomputes every decision with the Python port and compares field

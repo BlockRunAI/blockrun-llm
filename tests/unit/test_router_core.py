@@ -4,7 +4,7 @@ Parity tests for the Router Core port.
 Every case here is a 1:1 port of an upstream ``@blockrun/router-core`` vitest
 case (``portfolio.test.ts``, ``selector.test.ts``, ``strategy.test.ts``,
 ``tool-intent.test.ts``, ``unavailable-models.test.ts`` at commit
-``d7bc10c``). They are the regression guard
+``5ee7c23``). They are the regression guard
 that the Python port keeps choosing the same models as the TypeScript SDK —
 when upstream is re-synced, re-port these alongside the source.
 """
@@ -73,6 +73,7 @@ STRATEGY_PRICING = {
     "anthropic/claude-sonnet-4.6": _price(3, 15),
     "google/gemini-3.1-pro": _price(1.25, 10),
     "google/gemini-3.5-flash": _price(0.5, 3),
+    "google/gemini-3-flash-preview": _price(0.5, 3),
     "xai/grok-4.5": _price(2.5, 9),
     "anthropic/claude-sonnet-5": _price(3, 15),
     "deepseek/deepseek-v4-pro": _price(0.435, 0.87),
@@ -710,8 +711,8 @@ class TestPortfolioStrategy:
         )
 
         assert decision["task_type"] == "extraction"
-        assert decision["model"] == "moonshot/kimi-k2.7"
-        assert decision["candidates"][0] == "moonshot/kimi-k2.7"
+        assert decision["model"] == "moonshot/kimi-k3"
+        assert decision["candidates"][0] == "moonshot/kimi-k3"
 
     def test_does_not_promote_a_generic_recovery_fallback_without_task_affinity(self):
         decision = _portfolio("Patch this API secret validation error.", 256)
@@ -1262,7 +1263,7 @@ class TestDimensionWeightKeys:
         assert weighted - emitted == set(), "weights that match no scored dimension"
 
     def test_the_weights_match_the_upstream_values(self):
-        # Ported verbatim from router-core config.ts at d7bc10c.
+        # Ported verbatim from router-core config.ts at 5ee7c23.
         assert DEFAULT_ROUTING_CONFIG["scoring"]["dimension_weights"] == {
             "tokenCount": 0.08,
             "codePresence": 0.15,
@@ -1283,7 +1284,7 @@ class TestDimensionWeightKeys:
 
 
 class TestUnavailableModels:
-    """1:1 port of ``unavailable-models.test.ts`` (d7bc10c)."""
+    """1:1 port of ``unavailable-models.test.ts`` (5ee7c23)."""
 
     TIERS = {
         "SIMPLE": {"primary": "a/one", "fallback": ["a/two", "a/three"]},

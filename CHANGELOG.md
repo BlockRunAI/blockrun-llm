@@ -2,6 +2,60 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## Unreleased
+
+### Changed
+- **Router Core re-synced to upstream `5ee7c23`** (was `d7bc10c`, two commits
+  behind — the same pin the TypeScript SDK bundles). Upstream V3.5 rebuilds
+  every tier chain around ids the public catalog actually lists: the withheld
+  `kimi-k2.5/k2.6/k2.7`, both grok-4-fast pairs, `grok-4-0709`,
+  `claude-opus-4.6` and `gemini-3-pro-preview` are gone from every rung,
+  including fallbacks, so a routed model is always one a user can find on
+  blockrun.ai/models. Before this sync every profile carried 3–4 off-catalog
+  rungs per decision; now it carries none.
+
+  Primaries moved only where `portfolio.py` already holds calibration evidence
+  for the successor — Gemini 3.5 Flash where Kimi K2.7 was, GPT-5 Mini for
+  agentic MEDIUM, Sonnet 5 over Sonnet 4.6, DeepSeek Reasoner for the cheap
+  reasoning head. The newer generation the catalog already sells enters as
+  fallback rungs: GPT-5.6 Luna/Terra, Gemini 3.6 Flash and 3.5 Flash-Lite,
+  GLM-5.3 and 5.3-Flash, Grok 4.3 and 4.5, Kimi K3, Qwen 3.7 Plus, MiniMax M3.
+  Promotion waits for a calibration run, because version recency is not a
+  quality signal. The expired GLM-5.1 promotion is dropped; the promotions
+  mechanism stays wired with an empty list.
+
+- **Routing priors regenerated: 66 model profiles** (was 30) and a **71-model
+  capability snapshot** (`model_capabilities.py`), both from upstream's probe
+  and catalog-sync scripts. Two stale capability values had been reaching the
+  hard filter: Haiku 4.5 at 8K max output (actually 64K) and Sonnet 4.6 at 200K
+  context (actually 1M). Kimi K3 replaces K2.7 in the Mandarin extraction band,
+  widened to 0.12 so the auto affinity floor gap (0.10) cannot let price
+  re-select a non-native model, and K3 joins the extraction evidence pool since
+  it is no longer on the MEDIUM chain.
+
+### Fixed
+- **`routing_profile="free"` had collapsed to a single model with no
+  fallbacks.** Four of the five ids in the SDK-only `FREE_TIERS` table —
+  `nvidia/step-3.7-flash`, `nemotron-nano-9b-v2`, `mistral-nemotron`,
+  `nemotron-nano-12b-v2-vl` — were retired by NVIDIA, and they were every
+  primary plus all but one fallback. Nothing looked broken because the gateway
+  server-redirects a retired free id: a dead rung returns 200 and answers
+  normally, while quietly serving a different model. That is the shape that
+  defeats a host's `unavailable_models`, and it is why the table rotted
+  unnoticed.
+
+  The table is rebuilt from ids verified by a two-pass probe that reads back
+  the response's own `model` field, since a 200 proves nothing. Two models the
+  catalog still prices at $0 did not survive that check and are excluded:
+  `nemotron-3-ultra-550b` and `nemotron-3-nano-omni-30b-a3b-reasoning` both
+  answer as `nemotron-3-nano-30b`. Every tier is back to four candidates, and
+  the free tier is no longer NVIDIA-only — `cohere/north-mini-code` and
+  `poolside/laguna-xs-2.1` serve at $0 and carry the free coding load.
+
+  A new test asserts fallback *depth* per tier, not just membership: the table
+  stayed internally consistent all through the rot, so membership alone could
+  never have caught it.
+
 ## 1.13.0 — 2026-08-26
 
 ### Fixed
