@@ -43,6 +43,7 @@ from dotenv import load_dotenv
 from eth_account import Account
 from typing_extensions import Self
 
+from .api_key import EvmAccountMode, resolve_api_auth
 from .tx_log import paid_request_error_prefix
 from .types import APIError, PaymentError
 from .validation import (
@@ -173,7 +174,7 @@ _CATALOG_BY_PATH: dict[str, tuple[str, int, tuple[str, ...]]] = {
 }
 
 
-class SurfClient:
+class SurfClient(EvmAccountMode):
     """
     BlockRun Surf Client.
 
@@ -190,32 +191,39 @@ class SurfClient:
         private_key: str | None = None,
         api_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
+        api_key: str | None = None,
     ):
         from .wallet import load_wallet
 
-        key = (
-            private_key
-            or os.environ.get("BLOCKRUN_WALLET_KEY")
-            or os.environ.get("BASE_CHAIN_WALLET_KEY")
-            or load_wallet()
-        )
-        if not key:
-            raise ValueError(
-                "Private key required. Either:\n"
-                "  1. Pass private_key parameter\n"
-                "  2. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  3. Place key in ~/.blockrun/.session"
+        self._api_auth = resolve_api_auth(api_key, private_key, api_url)
+        if not self._api_auth:
+            key = (
+                private_key
+                or os.environ.get("BLOCKRUN_WALLET_KEY")
+                or os.environ.get("BASE_CHAIN_WALLET_KEY")
+                or load_wallet()
             )
+            if not key:
+                raise ValueError(
+                    "Private key required. Either:\n"
+                    "  1. Pass private_key parameter\n"
+                    "  2. Set BLOCKRUN_WALLET_KEY environment variable\n"
+                    "  3. Place key in ~/.blockrun/.session"
+                )
 
-        validate_private_key(key)
-        self.account = Account.from_key(key)
+            validate_private_key(key)
+            self.account = Account.from_key(key)
 
-        api_url_raw = api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL
+        api_url_raw = (
+            self._api_auth.api_url
+            if self._api_auth
+            else (api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL)
+        )
         validate_api_url(api_url_raw)
         self.api_url = api_url_raw.rstrip("/")
 
         self.timeout = timeout
-        self._client = httpx.Client(timeout=timeout)
+        self._client = httpx.Client(auth=self._api_auth, follow_redirects=False, timeout=timeout)
 
     # ------------------------------------------------------------ Discovery API
 
@@ -407,6 +415,7 @@ class SurfClient:
 
     def get_wallet_address(self) -> str:
         """Return the EVM wallet address used for payments."""
+        self._require_wallet_mode()
         return self.account.address
 
     def close(self) -> None:

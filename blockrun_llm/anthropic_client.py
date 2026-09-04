@@ -23,7 +23,9 @@ import os
 import httpx
 from dotenv import load_dotenv
 from eth_account import Account
+from eth_account.signers.local import LocalAccount
 
+from .api_key import AccountMode, resolve_api_auth
 from .validation import validate_api_url, validate_private_key
 from .wallet import load_wallet
 from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
@@ -40,7 +42,7 @@ class _BlockRunX402Transport(httpx.BaseTransport):
     """Custom httpx transport that intercepts 402 responses and signs x402 payments."""
 
     def __init__(
-        self, account: Account, api_url: str, base_transport: httpx.BaseTransport | None = None
+        self, account: LocalAccount, api_url: str, base_transport: httpx.BaseTransport | None = None
     ):
         self._account = account
         self._api_url = api_url
@@ -96,7 +98,7 @@ class _BlockRunX402Transport(httpx.BaseTransport):
         self._base.close()
 
 
-class AnthropicClient:
+class AnthropicClient(AccountMode):
     """BlockRun-powered Anthropic client with automatic x402 payments.
 
     Drop-in replacement for anthropic.Anthropic that routes through BlockRun's
@@ -130,6 +132,7 @@ class AnthropicClient:
         private_key: str | None = None,
         api_url: str | None = None,
         timeout: float = DEFAULT_CHAT_TIMEOUT,
+        api_key: str | None = None,
         **kwargs,
     ):
         """
@@ -155,36 +158,48 @@ class AnthropicClient:
                 "Install it with: pip install blockrun-llm[anthropic]"
             )
 
-        key = (
-            private_key
-            or os.environ.get("BLOCKRUN_WALLET_KEY")
-            or os.environ.get("BASE_CHAIN_WALLET_KEY")
-            or load_wallet()
-        )
-        if not key:
-            raise ValueError(
-                "No wallet configured. Either:\n"
-                "  1. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  2. Pass private_key to AnthropicClient()\n"
-                "  3. For agent use: call setup_agent_wallet() first"
+        self._api_auth = resolve_api_auth(api_key, private_key, api_url)
+        if not self._api_auth:
+            key = (
+                private_key
+                or os.environ.get("BLOCKRUN_WALLET_KEY")
+                or os.environ.get("BASE_CHAIN_WALLET_KEY")
+                or load_wallet()
             )
+            if not key:
+                raise ValueError(
+                    "No wallet configured. Either:\n"
+                    "  1. Set BLOCKRUN_WALLET_KEY environment variable\n"
+                    "  2. Pass private_key to AnthropicClient()\n"
+                    "  3. For agent use: call setup_agent_wallet() first"
+                )
 
-        if not key.startswith("0x"):
-            key = "0x" + key
+            if not key.startswith("0x"):
+                key = "0x" + key
 
-        validate_private_key(key)
-        account = Account.from_key(key)
+            validate_private_key(key)
+            account = Account.from_key(key)
 
-        api_url_resolved = api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL
+        api_url_resolved = (
+            self._api_auth.api_url
+            if self._api_auth
+            else (api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL)
+        )
         validate_api_url(api_url_resolved)
         self._api_url = api_url_resolved.rstrip("/")
 
-        transport = _BlockRunX402Transport(
-            account=account,
-            api_url=self._api_url,
+        transport = (
+            None
+            if self._api_auth
+            else _BlockRunX402Transport(account=account, api_url=self._api_url)
         )
-
-        http_client = httpx.Client(transport=transport, timeout=timeout)
+        if self._api_auth:
+            self._api_auth.raise_errors = (
+                False  # Let the official SDK preserve its native HTTP errors.
+            )
+        http_client = httpx.Client(
+            transport=transport, auth=self._api_auth, timeout=timeout, follow_redirects=False
+        )
 
         self._client = anthropic.Anthropic(
             base_url=self._api_url,

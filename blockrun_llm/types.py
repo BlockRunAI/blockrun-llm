@@ -368,6 +368,8 @@ class SpendLimitError(PaymentError):
 
 
 class APIError(BlockrunError):
+    retry_after: Optional[str] = None
+
     """API-related error."""
 
     def __init__(self, message: str, status_code: int, response: Optional[dict] = None):

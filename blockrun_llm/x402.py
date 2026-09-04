@@ -13,8 +13,8 @@ import secrets
 import time
 from typing import Any
 
-from eth_account import Account
 from eth_account.messages import encode_typed_data
+from eth_account.signers.local import LocalAccount
 
 # Chain and token constants for mainnet
 BASE_CHAIN_ID = 8453
@@ -88,7 +88,7 @@ def create_nonce() -> str:
 
 
 def create_payment_payload(
-    account: Account,
+    account: LocalAccount,
     recipient: str,
     amount: str,  # In micro USDC (6 decimals)
     network: str = "eip155:8453",

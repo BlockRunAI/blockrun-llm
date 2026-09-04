@@ -35,6 +35,7 @@ import httpx
 from dotenv import load_dotenv
 from eth_account import Account
 
+from .api_key import EvmAccountMode, resolve_api_auth
 from .tx_log import paid_request_error_prefix
 from .types import APIError, ImageResponse, PaymentError
 from .validation import (
@@ -50,7 +51,7 @@ from .x402 import create_payment_payload, extract_payment_details, parse_payment
 load_dotenv()
 
 
-class ImageClient:
+class ImageClient(EvmAccountMode):
     """
     BlockRun Image Generation Client.
 
@@ -77,6 +78,7 @@ class ImageClient:
         private_key: str | None = None,
         api_url: str | None = None,
         timeout: float = 200.0,  # gpt-image-2 at >=1536px can take ~180s server-side; 200s gives buffer
+        api_key: str | None = None,
     ):
         """
         Initialize the BlockRun Image client.
@@ -92,36 +94,42 @@ class ImageClient:
         # Get private key from param, environment, or ~/.blockrun/.session file
         from .wallet import load_wallet
 
-        key = (
-            private_key
-            or os.environ.get("BLOCKRUN_WALLET_KEY")
-            or os.environ.get("BASE_CHAIN_WALLET_KEY")
-            or load_wallet()  # Loads from ~/.blockrun/.session
-        )
-        if not key:
-            raise ValueError(
-                "Private key required. Either:\n"
-                "  1. Pass private_key parameter\n"
-                "  2. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  3. Place key in ~/.blockrun/.session\n"
-                "NOTE: Your key never leaves your machine - only signatures are sent."
+        self._api_auth = resolve_api_auth(api_key, private_key, api_url)
+        if not self._api_auth:
+            key = (
+                private_key
+                or os.environ.get("BLOCKRUN_WALLET_KEY")
+                or os.environ.get("BASE_CHAIN_WALLET_KEY")
+                or load_wallet()  # Loads from ~/.blockrun/.session
             )
+            if not key:
+                raise ValueError(
+                    "Private key required. Either:\n"
+                    "  1. Pass private_key parameter\n"
+                    "  2. Set BLOCKRUN_WALLET_KEY environment variable\n"
+                    "  3. Place key in ~/.blockrun/.session\n"
+                    "NOTE: Your key never leaves your machine - only signatures are sent."
+                )
 
-        # Validate private key format
-        validate_private_key(key)
+            # Validate private key format
+            validate_private_key(key)
 
-        # Initialize wallet account (key stays local, never transmitted)
-        self.account = Account.from_key(key)
+            # Initialize wallet account (key stays local, never transmitted)
+            self.account = Account.from_key(key)
 
-        # Validate and set API URL
-        api_url_raw = api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL
+            # Validate and set API URL
+        api_url_raw = (
+            self._api_auth.api_url
+            if self._api_auth
+            else (api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL)
+        )
         validate_api_url(api_url_raw)
         self.api_url = api_url_raw.rstrip("/")
 
         self.timeout = timeout
 
         # HTTP client
-        self._client = httpx.Client(timeout=timeout)
+        self._client = httpx.Client(auth=self._api_auth, follow_redirects=False, timeout=timeout)
 
     def generate(
         self,
@@ -272,6 +280,15 @@ class ImageClient:
             json=body,
             headers={"Content-Type": "application/json"},
         )
+        if self._api_auth:
+            return ImageResponse(
+                **self._api_auth.poll(
+                    self._client,
+                    response,
+                    self.IMAGE_POLL_BUDGET_SECONDS,
+                    self.IMAGE_POLL_INTERVAL_SECONDS,
+                )
+            )
 
         # Handle 402 Payment Required
         if response.status_code == 402:
@@ -470,6 +487,7 @@ class ImageClient:
 
     def get_wallet_address(self) -> str:
         """Get the wallet address being used for payments."""
+        self._require_wallet_mode()
         return self.account.address
 
     def close(self):

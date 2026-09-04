@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "blockrun-llm"
 version = "1.14.0"
-description = "BlockRun SDK - Pay-per-request AI (LLM, Image, Video, Music, Voice) via x402 on Base and Solana"
+description = "BlockRun SDK - AI (LLM, Image, Video, Music, Voice) via account API keys or x402 on Solana and Base"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
@@ -41,7 +41,7 @@ dev = [
     "ruff==0.16.0",   # Pin version: an unpinned linter breaks CI with no code change
 ]
 anthropic = [
-    "anthropic>=0.40.0",
+    "anthropic>=0.40.0,<1",  # 1.x uses httpx2; this adapter uses httpx transports.,
 ]
 solana = [
     "x402[svm]>=2.0.0",

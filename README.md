@@ -1,6 +1,6 @@
 # BlockRun LLM SDK (Python)
 
-> **blockrun-llm** is a Python SDK for accessing 80+ large language models (GPT-5.x, Claude 4.x, Gemini 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, prediction-market data (Predexon), Exa neural web search, and Pyth-backed market data — all with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required; your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
+> **blockrun-llm** is a Python SDK for accessing 80+ large language models (GPT-5.x, Claude 4.x, Gemini 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, prediction-market data (Predexon), Exa neural web search, and Pyth-backed market data — with account API keys or automatic pay-per-request USDC micropayments via x402 on Solana and Base. Built for AI agents that need to operate autonomously.
 >
 > 🆓 **Includes 8 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M context), Nemotron Nano Omni (vision), Qwen3 Next + Coder, Llama 4 Maverick, Mistral Small 4, plus `gpt-oss-120b/20b` (hidden from `/v1/models` but direct calls still work). Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any `nvidia/*` model directly.
 
@@ -13,9 +13,9 @@
 
 | Chain | Network | Payment | Status |
 |-------|---------|---------|--------|
-| **Base** | Base Mainnet (Chain ID: 8453) | USDC | ✅ Primary |
+| **Solana** | Solana Mainnet | USDC (SPL) | ✅ Preferred for new wallets |
+| **Base** | Base Mainnet (Chain ID: 8453) | USDC | ✅ Supported |
 | **Base Testnet** | Base Sepolia (Chain ID: 84532) | Testnet USDC | ✅ Development |
-| **Solana** | Solana Mainnet | USDC (SPL) | ✅ New |
 
 
 **Protocol:** x402 v2
@@ -23,22 +23,72 @@
 ## Installation
 
 ```bash
-pip install blockrun-llm              # Base chain (EVM/USDC) — includes all core deps
-pip install blockrun-llm[solana]      # Base + Solana (USDC SPL) payments
+pip install blockrun-llm              # Account API keys and Base wallets — core deps
+pip install blockrun-llm[solana]      # Solana (preferred) + Base wallet payments
 pip install blockrun-llm[dev]         # Base + dev tools (pytest, black, ruff, mypy)
 pip install blockrun-llm[dev,solana]  # Everything
 ```
 
 ## Quick Start
 
+### Account API key
+
+Register at [user.blockrun.ai](https://user.blockrun.ai), create a key in
+[API Keys](https://user.blockrun.ai/dashboard/keys), and add credits in
+[Credits](https://user.blockrun.ai/dashboard/credits).
+
+```bash
+export BLOCKRUN_API_KEY="brk_live_..."
+```
+
 ```python
 from blockrun_llm import LLMClient
 
-client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY (never sent to server)
-response = client.chat("openai/gpt-5.2", "Hello!")
+with LLMClient() as client:  # Also accepts api_key="brk_live_..."
+    print(client.chat("openai/gpt-5.2", "Hello!"))
 ```
 
-That's it. The SDK handles x402 payment automatically.
+API mode uses `https://api.blockrun.ai/v1`, requires no wallet, and supports
+sync/async chat and streaming, media clients (including async job polling),
+search, tools, and the optional `AnthropicClient`. Use `APIClient` or
+`AsyncAPIClient` for Responses and other account API endpoints:
+
+```python
+from blockrun_llm import APIClient
+
+with APIClient() as client:
+    response = client.post("/v1/responses", {"model": "openai/gpt-5.2", "input": "Hello!"})
+```
+
+All native clients accept `api_key`; alternatively set `BLOCKRUN_API_KEY`.
+An explicit `private_key` selects wallet mode even if that environment variable
+is present. Passing both explicit credentials raises an error. Override the
+account endpoint with `api_url` or `BLOCKRUN_API_BASE_URL` (`/v1` is optional).
+Account HTTP 402 means insufficient account credits and never triggers a wallet
+payment. Check account balance, usage, and billing in the portal; wallet balance
+and spending helpers require wallet mode. Wallet spend-limit options and environment
+variables are rejected in API mode; configure account limits in the portal. Account requests bypass wallet response
+caches. Polling keeps credentials on the configured origin and does not follow
+redirects.
+
+### Wallet payments: Solana first
+
+```bash
+pip install 'blockrun-llm[solana]'
+```
+
+```python
+from blockrun_llm import setup_agent_client
+
+client = setup_agent_client()
+print(client.chat("openai/gpt-5.2", "Hello!"))
+```
+
+This helper uses an API key when configured. Otherwise it preserves your saved
+chain or existing Base-only wallet, and defaults new wallets to Solana. Pass
+`chain="base"` to choose Base. The existing `LLMClient` and `setup_agent_wallet`
+remain Base-specific in wallet mode; `SolanaLLMClient` and
+`setup_agent_solana_wallet` remain Solana-specific.
 
 ### Try It Free (No USDC Required)
 

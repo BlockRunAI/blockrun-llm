@@ -50,6 +50,7 @@ import httpx
 from dotenv import load_dotenv
 from eth_account import Account
 
+from .api_key import EvmAccountMode, resolve_api_auth
 from .router_adapter import (
     BASE_MINIMUM_PAYMENT_USD,
     build_model_pricing,
@@ -336,7 +337,7 @@ def _detect_network(api_url: str) -> str:
 # =============================================================================
 
 
-class LLMClient:
+class LLMClient(EvmAccountMode):
     """
     BlockRun LLM Gateway Client.
 
@@ -375,6 +376,7 @@ class LLMClient:
         transaction_log: bool | str | os.PathLike[str] | None = None,
         max_cost_per_call: float | None = None,
         max_session_cost: float | None = None,
+        api_key: str | None = None,
     ):
         """
         Initialize the BlockRun LLM client.
@@ -406,34 +408,40 @@ class LLMClient:
         # SECURITY: Key is stored in memory only, used for LOCAL signing
         from .wallet import load_wallet
 
-        key = (
-            private_key
-            or os.environ.get("BLOCKRUN_WALLET_KEY")
-            or os.environ.get("BASE_CHAIN_WALLET_KEY")
-            or load_wallet()  # Loads from ~/.blockrun/.session
-        )
-        if not key:
-            raise ValueError(
-                "No wallet configured. Either:\n"
-                "  1. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  2. Pass private_key to LLMClient()\n"
-                "  3. For agent use: call setup_agent_wallet() first"
+        self._api_auth = resolve_api_auth(api_key, private_key, api_url)
+        if not self._api_auth:
+            key = (
+                private_key
+                or os.environ.get("BLOCKRUN_WALLET_KEY")
+                or os.environ.get("BASE_CHAIN_WALLET_KEY")
+                or load_wallet()  # Loads from ~/.blockrun/.session
             )
+            if not key:
+                raise ValueError(
+                    "No wallet configured. Either:\n"
+                    "  1. Set BLOCKRUN_WALLET_KEY environment variable\n"
+                    "  2. Pass private_key to LLMClient()\n"
+                    "  3. For agent use: call setup_agent_wallet() first"
+                )
 
-        # Normalize private key format (add 0x prefix if missing)
-        if key and not key.startswith("0x"):
-            key = "0x" + key
+            # Normalize private key format (add 0x prefix if missing)
+            if key and not key.startswith("0x"):
+                key = "0x" + key
 
-        # Validate private key format
-        validate_private_key(key)
+            # Validate private key format
+            validate_private_key(key)
 
-        # Initialize wallet account
-        # SECURITY: Key stays local, only used to sign EIP-712 messages
-        # The key is NEVER transmitted - only signatures are sent
-        self.account = Account.from_key(key)
+            # Initialize wallet account
+            # SECURITY: Key stays local, only used to sign EIP-712 messages
+            # The key is NEVER transmitted - only signatures are sent
+            self.account = Account.from_key(key)
 
-        # Validate and set API URL
-        api_url_raw = api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL
+            # Validate and set API URL
+        api_url_raw = (
+            self._api_auth.api_url
+            if self._api_auth
+            else (api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL)
+        )
         validate_api_url(api_url_raw)
         self.api_url = api_url_raw.rstrip("/")
 
@@ -441,6 +449,8 @@ class LLMClient:
         self.search_timeout = search_timeout
 
         self._client = httpx.Client(
+            auth=self._api_auth,
+            follow_redirects=False,
             timeout=timeout,
             limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
         )
@@ -454,6 +464,12 @@ class LLMClient:
             max_cost_per_call, "BLOCKRUN_MAX_COST_PER_CALL"
         )
         self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
+        if self._api_auth and (
+            self._max_cost_per_call is not None or self._max_session_cost is not None
+        ):
+            raise ValueError(
+                "Wallet spend limits cannot enforce account billing; configure account limits in the portal."
+            )
         self._session_calls: int = 0
         self._last_call_cost: float = 0.0
 
@@ -527,7 +543,7 @@ class LLMClient:
             self._get_model_pricing(),
             routing_profile=routing_profile,
             requires_structured_output=requires_structured_output,
-            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+            minimum_payment_usd=0 if self._api_auth else BASE_MINIMUM_PAYMENT_USD,
         )
         return RoutingDecision(**decision)
 
@@ -583,7 +599,7 @@ class LLMClient:
             max_tokens or self.DEFAULT_MAX_TOKENS,
             self._get_model_pricing(),
             routing_profile=routing_profile,
-            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+            minimum_payment_usd=0 if self._api_auth else BASE_MINIMUM_PAYMENT_USD,
         )
 
         # Make the chat request with selected model. Pass the remaining ranked
@@ -655,7 +671,7 @@ class LLMClient:
             tool_choice=tool_choice,
             conversation_chars=view["conversation_chars"],
             has_vision=view["has_vision"],
-            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+            minimum_payment_usd=0 if self._api_auth else BASE_MINIMUM_PAYMENT_USD,
         )
         response = self.chat_completion(
             decision["model"],
@@ -690,6 +706,7 @@ class LLMClient:
             spending = client.get_spending()
             print(f"Spent ${spending['total_usd']:.4f} across {spending['calls']} calls")
         """
+        self._require_wallet_mode()
         return {
             "total_usd": self._session_total_usd,
             "calls": self._session_calls,
@@ -1550,7 +1567,7 @@ class LLMClient:
         from .cache import get_cached, save_to_cache
 
         # Check cache first — don't pay twice for same data
-        cached = get_cached(endpoint, body)
+        cached = None if self._api_auth else get_cached(endpoint, body)
         if cached is not None:
             return cached
 
@@ -1558,6 +1575,8 @@ class LLMClient:
         req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
 
         response = self._client.post(url, json=body, headers=req_headers)
+        if self._api_auth:
+            return self._api_auth.poll(self._client, response, self.timeout)
 
         # Auto-retry on transient server errors
         if response.status_code in (502, 503):
@@ -1699,7 +1718,7 @@ class LLMClient:
         from .cache import get_cached, save_to_cache
 
         cache_key_body = params or {}
-        cached = get_cached(endpoint, cache_key_body)
+        cached = None if self._api_auth else get_cached(endpoint, cache_key_body)
         if cached is not None:
             return cached
 
@@ -2413,6 +2432,7 @@ class LLMClient:
 
     def get_wallet_address(self) -> str:
         """Get the wallet address being used for payments."""
+        self._require_wallet_mode()
         return self.account.address
 
     def is_testnet(self) -> bool:
@@ -2480,6 +2500,7 @@ class LLMClient:
         # USDC contracts
         # Mainnet: Base
         # Testnet: Base Sepolia
+        self._require_wallet_mode()
         if self.is_testnet():
             usdc_contract = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
             rpcs = [
@@ -2534,7 +2555,7 @@ class LLMClient:
 
 
 # Async client for async/await usage
-class AsyncLLMClient:
+class AsyncLLMClient(EvmAccountMode):
     """
     Async version of BlockRun LLM Client.
 
@@ -2560,6 +2581,7 @@ class AsyncLLMClient:
         transaction_log: bool | str | os.PathLike[str] | None = None,
         max_cost_per_call: float | None = None,
         max_session_cost: float | None = None,
+        api_key: str | None = None,
     ):
         """
         Initialize the async BlockRun LLM client.
@@ -2580,31 +2602,37 @@ class AsyncLLMClient:
         """
         from .wallet import load_wallet
 
-        key = (
-            private_key
-            or os.environ.get("BLOCKRUN_WALLET_KEY")
-            or os.environ.get("BASE_CHAIN_WALLET_KEY")
-            or load_wallet()  # Loads from ~/.blockrun/.session
-        )
-        if not key:
-            raise ValueError(
-                "No wallet configured. Either:\n"
-                "  1. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  2. Pass private_key to AsyncLLMClient()\n"
-                "  3. For agent use: call setup_agent_wallet() first"
+        self._api_auth = resolve_api_auth(api_key, private_key, api_url)
+        if not self._api_auth:
+            key = (
+                private_key
+                or os.environ.get("BLOCKRUN_WALLET_KEY")
+                or os.environ.get("BASE_CHAIN_WALLET_KEY")
+                or load_wallet()  # Loads from ~/.blockrun/.session
             )
+            if not key:
+                raise ValueError(
+                    "No wallet configured. Either:\n"
+                    "  1. Set BLOCKRUN_WALLET_KEY environment variable\n"
+                    "  2. Pass private_key to AsyncLLMClient()\n"
+                    "  3. For agent use: call setup_agent_wallet() first"
+                )
 
-        # Normalize private key format (add 0x prefix if missing)
-        if key and not key.startswith("0x"):
-            key = "0x" + key
+            # Normalize private key format (add 0x prefix if missing)
+            if key and not key.startswith("0x"):
+                key = "0x" + key
 
-        # Validate private key format
-        validate_private_key(key)
+            # Validate private key format
+            validate_private_key(key)
 
-        self.account = Account.from_key(key)
+            self.account = Account.from_key(key)
 
-        # Validate and set API URL
-        api_url_raw = api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL
+            # Validate and set API URL
+        api_url_raw = (
+            self._api_auth.api_url
+            if self._api_auth
+            else (api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL)
+        )
         validate_api_url(api_url_raw)
         self.api_url = api_url_raw.rstrip("/")
 
@@ -2616,6 +2644,8 @@ class AsyncLLMClient:
         # high-concurrency deployments don't hit pool exhaustion before hitting
         # any upstream rate limit.
         self._client = httpx.AsyncClient(
+            auth=self._api_auth,
+            follow_redirects=False,
             timeout=timeout,
             limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
         )
@@ -2631,6 +2661,12 @@ class AsyncLLMClient:
             max_cost_per_call, "BLOCKRUN_MAX_COST_PER_CALL"
         )
         self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
+        if self._api_auth and (
+            self._max_cost_per_call is not None or self._max_session_cost is not None
+        ):
+            raise ValueError(
+                "Wallet spend limits cannot enforce account billing; configure account limits in the portal."
+            )
 
         log_dir = _resolve_log_dir(transaction_log)
         self._tx_logger: TransactionLogger | None = (
@@ -2672,7 +2708,7 @@ class AsyncLLMClient:
             await self._get_model_pricing(),
             routing_profile=routing_profile,
             requires_structured_output=requires_structured_output,
-            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+            minimum_payment_usd=0 if self._api_auth else BASE_MINIMUM_PAYMENT_USD,
         )
         return RoutingDecision(**decision)
 
@@ -2696,7 +2732,7 @@ class AsyncLLMClient:
             max_tokens or self.DEFAULT_MAX_TOKENS,
             await self._get_model_pricing(),
             routing_profile=routing_profile,
-            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+            minimum_payment_usd=0 if self._api_auth else BASE_MINIMUM_PAYMENT_USD,
         )
         response = await self.chat(
             decision["model"],
@@ -2743,7 +2779,7 @@ class AsyncLLMClient:
             tool_choice=tool_choice,
             conversation_chars=view["conversation_chars"],
             has_vision=view["has_vision"],
-            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+            minimum_payment_usd=0 if self._api_auth else BASE_MINIMUM_PAYMENT_USD,
         )
         response = await self.chat_completion(
             decision["model"],
@@ -3373,7 +3409,7 @@ class AsyncLLMClient:
         from .cache import get_cached, save_to_cache
 
         # Check cache first
-        cached = get_cached(endpoint, body)
+        cached = None if self._api_auth else get_cached(endpoint, body)
         if cached is not None:
             return cached
 
@@ -3381,6 +3417,8 @@ class AsyncLLMClient:
         req_headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
 
         response = await self._client.post(url, json=body, headers=req_headers)
+        if self._api_auth:
+            return await self._api_auth.apoll(self._client, response, self.timeout)
 
         # Auto-retry on transient server errors
         if response.status_code in (502, 503):
@@ -3505,7 +3543,7 @@ class AsyncLLMClient:
         from .cache import get_cached, save_to_cache
 
         cache_key_body = params or {}
-        cached = get_cached(endpoint, cache_key_body)
+        cached = None if self._api_auth else get_cached(endpoint, cache_key_body)
         if cached is not None:
             return cached
 
@@ -3953,6 +3991,7 @@ class AsyncLLMClient:
 
     def get_wallet_address(self) -> str:
         """Get the wallet address."""
+        self._require_wallet_mode()
         return self.account.address
 
     def is_testnet(self) -> bool:
@@ -4013,6 +4052,7 @@ class AsyncLLMClient:
         # USDC contracts
         # Mainnet: Base
         # Testnet: Base Sepolia
+        self._require_wallet_mode()
         if self.is_testnet():
             usdc_contract = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
             rpcs = [

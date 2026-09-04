@@ -29,6 +29,8 @@ from typing import Any
 import httpx
 from typing_extensions import Self
 
+from .api_key import AccountMode, resolve_api_auth
+
 # Shared with the Base client: signing is settlement on either chain, so the
 # "already paid, do not retry on another model" tag has to mean the same thing
 # in both fallback chains. client.py does not import this module, so there is
@@ -526,7 +528,7 @@ def _assert_same_payment_terms(signed_payload: Any, orig_amount: Any, orig_pay_t
         )
 
 
-class SolanaLLMClient:
+class SolanaLLMClient(AccountMode):
     """
     BlockRun LLM Client for Solana — pays via Solana USDC x402.
 
@@ -572,7 +574,7 @@ class SolanaLLMClient:
     def __init__(
         self,
         private_key: str | None = None,
-        api_url: str = SOLANA_API_URL,
+        api_url: str | None = None,
         rpc_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         image_timeout: float = DEFAULT_IMAGE_TIMEOUT,
@@ -581,6 +583,7 @@ class SolanaLLMClient:
         transaction_log: bool | str | os.PathLike[str] | None = None,
         max_cost_per_call: float | None = None,
         max_session_cost: float | None = None,
+        api_key: str | None = None,
     ) -> None:
         """Initialise the Solana client.
 
@@ -608,25 +611,28 @@ class SolanaLLMClient:
         the request, response, USD cost, and the on-chain settlement
         signature returned by the facilitator.
         """
-        if not _HAS_X402:
-            raise ImportError(
-                "Solana payment requires the x402 SDK. "
-                "Install with: pip install blockrun-llm[solana]"
-            )
-        from .solana_wallet import load_solana_wallet
+        self._api_auth = resolve_api_auth(api_key, private_key, api_url)
+        if not self._api_auth:
+            if not _HAS_X402:
+                raise ImportError(
+                    "Solana payment requires the x402 SDK. "
+                    "Install with: pip install blockrun-llm[solana]"
+                )
+            from .solana_wallet import load_solana_wallet
 
-        key = (
-            private_key
-            or os.environ.get("SOLANA_WALLET_KEY")
-            or load_solana_wallet()  # disk: newest ~/.*/solana-wallet.json, else ~/.blockrun/.solana-session
-        )
-        if not key:
-            raise ValueError(
-                "Private key required. Pass private_key, set SOLANA_WALLET_KEY, "
-                "or have a Solana wallet on disk "
-                "(~/.<provider>/solana-wallet.json or ~/.blockrun/.solana-session)."
+            key = (
+                private_key
+                or os.environ.get("SOLANA_WALLET_KEY")
+                or load_solana_wallet()  # disk: newest ~/.*/solana-wallet.json, else ~/.blockrun/.solana-session
             )
-        self._private_key = key
+            if not key:
+                raise ValueError(
+                    "Private key required. Pass private_key, set SOLANA_WALLET_KEY, "
+                    "or have a Solana wallet on disk "
+                    "(~/.<provider>/solana-wallet.json or ~/.blockrun/.solana-session)."
+                )
+            self._private_key = key
+        api_url = self._api_auth.api_url if self._api_auth else (api_url or SOLANA_API_URL)
         validate_api_url(api_url)
         self._api_url = api_url.rstrip("/")
         # Model pricing cache for smart routing
@@ -642,7 +648,7 @@ class SolanaLLMClient:
         self._search_timeout = search_timeout
         # httpx.Client carries the chat baseline as its default; image /
         # search / per-call overrides are applied per request below.
-        self._client = httpx.Client(timeout=timeout)
+        self._client = httpx.Client(auth=self._api_auth, follow_redirects=False, timeout=timeout)
         self._session_total_usd = 0.0
         # Opt-in spend limits. None (the default) means unlimited, which is the
         # behavior every release before 1.9.0 had: every 402 quote was signed
@@ -651,6 +657,12 @@ class SolanaLLMClient:
             max_cost_per_call, "BLOCKRUN_MAX_COST_PER_CALL"
         )
         self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
+        if self._api_auth and (
+            self._max_cost_per_call is not None or self._max_session_cost is not None
+        ):
+            raise ValueError(
+                "Wallet spend limits cannot enforce account billing; configure account limits in the portal."
+            )
         self._session_calls = 0
         self._last_call_cost: float = 0.0
         self._address: str | None = None
@@ -665,6 +677,9 @@ class SolanaLLMClient:
         # metadata the shared JSON-only helper would otherwise drop. Read it
         # immediately after the helper returns (no intervening await).
         self._last_raw_headers: httpx.Headers | None = None
+
+        if self._api_auth:
+            return
 
         # Initialize x402 SDK client for Solana payment signing.
         self._x402_client = x402ClientSync()
@@ -724,6 +739,7 @@ class SolanaLLMClient:
             data["txHash"] = tx_hash
 
     def get_wallet_address(self) -> str:
+        self._require_wallet_mode()
         if not self._address:
             self._address = get_solana_public_key(self._private_key)
         return self._address
@@ -733,11 +749,13 @@ class SolanaLLMClient:
 
     def get_balance(self) -> float:
         """Get USDC balance on Solana (matches LLMClient.get_balance() API)."""
+        self._require_wallet_mode()
         from .solana_wallet import get_solana_usdc_balance
 
         return get_solana_usdc_balance(self.get_wallet_address(), rpc_url=self._rpc_url)
 
     def get_spending(self) -> dict[str, Any]:
+        self._require_wallet_mode()
         return {"total_usd": self._session_total_usd, "calls": self._session_calls}
 
     def _billing_meta(self) -> dict[str, str | None]:
@@ -809,7 +827,7 @@ class SolanaLLMClient:
             self._get_model_pricing(),
             routing_profile=routing_profile,
             requires_structured_output=requires_structured_output,
-            minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
+            minimum_payment_usd=0 if self._api_auth else SOLANA_MINIMUM_PAYMENT_USD,
         )
         return RoutingDecision(**decision)
 
@@ -840,7 +858,7 @@ class SolanaLLMClient:
             max_tokens or DEFAULT_MAX_TOKENS,
             self._get_model_pricing(),
             routing_profile=routing_profile,
-            minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
+            minimum_payment_usd=0 if self._api_auth else SOLANA_MINIMUM_PAYMENT_USD,
         )
         response = self.chat(
             decision["model"],
@@ -892,7 +910,7 @@ class SolanaLLMClient:
             tool_choice=tool_choice,
             conversation_chars=view["conversation_chars"],
             has_vision=view["has_vision"],
-            minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
+            minimum_payment_usd=0 if self._api_auth else SOLANA_MINIMUM_PAYMENT_USD,
         )
         response = self.chat_completion(
             decision["model"],
@@ -1591,7 +1609,7 @@ class SolanaLLMClient:
         from .cache import get_cached, save_to_cache
 
         # Check cache first — don't pay twice for same data
-        cached = get_cached(endpoint, body)
+        cached = None if self._api_auth else get_cached(endpoint, body)
         if cached is not None:
             return cached
 
@@ -1604,6 +1622,8 @@ class SolanaLLMClient:
         eff_timeout = timeout if timeout is not None else self._timeout
 
         response = self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
+        if self._api_auth:
+            return self._api_auth.poll(self._client, response, eff_timeout)
 
         # Auto-retry on transient server errors
         if response.status_code in (502, 503):
@@ -1743,7 +1763,7 @@ class SolanaLLMClient:
         from .cache import get_cached, save_to_cache
 
         cache_key_body = params or {}
-        cached = get_cached(endpoint, cache_key_body)
+        cached = None if self._api_auth else get_cached(endpoint, cache_key_body)
         if cached is not None:
             return cached
 
@@ -1914,7 +1934,7 @@ class SolanaLLMClient:
 
         from .cache import get_cached, save_to_cache
 
-        cached = get_cached(endpoint, body)
+        cached = None if self._api_auth else get_cached(endpoint, body)
         if cached is not None:
             return cached
 
@@ -1924,6 +1944,21 @@ class SolanaLLMClient:
 
         # Step 1: probe — expect 402 unless the model is free or cached upstream.
         probe = self._client.post(url, json=body, headers=probe_headers, timeout=eff_timeout)
+        if self._api_auth:
+            return self._api_auth.poll(
+                self._client,
+                probe,
+                (
+                    poll_budget_seconds
+                    if poll_budget_seconds is not None
+                    else self.IMAGE_POLL_BUDGET_SECONDS
+                ),
+                (
+                    poll_interval_seconds
+                    if poll_interval_seconds is not None
+                    else self.IMAGE_POLL_INTERVAL_SECONDS
+                ),
+            )
         if probe.status_code in (502, 503):
             _time.sleep(1)
             probe = self._client.post(url, json=body, headers=probe_headers, timeout=eff_timeout)
@@ -3195,7 +3230,7 @@ class SolanaLLMClient:
 # Solana sync class shipped initially. They can be added in follow-up releases.
 
 
-class AsyncSolanaLLMClient:
+class AsyncSolanaLLMClient(AccountMode):
     """
     Async BlockRun Solana LLM Client — pays via Solana USDC x402.
 
@@ -3222,7 +3257,7 @@ class AsyncSolanaLLMClient:
     def __init__(
         self,
         private_key: str | None = None,
-        api_url: str = SOLANA_API_URL,
+        api_url: str | None = None,
         rpc_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         image_timeout: float = DEFAULT_IMAGE_TIMEOUT,
@@ -3231,30 +3266,34 @@ class AsyncSolanaLLMClient:
         transaction_log: bool | str | os.PathLike[str] | None = None,
         max_cost_per_call: float | None = None,
         max_session_cost: float | None = None,
+        api_key: str | None = None,
     ) -> None:
         """Async mirror of :class:`SolanaLLMClient.__init__`. Same env-var
         fallback for ``rpc_url`` / ``rpc_headers`` — see
         :func:`_resolve_rpc_config`. ``transaction_log`` works the same way
         — opt-in per-call log to a project folder (default ``./log/``)."""
-        if not _HAS_X402:
-            raise ImportError(
-                "Solana payment requires the x402 SDK. "
-                "Install with: pip install blockrun-llm[solana]"
-            )
-        from .solana_wallet import load_solana_wallet
+        self._api_auth = resolve_api_auth(api_key, private_key, api_url)
+        if not self._api_auth:
+            if not _HAS_X402:
+                raise ImportError(
+                    "Solana payment requires the x402 SDK. "
+                    "Install with: pip install blockrun-llm[solana]"
+                )
+            from .solana_wallet import load_solana_wallet
 
-        key = (
-            private_key
-            or os.environ.get("SOLANA_WALLET_KEY")
-            or load_solana_wallet()  # disk: newest ~/.*/solana-wallet.json, else ~/.blockrun/.solana-session
-        )
-        if not key:
-            raise ValueError(
-                "Private key required. Pass private_key, set SOLANA_WALLET_KEY, "
-                "or have a Solana wallet on disk "
-                "(~/.<provider>/solana-wallet.json or ~/.blockrun/.solana-session)."
+            key = (
+                private_key
+                or os.environ.get("SOLANA_WALLET_KEY")
+                or load_solana_wallet()  # disk: newest ~/.*/solana-wallet.json, else ~/.blockrun/.solana-session
             )
-        self._private_key = key
+            if not key:
+                raise ValueError(
+                    "Private key required. Pass private_key, set SOLANA_WALLET_KEY, "
+                    "or have a Solana wallet on disk "
+                    "(~/.<provider>/solana-wallet.json or ~/.blockrun/.solana-session)."
+                )
+            self._private_key = key
+        api_url = self._api_auth.api_url if self._api_auth else (api_url or SOLANA_API_URL)
         validate_api_url(api_url)
         self._api_url = api_url.rstrip("/")
         # Model pricing cache for smart routing
@@ -3267,7 +3306,9 @@ class AsyncSolanaLLMClient:
         self._timeout = timeout
         self._image_timeout = image_timeout
         self._search_timeout = search_timeout
-        self._client = httpx.AsyncClient(timeout=timeout)
+        self._client = httpx.AsyncClient(
+            auth=self._api_auth, follow_redirects=False, timeout=timeout
+        )
         self._session_total_usd = 0.0
         # Opt-in spend limits. None (the default) means unlimited, which is the
         # behavior every release before 1.9.0 had: every 402 quote was signed
@@ -3276,6 +3317,12 @@ class AsyncSolanaLLMClient:
             max_cost_per_call, "BLOCKRUN_MAX_COST_PER_CALL"
         )
         self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
+        if self._api_auth and (
+            self._max_cost_per_call is not None or self._max_session_cost is not None
+        ):
+            raise ValueError(
+                "Wallet spend limits cannot enforce account billing; configure account limits in the portal."
+            )
         self._session_calls = 0
         self._last_call_cost: float = 0.0
         self._address: str | None = None
@@ -3290,6 +3337,9 @@ class AsyncSolanaLLMClient:
         # metadata the shared JSON-only helper would otherwise drop. Read it
         # immediately after the helper returns (no intervening await).
         self._last_raw_headers: httpx.Headers | None = None
+
+        if self._api_auth:
+            return
 
         # Async x402 client + same SVM signer the sync class uses.
         from x402 import x402Client  # local import to keep optional dep clean
@@ -3383,6 +3433,7 @@ class AsyncSolanaLLMClient:
     # ------------------------------------------------------------------
 
     def get_wallet_address(self) -> str:
+        self._require_wallet_mode()
         if not self._address:
             self._address = get_solana_public_key(self._private_key)
         return self._address
@@ -3391,6 +3442,7 @@ class AsyncSolanaLLMClient:
         return "sol.blockrun.ai" in self._api_url
 
     def get_spending(self) -> dict[str, Any]:
+        self._require_wallet_mode()
         return {"total_usd": self._session_total_usd, "calls": self._session_calls}
 
     def _billing_meta(self) -> dict[str, str | None]:
@@ -3429,7 +3481,7 @@ class AsyncSolanaLLMClient:
             await self._get_model_pricing(),
             routing_profile=routing_profile,
             requires_structured_output=requires_structured_output,
-            minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
+            minimum_payment_usd=0 if self._api_auth else SOLANA_MINIMUM_PAYMENT_USD,
         )
         return RoutingDecision(**decision)
 
@@ -3450,7 +3502,7 @@ class AsyncSolanaLLMClient:
             max_tokens or DEFAULT_MAX_TOKENS,
             await self._get_model_pricing(),
             routing_profile=routing_profile,
-            minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
+            minimum_payment_usd=0 if self._api_auth else SOLANA_MINIMUM_PAYMENT_USD,
         )
         response = await self.chat(
             decision["model"],
@@ -3497,7 +3549,7 @@ class AsyncSolanaLLMClient:
             tool_choice=tool_choice,
             conversation_chars=view["conversation_chars"],
             has_vision=view["has_vision"],
-            minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
+            minimum_payment_usd=0 if self._api_auth else SOLANA_MINIMUM_PAYMENT_USD,
         )
         response = await self.chat_completion(
             decision["model"],
@@ -4065,7 +4117,7 @@ class AsyncSolanaLLMClient:
         the sync :class:`SolanaLLMClient` helper)."""
         from .cache import get_cached, save_to_cache
 
-        cached = get_cached(endpoint, body)
+        cached = None if self._api_auth else get_cached(endpoint, body)
         if cached is not None:
             return cached
 
@@ -4078,6 +4130,8 @@ class AsyncSolanaLLMClient:
         eff_timeout = timeout if timeout is not None else self._timeout
 
         response = await self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
+        if self._api_auth:
+            return await self._api_auth.apoll(self._client, response, eff_timeout)
         if response.status_code in (502, 503):
             await asyncio.sleep(1)
             response = await self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
@@ -4161,7 +4215,7 @@ class AsyncSolanaLLMClient:
         from .cache import get_cached, save_to_cache
 
         cache_key_body = params or {}
-        cached = get_cached(endpoint, cache_key_body)
+        cached = None if self._api_auth else get_cached(endpoint, cache_key_body)
         if cached is not None:
             return cached
 
@@ -4261,6 +4315,7 @@ class AsyncSolanaLLMClient:
         The underlying RPC read is synchronous, so it runs in a worker thread
         to avoid blocking the event loop.
         """
+        self._require_wallet_mode()
         from .solana_wallet import get_solana_usdc_balance
 
         return await asyncio.to_thread(
@@ -4820,7 +4875,7 @@ class AsyncSolanaLLMClient:
 
         from .cache import get_cached, save_to_cache
 
-        cached = get_cached(endpoint, body)
+        cached = None if self._api_auth else get_cached(endpoint, body)
         if cached is not None:
             return cached
 

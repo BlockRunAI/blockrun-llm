@@ -57,6 +57,7 @@ Other Chains:
 from __future__ import annotations
 
 from .anthropic_client import AnthropicClient
+from .api_client import APIClient, AsyncAPIClient
 from .cache import (
     clear_cache,
     export_cost_log_csv,
@@ -79,6 +80,7 @@ from .price import PriceClient
 from .realface import RealFaceClient
 from .rpc import NETWORK_ALIASES, SUPPORTED_NETWORKS, RpcClient
 from .search import SearchClient
+from .setup import setup_agent_client
 from .solana_client import AsyncSolanaLLMClient, SolanaLLMClient
 from .solana_wallet import (
     create_solana_wallet,
@@ -193,8 +195,10 @@ __all__ = [
     "SUPPORTED_NETWORKS",
     "WALLET_DIR",
     "WALLET_FILE",
+    "APIClient",
     "APIError",
     "AnthropicClient",
+    "AsyncAPIClient",
     "AsyncLLMClient",
     "AsyncSolanaLLMClient",
     "AudioModel",
@@ -307,6 +311,7 @@ __all__ = [
     "save_wallet_qr",
     "scan_solana_wallets",
     "scan_wallets",
+    "setup_agent_client",
     # Solana wallet utilities
     "setup_agent_solana_wallet",
     # Entry point for agents (auto-creates wallet)
