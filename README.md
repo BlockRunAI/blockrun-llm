@@ -383,8 +383,8 @@ direct calls by full ID still work.
 
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `xai/grok-4.3` | $1.50/M | $4.00/M | 1M | Reasoning model, vision-capable, tuned for agentic workflows |
-| `xai/grok-build-0.1` | $1.50/M | $3.00/M | 256K | Fast agentic coding model — interactive software-engineering workflows |
+| `xai/grok-4.3` | $1.25/M | $2.50/M | 1M | Reasoning model, vision-capable, tuned for agentic workflows |
+| `xai/grok-build-0.1` | $1.00/M | $2.00/M | 256K | Fast agentic coding model — interactive software-engineering workflows |
 
 ### ZAI
 

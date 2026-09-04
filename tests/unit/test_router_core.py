@@ -74,7 +74,7 @@ STRATEGY_PRICING = {
     "google/gemini-3.1-pro": _price(1.25, 10),
     "google/gemini-3.5-flash": _price(0.5, 3),
     "google/gemini-3-flash-preview": _price(0.5, 3),
-    "xai/grok-4.5": _price(2.5, 9),
+    "xai/grok-4.5": _price(2, 6),
     "anthropic/claude-sonnet-5": _price(3, 15),
     "deepseek/deepseek-v4-pro": _price(0.435, 0.87),
     "moonshot/kimi-k3": _price(3, 15),
