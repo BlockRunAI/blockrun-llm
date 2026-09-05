@@ -1,0 +1,1351 @@
+"""
+Default Routing Config
+
+Python port of ``@blockrun/router-core`` ``config.ts`` (upstream commit
+``5ee7c23``, 2026-08-30 — the same pin the TypeScript SDK
+bundles). V3.5: every tier rung is a public catalog id.
+
+All routing parameters as a module constant. Hosts override by passing their
+own ``RoutingConfig`` in ``RouterOptions["config"]``.
+
+Scoring uses 15 weighted dimensions with sigmoid confidence calibration.
+Keys are snake_case; ``dimension_weights`` keys stay camelCase because they
+are dimension *names* emitted by the classifier, not config fields.
+"""
+
+from __future__ import annotations
+
+from .types import RoutingConfig
+
+DEFAULT_ROUTING_CONFIG: RoutingConfig = {
+    "version": "3.5",
+    "strategy": "portfolio",
+    "portfolio": {
+        "auto": {
+            "quality": 0.47,
+            "capability": 0.2,
+            "cost": 0.18,
+            "speed": 0.07,
+            "reliability": 0.03,
+            "legacy": 0.05,
+        },
+        "eco": {
+            "quality": 0.36,
+            "capability": 0.2,
+            "cost": 0.28,
+            "speed": 0.1,
+            "reliability": 0.04,
+            "legacy": 0.02,
+        },
+        "premium": {
+            "quality": 0.58,
+            "capability": 0.2,
+            "cost": 0.08,
+            "speed": 0.06,
+            "reliability": 0.06,
+            "legacy": 0.02,
+        },
+        "high_stakes_boost": {"quality": 0.08, "reliability": 0.05},
+        "latency_sensitive_speed_boost": 0.08,
+        "affinity_floor_gap": {"auto": 0.1, "eco": 0.22, "premium": 0.05},
+    },
+    "classifier": {
+        "llm_model": "google/gemini-2.5-flash",
+        "llm_max_tokens": 10,
+        "llm_temperature": 0,
+        "prompt_truncation_chars": 500,
+        "cache_ttl_ms": 3_600_000,  # 1 hour
+    },
+    "scoring": {
+        "token_count_thresholds": {"simple": 50, "complex": 500},
+        # Multilingual keywords: EN + ZH + JA + RU + DE + ES + PT + KO + AR
+        "code_keywords": [
+            # English
+            "function",
+            "class",
+            "import",
+            "def",
+            "SELECT",
+            "async",
+            "await",
+            "const",
+            "let",
+            "var",
+            "return",
+            "```",
+            # Chinese
+            "函数",
+            "类",
+            "导入",
+            "定义",
+            "查询",
+            "异步",
+            "等待",
+            "常量",
+            "变量",
+            "返回",
+            # Japanese
+            "関数",
+            "クラス",
+            "インポート",
+            "非同期",
+            "定数",
+            "変数",
+            # Russian
+            "функция",
+            "класс",
+            "импорт",
+            "определ",
+            "запрос",
+            "асинхронный",
+            "ожидать",
+            "константа",
+            "переменная",
+            "вернуть",
+            # German
+            "funktion",
+            "klasse",
+            "importieren",
+            "definieren",
+            "abfrage",
+            "asynchron",
+            "erwarten",
+            "konstante",
+            "variable",
+            "zurückgeben",
+            # Spanish
+            "función",
+            "clase",
+            "importar",
+            "definir",
+            "consulta",
+            "asíncrono",
+            "esperar",
+            "constante",
+            "variable",
+            "retornar",
+            # Portuguese
+            "função",
+            "classe",
+            "importar",
+            "definir",
+            "consulta",
+            "assíncrono",
+            "aguardar",
+            "constante",
+            "variável",
+            "retornar",
+            # Korean
+            "함수",
+            "클래스",
+            "가져오기",
+            "정의",
+            "쿼리",
+            "비동기",
+            "대기",
+            "상수",
+            "변수",
+            "반환",
+            # Arabic
+            "دالة",
+            "فئة",
+            "استيراد",
+            "تعريف",
+            "استعلام",
+            "غير متزامن",
+            "انتظار",
+            "ثابت",
+            "متغير",
+            "إرجاع",
+        ],
+        "reasoning_keywords": [
+            # English
+            "prove",
+            "theorem",
+            "derive",
+            "step by step",
+            "chain of thought",
+            "formally",
+            "mathematical",
+            "proof",
+            "logically",
+            # Chinese
+            "证明",
+            "定理",
+            "推导",
+            "逐步",
+            "思维链",
+            "形式化",
+            "数学",
+            "逻辑",
+            # Japanese
+            "証明",
+            "定理",
+            "導出",
+            "ステップバイステップ",
+            "論理的",
+            # Russian
+            "доказать",
+            "докажи",
+            "доказательств",
+            "теорема",
+            "вывести",
+            "шаг за шагом",
+            "пошагово",
+            "поэтапно",
+            "цепочка рассуждений",
+            "рассуждени",
+            "формально",
+            "математически",
+            "логически",
+            # German
+            "beweisen",
+            "beweis",
+            "theorem",
+            "ableiten",
+            "schritt für schritt",
+            "gedankenkette",
+            "formal",
+            "mathematisch",
+            "logisch",
+            # Spanish
+            "demostrar",
+            "teorema",
+            "derivar",
+            "paso a paso",
+            "cadena de pensamiento",
+            "formalmente",
+            "matemático",
+            "prueba",
+            "lógicamente",
+            # Portuguese
+            "provar",
+            "teorema",
+            "derivar",
+            "passo a passo",
+            "cadeia de pensamento",
+            "formalmente",
+            "matemático",
+            "prova",
+            "logicamente",
+            # Korean
+            "증명",
+            "정리",
+            "도출",
+            "단계별",
+            "사고의 연쇄",
+            "형식적",
+            "수학적",
+            "논리적",
+            # Arabic
+            "إثبات",
+            "نظرية",
+            "اشتقاق",
+            "خطوة بخطوة",
+            "سلسلة التفكير",
+            "رسمياً",
+            "رياضي",
+            "برهان",
+            "منطقياً",
+        ],
+        "simple_keywords": [
+            # English
+            "what is",
+            "define",
+            "translate",
+            "hello",
+            "yes or no",
+            "capital of",
+            "how old",
+            "who is",
+            "when was",
+            # Chinese
+            "什么是",
+            "定义",
+            "翻译",
+            "你好",
+            "是否",
+            "首都",
+            "多大",
+            "谁是",
+            "何时",
+            # Japanese
+            "とは",
+            "定義",
+            "翻訳",
+            "こんにちは",
+            "はいかいいえ",
+            "首都",
+            "誰",
+            # Russian
+            "что такое",
+            "определение",
+            "перевести",
+            "переведи",
+            "привет",
+            "да или нет",
+            "столица",
+            "сколько лет",
+            "кто такой",
+            "когда",
+            "объясни",
+            # German
+            "was ist",
+            "definiere",
+            "übersetze",
+            "hallo",
+            "ja oder nein",
+            "hauptstadt",
+            "wie alt",
+            "wer ist",
+            "wann",
+            "erkläre",
+            # Spanish
+            "qué es",
+            "definir",
+            "traducir",
+            "hola",
+            "sí o no",
+            "capital de",
+            "cuántos años",
+            "quién es",
+            "cuándo",
+            # Portuguese
+            "o que é",
+            "definir",
+            "traduzir",
+            "olá",
+            "sim ou não",
+            "capital de",
+            "quantos anos",
+            "quem é",
+            "quando",
+            # Korean
+            "무엇",
+            "정의",
+            "번역",
+            "안녕하세요",
+            "예 또는 아니오",
+            "수도",
+            "누구",
+            "언제",
+            # Arabic
+            "ما هو",
+            "تعريف",
+            "ترجم",
+            "مرحبا",
+            "نعم أو لا",
+            "عاصمة",
+            "من هو",
+            "متى",
+        ],
+        "technical_keywords": [
+            # English
+            "algorithm",
+            "optimize",
+            "architecture",
+            "distributed",
+            "kubernetes",
+            "microservice",
+            "database",
+            "infrastructure",
+            # Chinese
+            "算法",
+            "优化",
+            "架构",
+            "分布式",
+            "微服务",
+            "数据库",
+            "基础设施",
+            # Japanese
+            "アルゴリズム",
+            "最適化",
+            "アーキテクチャ",
+            "分散",
+            "マイクロサービス",
+            "データベース",
+            # Russian
+            "алгоритм",
+            "оптимизировать",
+            "оптимизаци",
+            "оптимизируй",
+            "архитектура",
+            "распределённый",
+            "микросервис",
+            "база данных",
+            "инфраструктура",
+            # German
+            "algorithmus",
+            "optimieren",
+            "architektur",
+            "verteilt",
+            "kubernetes",
+            "mikroservice",
+            "datenbank",
+            "infrastruktur",
+            # Spanish
+            "algoritmo",
+            "optimizar",
+            "arquitectura",
+            "distribuido",
+            "microservicio",
+            "base de datos",
+            "infraestructura",
+            # Portuguese
+            "algoritmo",
+            "otimizar",
+            "arquitetura",
+            "distribuído",
+            "microsserviço",
+            "banco de dados",
+            "infraestrutura",
+            # Korean
+            "알고리즘",
+            "최적화",
+            "아키텍처",
+            "분산",
+            "마이크로서비스",
+            "데이터베이스",
+            "인프라",
+            # Arabic
+            "خوارزمية",
+            "تحسين",
+            "بنية",
+            "موزع",
+            "خدمة مصغرة",
+            "قاعدة بيانات",
+            "بنية تحتية",
+        ],
+        "creative_keywords": [
+            # English
+            "story",
+            "poem",
+            "compose",
+            "brainstorm",
+            "creative",
+            "imagine",
+            "write a",
+            # Chinese
+            "故事",
+            "诗",
+            "创作",
+            "头脑风暴",
+            "创意",
+            "想象",
+            "写一个",
+            # Japanese
+            "物語",
+            "詩",
+            "作曲",
+            "ブレインストーム",
+            "創造的",
+            "想像",
+            # Russian
+            "история",
+            "рассказ",
+            "стихотворение",
+            "сочинить",
+            "сочини",
+            "мозговой штурм",
+            "творческий",
+            "представить",
+            "придумай",
+            "напиши",
+            # German
+            "geschichte",
+            "gedicht",
+            "komponieren",
+            "brainstorming",
+            "kreativ",
+            "vorstellen",
+            "schreibe",
+            "erzählung",
+            # Spanish
+            "historia",
+            "poema",
+            "componer",
+            "lluvia de ideas",
+            "creativo",
+            "imaginar",
+            "escribe",
+            # Portuguese
+            "história",
+            "poema",
+            "compor",
+            "criativo",
+            "imaginar",
+            "escreva",
+            # Korean
+            "이야기",
+            "시",
+            "작곡",
+            "브레인스토밍",
+            "창의적",
+            "상상",
+            "작성",
+            # Arabic
+            "قصة",
+            "قصيدة",
+            "تأليف",
+            "عصف ذهني",
+            "إبداعي",
+            "تخيل",
+            "اكتب",
+        ],
+        # New dimension keyword lists (multilingual)
+        "imperative_verbs": [
+            # English
+            "build",
+            "create",
+            "implement",
+            "design",
+            "develop",
+            "construct",
+            "generate",
+            "deploy",
+            "configure",
+            "set up",
+            # Chinese
+            "构建",
+            "创建",
+            "实现",
+            "设计",
+            "开发",
+            "生成",
+            "部署",
+            "配置",
+            "设置",
+            # Japanese
+            "構築",
+            "作成",
+            "実装",
+            "設計",
+            "開発",
+            "生成",
+            "デプロイ",
+            "設定",
+            # Russian
+            "построить",
+            "построй",
+            "создать",
+            "создай",
+            "реализовать",
+            "реализуй",
+            "спроектировать",
+            "разработать",
+            "разработай",
+            "сконструировать",
+            "сгенерировать",
+            "сгенерируй",
+            "развернуть",
+            "разверни",
+            "настроить",
+            "настрой",
+            # German
+            "erstellen",
+            "bauen",
+            "implementieren",
+            "entwerfen",
+            "entwickeln",
+            "konstruieren",
+            "generieren",
+            "bereitstellen",
+            "konfigurieren",
+            "einrichten",
+            # Spanish
+            "construir",
+            "crear",
+            "implementar",
+            "diseñar",
+            "desarrollar",
+            "generar",
+            "desplegar",
+            "configurar",
+            # Portuguese
+            "construir",
+            "criar",
+            "implementar",
+            "projetar",
+            "desenvolver",
+            "gerar",
+            "implantar",
+            "configurar",
+            # Korean
+            "구축",
+            "생성",
+            "구현",
+            "설계",
+            "개발",
+            "배포",
+            "설정",
+            # Arabic
+            "بناء",
+            "إنشاء",
+            "تنفيذ",
+            "تصميم",
+            "تطوير",
+            "توليد",
+            "نشر",
+            "إعداد",
+        ],
+        "constraint_indicators": [
+            # English
+            "under",
+            "at most",
+            "at least",
+            "within",
+            "no more than",
+            "o(",
+            "maximum",
+            "minimum",
+            "limit",
+            "budget",
+            # Chinese
+            "不超过",
+            "至少",
+            "最多",
+            "在内",
+            "最大",
+            "最小",
+            "限制",
+            "预算",
+            # Japanese
+            "以下",
+            "最大",
+            "最小",
+            "制限",
+            "予算",
+            # Russian
+            "не более",
+            "не менее",
+            "как минимум",
+            "в пределах",
+            "максимум",
+            "минимум",
+            "ограничение",
+            "бюджет",
+            # German
+            "höchstens",
+            "mindestens",
+            "innerhalb",
+            "nicht mehr als",
+            "maximal",
+            "minimal",
+            "grenze",
+            "budget",
+            # Spanish
+            "como máximo",
+            "al menos",
+            "dentro de",
+            "no más de",
+            "máximo",
+            "mínimo",
+            "límite",
+            "presupuesto",
+            # Portuguese
+            "no máximo",
+            "pelo menos",
+            "dentro de",
+            "não mais que",
+            "máximo",
+            "mínimo",
+            "limite",
+            "orçamento",
+            # Korean
+            "이하",
+            "이상",
+            "최대",
+            "최소",
+            "제한",
+            "예산",
+            # Arabic
+            "على الأكثر",
+            "على الأقل",
+            "ضمن",
+            "لا يزيد عن",
+            "أقصى",
+            "أدنى",
+            "حد",
+            "ميزانية",
+        ],
+        "output_format_keywords": [
+            # English
+            "json",
+            "yaml",
+            "xml",
+            "table",
+            "csv",
+            "markdown",
+            "schema",
+            "format as",
+            "structured",
+            # Chinese
+            "表格",
+            "格式化为",
+            "结构化",
+            # Japanese
+            "テーブル",
+            "フォーマット",
+            "構造化",
+            # Russian
+            "таблица",
+            "форматировать как",
+            "структурированный",
+            # German
+            "tabelle",
+            "formatieren als",
+            "strukturiert",
+            # Spanish
+            "tabla",
+            "formatear como",
+            "estructurado",
+            # Portuguese
+            "tabela",
+            "formatar como",
+            "estruturado",
+            # Korean
+            "테이블",
+            "형식",
+            "구조화",
+            # Arabic
+            "جدول",
+            "تنسيق",
+            "منظم",
+        ],
+        "reference_keywords": [
+            # English
+            "above",
+            "below",
+            "previous",
+            "following",
+            "the docs",
+            "the api",
+            "the code",
+            "earlier",
+            "attached",
+            # Chinese
+            "上面",
+            "下面",
+            "之前",
+            "接下来",
+            "文档",
+            "代码",
+            "附件",
+            # Japanese
+            "上記",
+            "下記",
+            "前の",
+            "次の",
+            "ドキュメント",
+            "コード",
+            # Russian
+            "выше",
+            "ниже",
+            "предыдущий",
+            "следующий",
+            "документация",
+            "код",
+            "ранее",
+            "вложение",
+            # German
+            "oben",
+            "unten",
+            "vorherige",
+            "folgende",
+            "dokumentation",
+            "der code",
+            "früher",
+            "anhang",
+            # Spanish
+            "arriba",
+            "abajo",
+            "anterior",
+            "siguiente",
+            "documentación",
+            "el código",
+            "adjunto",
+            # Portuguese
+            "acima",
+            "abaixo",
+            "anterior",
+            "seguinte",
+            "documentação",
+            "o código",
+            "anexo",
+            # Korean
+            "위",
+            "아래",
+            "이전",
+            "다음",
+            "문서",
+            "코드",
+            "첨부",
+            # Arabic
+            "أعلاه",
+            "أدناه",
+            "السابق",
+            "التالي",
+            "الوثائق",
+            "الكود",
+            "مرفق",
+        ],
+        "negation_keywords": [
+            # English
+            "don't",
+            "do not",
+            "avoid",
+            "never",
+            "without",
+            "except",
+            "exclude",
+            "no longer",
+            # Chinese
+            "不要",
+            "避免",
+            "从不",
+            "没有",
+            "除了",
+            "排除",
+            # Japanese
+            "しないで",
+            "避ける",
+            "決して",
+            "なしで",
+            "除く",
+            # Russian
+            "не делай",
+            "не надо",
+            "нельзя",
+            "избегать",
+            "никогда",
+            "без",
+            "кроме",
+            "исключить",
+            "больше не",
+            # German
+            "nicht",
+            "vermeide",
+            "niemals",
+            "ohne",
+            "außer",
+            "ausschließen",
+            "nicht mehr",
+            # Spanish
+            "no hagas",
+            "evitar",
+            "nunca",
+            "sin",
+            "excepto",
+            "excluir",
+            # Portuguese
+            "não faça",
+            "evitar",
+            "nunca",
+            "sem",
+            "exceto",
+            "excluir",
+            # Korean
+            "하지 마",
+            "피하다",
+            "절대",
+            "없이",
+            "제외",
+            # Arabic
+            "لا تفعل",
+            "تجنب",
+            "أبداً",
+            "بدون",
+            "باستثناء",
+            "استبعاد",
+        ],
+        "domain_specific_keywords": [
+            # English
+            "quantum",
+            "fpga",
+            "vlsi",
+            "risc-v",
+            "asic",
+            "photonics",
+            "genomics",
+            "proteomics",
+            "topological",
+            "homomorphic",
+            "zero-knowledge",
+            "lattice-based",
+            # Chinese
+            "量子",
+            "光子学",
+            "基因组学",
+            "蛋白质组学",
+            "拓扑",
+            "同态",
+            "零知识",
+            "格密码",
+            # Japanese
+            "量子",
+            "フォトニクス",
+            "ゲノミクス",
+            "トポロジカル",
+            # Russian
+            "квантовый",
+            "фотоника",
+            "геномика",
+            "протеомика",
+            "топологический",
+            "гомоморфный",
+            "с нулевым разглашением",
+            "на основе решёток",
+            # German
+            "quanten",
+            "photonik",
+            "genomik",
+            "proteomik",
+            "topologisch",
+            "homomorph",
+            "zero-knowledge",
+            "gitterbasiert",
+            # Spanish
+            "cuántico",
+            "fotónica",
+            "genómica",
+            "proteómica",
+            "topológico",
+            "homomórfico",
+            # Portuguese
+            "quântico",
+            "fotônica",
+            "genômica",
+            "proteômica",
+            "topológico",
+            "homomórfico",
+            # Korean
+            "양자",
+            "포토닉스",
+            "유전체학",
+            "위상",
+            "동형",
+            # Arabic
+            "كمي",
+            "ضوئيات",
+            "جينوميات",
+            "طوبولوجي",
+            "تماثلي",
+        ],
+        # Agentic task keywords - file ops, execution, multi-step, iterative work
+        # Pruned: removed overly common words like "then", "first", "run", "test", "build"
+        "agentic_task_keywords": [
+            # English - File operations (clearly agentic)
+            "read file",
+            "read the file",
+            "look at",
+            "check the",
+            "open the",
+            "edit",
+            "modify",
+            "update the",
+            "change the",
+            "write to",
+            "create file",
+            # English - Execution (specific commands only)
+            "execute",
+            "deploy",
+            "install",
+            "npm",
+            "pip",
+            "compile",
+            # English - Multi-step patterns (specific only)
+            "after that",
+            "and also",
+            "once done",
+            "step 1",
+            "step 2",
+            # English - Iterative work
+            "fix",
+            "debug",
+            "until it works",
+            "keep trying",
+            "iterate",
+            "make sure",
+            "verify",
+            "confirm",
+            # Chinese (keep specific ones)
+            "读取文件",
+            "查看",
+            "打开",
+            "编辑",
+            "修改",
+            "更新",
+            "创建",
+            "执行",
+            "部署",
+            "安装",
+            "第一步",
+            "第二步",
+            "修复",
+            "调试",
+            "直到",
+            "确认",
+            "验证",
+            # Spanish
+            "leer archivo",
+            "editar",
+            "modificar",
+            "actualizar",
+            "ejecutar",
+            "desplegar",
+            "instalar",
+            "paso 1",
+            "paso 2",
+            "arreglar",
+            "depurar",
+            "verificar",
+            # Portuguese
+            "ler arquivo",
+            "editar",
+            "modificar",
+            "atualizar",
+            "executar",
+            "implantar",
+            "instalar",
+            "passo 1",
+            "passo 2",
+            "corrigir",
+            "depurar",
+            "verificar",
+            # Korean
+            "파일 읽기",
+            "편집",
+            "수정",
+            "업데이트",
+            "실행",
+            "배포",
+            "설치",
+            "단계 1",
+            "단계 2",
+            "디버그",
+            "확인",
+            # Arabic
+            "قراءة ملف",
+            "تحرير",
+            "تعديل",
+            "تحديث",
+            "تنفيذ",
+            "نشر",
+            "تثبيت",
+            "الخطوة 1",
+            "الخطوة 2",
+            "إصلاح",
+            "تصحيح",
+            "تحقق",
+        ],
+        # Dimension weights (sum to 1.0)
+        "dimension_weights": {
+            "tokenCount": 0.08,
+            "codePresence": 0.15,
+            "reasoningMarkers": 0.18,
+            "technicalTerms": 0.1,
+            "creativeMarkers": 0.05,
+            "simpleIndicators": 0.02,  # Reduced from 0.12 to make room for agenticTask
+            "multiStepPatterns": 0.12,
+            "questionComplexity": 0.05,
+            "imperativeVerbs": 0.03,
+            "constraintCount": 0.04,
+            "outputFormat": 0.03,
+            "referenceComplexity": 0.02,
+            "negationComplexity": 0.01,
+            "domainSpecificity": 0.02,
+            "agenticTask": 0.04,  # Reduced - agentic signals influence tier selection, not dominate it
+        },
+        # Tier boundaries on weighted score axis
+        "tier_boundaries": {
+            "simple_medium": 0.0,
+            "medium_complex": 0.3,  # Raised from 0.18 - prevent simple tasks from reaching expensive COMPLEX tier
+            "complex_reasoning": 0.5,  # Raised from 0.4 - reserve for true reasoning tasks
+        },
+        # Sigmoid steepness for confidence calibration
+        "confidence_steepness": 12,
+        # Below this confidence → ambiguous (null tier)
+        "confidence_threshold": 0.7,
+    },
+    # ─── Tier chains ───
+    #
+    # Catalog refresh 2026-08-29 (V3.5). Every chain below names only models
+    # the public catalog lists (GET https://blockrun.ai/api/v1/models). Ids the
+    # gateway withholds (`hidden: true`) — kimi-k2.5/k2.6/k2.7, the grok-4-fast
+    # and grok-4-1-fast pairs, grok-4-0709, claude-opus-4.6, gemini-3-pro-preview,
+    # the whole `free/*` namespace — were removed everywhere, including fallback
+    # rungs, so a routed model is always one a user can find on blockrun.ai/models.
+    #
+    # Primaries moved only where portfolio.ts already carries calibration
+    # evidence for the successor (Sonnet 5 over Sonnet 4.6, GPT-5 Mini for
+    # agentic MEDIUM, Gemini 3.5 Flash where Kimi K2.7 was). Newcomers with no
+    # trajectory evidence yet (gemini-3.6-flash, glm-5.3, glm-5.3-flash,
+    # gpt-5.6-luna, grok-4.3, minimax-m3, qwen3.7-plus) enter as fallback rungs;
+    # promotion waits for a calibration run, because version recency is not a
+    # quality signal.
+    #
+    # Latency figures in comments are the 2026-08-29 gateway probe
+    # (model-profiles.generated.json); prices are the catalog list.
+    # Auto (balanced) tier configs - current default smart routing
+    "tiers": {
+        "SIMPLE": {
+            "primary": "google/gemini-2.5-flash",  # $0.30/$2.50 — 60% retention (best) in the 2026-03 run; still the fastest quality answer
+            "fallback": [
+                "google/gemini-3-flash-preview",  # $0.50/$3 — GPQA 5/6 in the 2026-07 calibration
+                "google/gemini-3.5-flash-lite",  # $0.30/$2.50, 1M ctx, thinking mode — same price as 2.5 Flash, newer generation
+                "deepseek/deepseek-chat",  # $0.14/$0.28, 1M ctx
+                "google/gemini-3.1-flash-lite",  # $0.25/$1.50, 1M ctx
+                "openai/gpt-5.6-luna",  # $0.20/$1.20, 1M ctx — GPT-5.6 cost tier (cut 2026-07-30)
+                "openai/gpt-5.4-nano",  # $0.20/$1.25, 1M ctx
+                "google/gemini-2.5-flash-lite",  # $0.10/$0.40
+                "nvidia/nemotron-3.5-lightning",  # FREE backstop — NVIDIA free tier (probed 2026-08-30)
+            ],
+        },
+        "MEDIUM": {
+            # Was moonshot/kimi-k2.7 (hidden 2026-08). Gemini 3.5 Flash is the
+            # calibrated successor: MGSM 5/5, GPQA 4/6, extraction band (portfolio.ts).
+            "primary": "google/gemini-3.5-flash",  # $1.50/$9, 1M ctx, vision + tools
+            "fallback": [
+                "google/gemini-3.6-flash",  # $1.50/$7.50 — newest Flash, output 17% cheaper than 3.5; awaiting calibration
+                "zai/glm-5.3-flash",  # $0.15/$0.50, 1M ctx, vision + tools verified live 2026-08-27
+                "openai/gpt-5.6-terra",  # $2/$12, 1M ctx — GPT-5.6 balanced tier
+                "google/gemini-3-flash-preview",  # $0.50/$3
+                "deepseek/deepseek-chat",  # $0.14/$0.28
+                "google/gemini-2.5-flash",  # $0.30/$2.50
+                "minimax/minimax-m3",  # $0.30/$1.20, 1M ctx
+                "google/gemini-3.1-flash-lite",  # $0.25/$1.50
+                "openai/gpt-5.6-luna",  # $0.20/$1.20
+                "google/gemini-2.5-flash-lite",  # $0.10/$0.40
+            ],
+        },
+        "COMPLEX": {
+            "primary": "google/gemini-3.1-pro",  # $2/$12 — proven long-context flagship (portfolio.ts long_context lead)
+            "fallback": [
+                "google/gemini-3.6-flash",  # $1.50/$7.50 — Pro-level quality at Flash price (Google's claim; uncalibrated here)
+                "google/gemini-3.5-flash",  # $1.50/$9 — calibrated
+                "anthropic/claude-sonnet-5",  # $3/$15 — near-Opus quality, tau2 + Terminal-Bench calibrated
+                "xai/grok-4.5",  # $2.50/$9 — 503-resistant, independent infra (was grok-4-0709, now hidden)
+                "google/gemini-2.5-pro",  # $1.25/$10
+                "anthropic/claude-sonnet-4.6",  # $3/$15
+                "openai/gpt-5.6-terra",  # $2/$12 — GPT-5.6 balanced tier (Sol excluded: #202)
+                "openai/gpt-5.5",  # $5/$30 — prior OpenAI flagship
+                "openai/gpt-5.4",  # $2.50/$15 — previous flagship, benchmarked
+                "zai/glm-5.3",  # $1.40/$4.40, 1M ctx, always-on thinking — verified live 2026-08-19
+                "moonshot/kimi-k3",  # $3/$15, 1M ctx — Moonshot flagship (K2.7 successor)
+                "deepseek/deepseek-v4-pro",  # $0.435/$0.87 — strongest open-weight reasoner
+                "deepseek/deepseek-chat",  # $0.14/$0.28 — cheap last resort
+                "google/gemini-2.5-flash",  # $0.30/$2.50
+            ],
+        },
+        "REASONING": {
+            # Was xai/grok-4-1-fast-reasoning ($0.20/$0.50, hidden 2026-08). DeepSeek
+            # Reasoner is the cheapest listed reasoner at the same 1M context.
+            "primary": "deepseek/deepseek-reasoner",  # $0.14/$0.28, 1M ctx
+            "fallback": [
+                "deepseek/deepseek-v4-pro",  # $0.435/$0.87 — calibrated reasoning band 0.95
+                "xai/grok-4.3",  # $1.50/$4, 1M ctx — xAI reasoning model, vision
+                "qwen/qwen3.7-plus",  # $0.32/$1.28, 1M ctx — reasoning; needs a generous max_tokens (thinking is billed)
+                "google/gemini-3.5-flash",  # $1.50/$9 — MGSM 5/5
+                "openai/o4-mini",  # $1.10/$4.40
+                "openai/o3",  # $2/$8
+            ],
+        },
+    },
+    # Eco tier configs - absolute cheapest (blockrun/eco)
+    "eco_tiers": {
+        "SIMPLE": {
+            "primary": "nvidia/nemotron-3.5-lightning",  # FREE — NVIDIA free tier flagship, 1M ctx
+            "fallback": [
+                "nvidia/nemotron-3-nano-30b",  # FREE — fastest free model (~121 tok/s)
+                # The free head keeps rotting with NVIDIA's hosting (deepseek-v4-flash
+                # 410 2026-08-12, seed-oss-36b 410 2026-08-03, gpt-oss-120b/20b 400
+                # 2026-08-21, and on 2026-08-30 FOUR of the five visible free models at
+                # once — step-3.7-flash, nemotron-nano-9b-v2 and nemotron-nano-12b-v2-vl
+                # all 410, mistral-nemotron hung). Each retirement retargets the two
+                # free rungs to the current free tier; the paid rungs below never move.
+                # The head follows blockrun's own redirect of the model it replaces, so
+                # the router and the gateway never name different models.
+                "google/gemini-2.5-flash-lite",  # $0.10/$0.40 — cheapest paid rung
+                "zai/glm-5.3-flash",  # $0.15/$0.50, 1M ctx, vision + tools
+                "openai/gpt-5.6-luna",  # $0.20/$1.20, 1M ctx
+                "openai/gpt-5.4-nano",  # $0.20/$1.25
+                "google/gemini-3.1-flash-lite",  # $0.25/$1.50
+            ],
+        },
+        "MEDIUM": {
+            "primary": "zai/glm-5.3-flash",  # $0.15/$0.50, 1M ctx, vision + tools verified live — cheapest full-capability model
+            "fallback": [
+                "deepseek/deepseek-chat",  # $0.14/$0.28
+                "google/gemini-3.1-flash-lite",  # $0.25/$1.50
+                "openai/gpt-5.6-luna",  # $0.20/$1.20
+                "openai/gpt-5.4-nano",  # $0.20/$1.25
+                "google/gemini-2.5-flash-lite",  # $0.10/$0.40
+                "google/gemini-2.5-flash",  # $0.30/$2.50
+            ],
+        },
+        "COMPLEX": {
+            "primary": "zai/glm-5.3-flash",  # $0.15/$0.50, 1M ctx
+            "fallback": [
+                "deepseek/deepseek-chat",  # $0.14/$0.28, 1M ctx
+                "minimax/minimax-m3",  # $0.30/$1.20, 1M ctx
+                "deepseek/deepseek-v4-pro",  # $0.435/$0.87
+                "google/gemini-3.1-flash-lite",  # $0.25/$1.50
+                "google/gemini-2.5-flash",  # $0.30/$2.50
+            ],
+        },
+        "REASONING": {
+            "primary": "deepseek/deepseek-reasoner",  # $0.14/$0.28, 1M ctx — cheapest listed reasoner
+            "fallback": [
+                "deepseek/deepseek-v4-pro",  # $0.435/$0.87
+                "qwen/qwen3.7-plus",  # $0.32/$1.28 — reasoning
+                "minimax/minimax-m3",  # $0.30/$1.20 — reasoning + coding
+                "zai/glm-5.3-flash",  # $0.15/$0.50 — reasoning tokens alongside content
+            ],
+        },
+    },
+    # Premium tier configs - best quality (blockrun/premium)
+    # codex=complex coding, flash=simple coding, sonnet=reasoning/instructions, fable/opus=architecture/PM/audits
+    "premium_tiers": {
+        "SIMPLE": {
+            # Was moonshot/kimi-k2.7 (hidden 2026-08).
+            "primary": "google/gemini-3.5-flash",  # $1.50/$9, 1M ctx, vision + tools — calibrated
+            "fallback": [
+                "google/gemini-3.6-flash",  # $1.50/$7.50 — newest Flash
+                "anthropic/claude-haiku-4.5",  # $1/$5
+                "zai/glm-5.3",  # $1.40/$4.40, 1M ctx
+                "google/gemini-2.5-flash",  # $0.30/$2.50
+                "google/gemini-3.5-flash-lite",  # $0.30/$2.50
+                "deepseek/deepseek-chat",  # $0.14/$0.28
+            ],
+        },
+        "MEDIUM": {
+            "primary": "openai/gpt-5.3-codex",  # $1.75/$14 - 400K context, 128K output — code_edit/debug lead (portfolio.ts)
+            "fallback": [
+                "anthropic/claude-sonnet-5",  # $3/$15 — code_agent band 0.98
+                "moonshot/kimi-k3",  # $3/$15, 1M ctx — Moonshot flagship
+                "zai/glm-5.3",  # $1.40/$4.40 — long-horizon coding
+                "google/gemini-3.6-flash",  # $1.50/$7.50
+                "google/gemini-3.5-flash",  # $1.50/$9
+                "google/gemini-2.5-pro",  # $1.25/$10
+                "xai/grok-4.5",  # $2.50/$9
+                "anthropic/claude-sonnet-4.6",  # $3/$15
+                "openai/gpt-5.6-terra",  # $2/$12
+            ],
+        },
+        "COMPLEX": {
+            # fable-5 was promoted here 2026-06-11, force-reverted 2026-06-13 when Anthropic
+            # withdrew the offer, and restored 2026-07-14 now that BlockRun has relisted it.
+            "primary": "anthropic/claude-fable-5",  # Best quality for complex tasks — Mythos-class flagship above Opus ($10/$50, 1M ctx, always-on thinking)
+            # Fallback chain de-Gemini'd 2026-04-22: when Anthropic 503s, Gemini is
+            # also prone to "high demand" 503s (correlated failure — everyone falls
+            # back to Google at the same time). Prefer in-family → xAI → Moonshot →
+            # OpenAI flagship → Z.AI → DeepSeek → NVIDIA free instead.
+            "fallback": [
+                "anthropic/claude-opus-5",  # in-family hot swap first (half the price, 1M ctx + adaptive thinking)
+                "anthropic/claude-opus-4.8",  # in-family hot swap (identical cost to 5)
+                "anthropic/claude-opus-4.7",  # in-family hot swap (identical cost to 4.8)
+                "anthropic/claude-sonnet-5",  # Sonnet-tier drop-down, near-Opus quality
+                "anthropic/claude-sonnet-4.6",
+                "xai/grok-4.5",  # xAI flagship — 503-resistant, direct-xAI SKU
+                "moonshot/kimi-k3",  # Moonshot flagship, independent infra
+                "openai/gpt-5.6-terra",  # GPT-5.6 balanced tier — stable (Sol excluded: #202)
+                "openai/gpt-5.5",  # Prior OpenAI flagship — 1M+ ctx, native agent + computer use
+                "openai/gpt-5.4",  # Previous flagship (slow but stable, benchmarked at 6,213ms)
+                "openai/gpt-5.3-codex",
+                "zai/glm-5.3",  # Z.AI flagship, 1M ctx
+                "deepseek/deepseek-v4-pro",  # strongest open-weight reasoner
+                "deepseek/deepseek-chat",  # Cheap, reliable
+                "nvidia/nemotron-3.5-lightning",  # NVIDIA free ultimate backstop
+            ],
+        },
+        "REASONING": {
+            # Sonnet 5 promoted over Sonnet 4.6 (same price; reasoning band 0.98 for both,
+            # plus Sonnet 5's tau2/BrowseComp trajectory evidence).
+            "primary": "anthropic/claude-sonnet-5",  # $3/$15, 1M ctx, adaptive thinking
+            "fallback": [
+                "anthropic/claude-sonnet-4.6",  # in-family hot swap — same cost
+                "anthropic/claude-opus-5",  # Newest flagship Opus w/ adaptive thinking
+                "anthropic/claude-opus-4.8",  # Prior flagship Opus — identical cost to 5
+                "anthropic/claude-opus-4.7",  # Flagship Opus w/ adaptive thinking
+                "xai/grok-4.5",  # reasoning band 0.94
+                "deepseek/deepseek-v4-pro",  # reasoning band 0.95
+                "xai/grok-4.3",  # $1.50/$4 — xAI reasoning model
+                "openai/o4-mini",  # $1.10/$4.40
+                "openai/o3",  # $2/$8
+            ],
+        },
+    },
+    # Agentic tier configs - models that excel at multi-step autonomous tasks
+    "agentic_tiers": {
+        "SIMPLE": {
+            "primary": "openai/gpt-4o-mini",  # $0.15/$0.60 - best tool compliance at lowest cost
+            "fallback": [
+                "openai/gpt-5.6-luna",  # $0.20/$1.20 — lightweight agentic tier of GPT-5.6
+                "zai/glm-5.3-flash",  # $0.15/$0.50 — tool calls verified live 2026-08-27
+                "anthropic/claude-haiku-4.5",  # $1/$5
+                "google/gemini-2.5-flash",  # $0.30/$2.50
+            ],
+        },
+        "MEDIUM": {
+            # Was moonshot/kimi-k2.7 (hidden 2026-08). GPT-5 Mini carries the
+            # Terminal-Bench and tau2 trajectory evidence in portfolio.ts.
+            "primary": "openai/gpt-5-mini",  # $0.25/$2 — 4/7 Terminal-Bench, 5/6 tau2 airline
+            "fallback": [
+                "google/gemini-3.5-flash",  # $1.50/$9 — tool_agent band 0.88
+                "zai/glm-5.3-flash",  # $0.15/$0.50 — tools verified
+                "openai/gpt-5.6-terra",  # $2/$12
+                "openai/gpt-4o-mini",  # $0.15/$0.60 — reliable tool calling
+                "anthropic/claude-haiku-4.5",  # $1/$5
+                "deepseek/deepseek-chat",  # $0.14/$0.28
+                "moonshot/kimi-k3",  # $3/$15 — tool_agent band 0.85
+            ],
+        },
+        "COMPLEX": {
+            # Sonnet 5 promoted over Sonnet 4.6: tau2 airline + retail reward 1.0,
+            # Terminal-Bench safety band lead (portfolio.ts).
+            "primary": "anthropic/claude-sonnet-5",  # $3/$15 — best agentic quality per trajectory evidence
+            # Fallback chain de-Gemini'd 2026-04-22: Gemini's "high demand" 503s
+            # correlate with Anthropic outages (everyone falls back together).
+            # Prefer 503-resistant providers first.
+            "fallback": [
+                "anthropic/claude-sonnet-4.6",  # in-family hot swap — same cost
+                "anthropic/claude-opus-5",  # Newest flagship Opus — in-family hot swap
+                "anthropic/claude-opus-4.8",  # Prior flagship Opus — identical cost to 5
+                "anthropic/claude-opus-4.7",  # Flagship Opus — in-family hot swap
+                "xai/grok-4.5",  # xAI flagship — strong tool use, independent infra
+                "moonshot/kimi-k3",  # Moonshot flagship — independent infra
+                "openai/gpt-5.6-terra",  # GPT-5.6 balanced tier — stable (Sol excluded: #202)
+                "openai/gpt-5.5",  # Prior flagship — native agent + computer use (exactly the agentic-tier use case)
+                "openai/gpt-5.4",  # Previous flagship — reliable
+                "openai/gpt-5.3-codex",  # code_agent lead
+                "zai/glm-5.3",  # long-horizon coding
+                "deepseek/deepseek-v4-pro",  # retail high-risk 3/3
+                "deepseek/deepseek-chat",  # cheap, reliable
+                "nvidia/nemotron-3.5-lightning",  # NVIDIA free ultimate backstop
+            ],
+        },
+        "REASONING": {
+            "primary": "anthropic/claude-sonnet-5",  # $3/$15 — strong tool use + adaptive thinking
+            "fallback": [
+                "anthropic/claude-sonnet-4.6",  # in-family hot swap — same cost
+                "anthropic/claude-opus-5",  # Newest flagship Opus w/ adaptive thinking
+                "anthropic/claude-opus-4.8",  # Prior flagship Opus — identical cost to 5
+                "anthropic/claude-opus-4.7",  # Flagship Opus w/ adaptive thinking
+                "xai/grok-4.5",  # reasoning band 0.94
+                "deepseek/deepseek-v4-pro",  # reasoning band 0.95
+                "deepseek/deepseek-reasoner",  # $0.14/$0.28
+            ],
+        },
+    },
+    # Time-windowed promotions — auto-applied when active, ignored when expired.
+    # The GLM-5.1 launch promo (2026-04-01 → 2026-05-01) was the last entry and
+    # has expired; the list is kept empty so the mechanism stays wired.
+    "promotions": [],
+    "overrides": {
+        "max_tokens_force_complex": 100_000,
+        "structured_output_min_tier": "MEDIUM",
+        "ambiguous_default_tier": "MEDIUM",
+        # agenticMode left undefined → auto-detect via tools/agenticScore.
+        # Set to `true` to force agentic tiers; `false` to disable them entirely.
+    },
+}

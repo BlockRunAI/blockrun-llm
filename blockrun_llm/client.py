@@ -50,7 +50,22 @@ import httpx
 from dotenv import load_dotenv
 from eth_account import Account
 
-from .router import route as route_request
+from .apikey import (
+    api_key_base_url,
+    auth_headers,
+    missing_credential_error,
+    payment_mode,
+    raise_for_api_key_402,
+    resolve_api_key,
+    wallet_only,
+)
+from .router_adapter import (
+    BASE_MINIMUM_PAYMENT_USD,
+    build_model_pricing,
+    route_with_catalog,
+    routing_profile_for_model,
+    routing_text,
+)
 from .tx_log import (
     TransactionLogger,
     _resolve_log_dir,
@@ -68,6 +83,7 @@ from .types import (
     RoutingDecision,
     RoutingProfile,
     SearchResult,
+    SmartChatCompletionResponse,
     SmartChatResponse,
     chunk_meta,
     chunk_usage_dict,
@@ -111,7 +127,7 @@ def _get_user_agent() -> str:
 # =============================================================================
 
 
-def list_models(api_url: str = "https://blockrun.ai/api") -> list[dict[str, Any]]:
+def list_models(api_url: str | None = None) -> list[dict[str, Any]]:
     """
     List available LLM models with pricing (no wallet required).
 
@@ -130,9 +146,16 @@ def list_models(api_url: str = "https://blockrun.ai/api") -> list[dict[str, Any]
         for m in models:
             print(f"{m['id']}: ${m.get('inputPrice', 'N/A')}/M input")
     """
-    with httpx.Client(timeout=30) as client:
-        # Use /pricing endpoint which includes full model details
-        response = client.get(f"{api_url.rstrip('/')}/pricing")
+    # No credential parameter, so the environment decides. On the account rail
+    # the catalogue lives on another host and needs the key, so honouring one
+    # without the other would 404 or 401.
+    api_key = resolve_api_key(None)
+    api_url = api_url or (api_key_base_url(None) if api_key else "https://blockrun.ai/api")
+    with httpx.Client(timeout=30, headers=auth_headers(api_key)) as client:
+        # The account rail publishes the catalogue at /v1/models only; /pricing
+        # is the x402 gateway's own sheet.
+        path = "/v1/models" if api_key else "/pricing"
+        response = client.get(f"{api_url.rstrip('/')}{path}")
         if response.status_code != 200:
             raise APIError(
                 f"Failed to list models: {response.status_code}",
@@ -140,10 +163,10 @@ def list_models(api_url: str = "https://blockrun.ai/api") -> list[dict[str, Any]
                 {},
             )
         data = response.json()
-        return data.get("models", [])
+        return data.get("data", []) if api_key else data.get("models", [])
 
 
-def list_image_models(api_url: str = "https://blockrun.ai/api") -> list[dict[str, Any]]:
+def list_image_models(api_url: str | None = None) -> list[dict[str, Any]]:
     """
     List available image generation models without requiring a wallet.
 
@@ -151,7 +174,9 @@ def list_image_models(api_url: str = "https://blockrun.ai/api") -> list[dict[str
     The dedicated ``/v1/images/models`` endpoint was deprecated server-side;
     image models now live alongside chat models under one catalog.
     """
-    with httpx.Client(timeout=30) as client:
+    api_key = resolve_api_key(None)
+    api_url = api_url or (api_key_base_url(None) if api_key else "https://blockrun.ai/api")
+    with httpx.Client(timeout=30, headers=auth_headers(api_key)) as client:
         response = client.get(f"{api_url.rstrip('/')}/v1/models")
         if response.status_code != 200:
             raise APIError(
@@ -213,7 +238,13 @@ def _should_fallback(exc: Exception) -> bool:
         return True
     if isinstance(exc, httpx.NetworkError):
         return True
-    return bool(isinstance(exc, APIError) and exc.status_code in (502, 503, 504, 522, 524))
+    # 429 is retriable here for the same reason the TypeScript adapter treats it
+    # as transient: it means THIS upstream is saturated, and the next model in
+    # the chain is a different upstream. Observed live on the free tier — a
+    # rate-limited free model returned 429 and the three remaining free models
+    # in the ranked chain were never tried. Permanent payment failures and
+    # settled calls are refused above, before this line.
+    return bool(isinstance(exc, APIError) and exc.status_code in (429, 502, 503, 504, 522, 524))
 
 
 # The gateway states the output-token ceiling it actually quoted in the 402's
@@ -393,34 +424,47 @@ class LLMClient:
         # SECURITY: Key is stored in memory only, used for LOCAL signing
         from .wallet import load_wallet
 
+        # Account rail first, and before any wallet variable is read: an API
+        # key is a complete credential on its own, so demanding a private key
+        # alongside it would make every API-key user invent a wallet they
+        # never use. See apikey.py for the precedence rule.
+        api_key = resolve_api_key(private_key)
         key = (
-            private_key
-            or os.environ.get("BLOCKRUN_WALLET_KEY")
-            or os.environ.get("BASE_CHAIN_WALLET_KEY")
-            or load_wallet()  # Loads from ~/.blockrun/.session
-        )
-        if not key:
-            raise ValueError(
-                "No wallet configured. Either:\n"
-                "  1. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  2. Pass private_key to LLMClient()\n"
-                "  3. For agent use: call setup_agent_wallet() first"
+            None
+            if api_key
+            else (
+                private_key
+                or os.environ.get("BLOCKRUN_WALLET_KEY")
+                or os.environ.get("BASE_CHAIN_WALLET_KEY")
+                or load_wallet()  # Loads from ~/.blockrun/.session
             )
+        )
+        if not api_key and not key:
+            raise missing_credential_error()
 
         # Normalize private key format (add 0x prefix if missing)
         if key and not key.startswith("0x"):
             key = "0x" + key
 
         # Validate private key format
-        validate_private_key(key)
+        if key:
+            validate_private_key(key)
 
         # Initialize wallet account
         # SECURITY: Key stays local, only used to sign EIP-712 messages
         # The key is NEVER transmitted - only signatures are sent
-        self.account = Account.from_key(key)
+        self.api_key = api_key
+        # No wallet on the account rail: nothing is signed locally.
+        self.account = Account.from_key(key) if key else None
 
         # Validate and set API URL
-        api_url_raw = api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL
+        # BLOCKRUN_API_URL names an x402 gateway; an API-key client must not
+        # follow it and hand the key to a host set up for another rail.
+        api_url_raw = (
+            api_key_base_url(api_url)
+            if api_key
+            else (api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL)
+        )
         validate_api_url(api_url_raw)
         self.api_url = api_url_raw.rstrip("/")
 
@@ -428,6 +472,7 @@ class LLMClient:
         self.search_timeout = search_timeout
 
         self._client = httpx.Client(
+            headers=auth_headers(api_key),
             timeout=timeout,
             limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
         )
@@ -472,37 +517,51 @@ class LLMClient:
 
     def _get_model_pricing(self) -> dict[str, dict[str, float]]:
         """
-        Get model pricing for smart routing.
+        Get model pricing for smart routing (cached for the client's lifetime).
 
         Returns:
             Dict mapping model_id -> {"input_price": x, "output_price": y,
             "flat_price": z}. ``flat_price`` is 0 for per-token billing and
             non-zero (USD per call) for flat-billed models.
-
-        The /v1/models response uses the nested ``pricing.input``/``pricing.output``
-        shape today; older snapshots used top-level ``inputPrice``/``outputPrice``.
-        Both are accepted so the SDK keeps working through backend transitions.
         """
         if self._model_pricing_cache is not None:
             return self._model_pricing_cache
 
-        models = self.list_models()
-        pricing: dict[str, dict[str, float]] = {}
-        for model in models:
-            model_id = model.get("id", "")
-            block = model.get("pricing") or {}
-            input_price = block.get("input", model.get("inputPrice", model.get("input_price", 0)))
-            output_price = block.get(
-                "output", model.get("outputPrice", model.get("output_price", 0))
-            )
-            flat_price = block.get("flat", model.get("flatPrice", 0))
-            pricing[model_id] = {
-                "input_price": float(input_price or 0),
-                "output_price": float(output_price or 0),
-                "flat_price": float(flat_price or 0),
-            }
+        pricing = build_model_pricing(self.list_models())
         self._model_pricing_cache = pricing
         return pricing
+
+    def route(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        routing_profile: RoutingProfile = "auto",
+        requires_structured_output: bool = False,
+    ) -> RoutingDecision:
+        """
+        Inspect a routing decision without making or paying for a model call.
+
+        The first invocation may fetch the public model catalog for current
+        prices; routing itself is local and costs nothing.
+
+        Example:
+            decision = client.route("Prove the Riemann hypothesis")
+            print(decision.model)       # 'deepseek/deepseek-v4-pro'
+            print(decision.task_type)   # 'reasoning'
+            print(decision.candidates)  # ordered fallback chain
+        """
+        decision = route_with_catalog(
+            prompt,
+            system,
+            max_tokens or self.DEFAULT_MAX_TOKENS,
+            self._get_model_pricing(),
+            routing_profile=routing_profile,
+            requires_structured_output=requires_structured_output,
+            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+        )
+        return RoutingDecision(**decision)
 
     def smart_chat(
         self,
@@ -516,8 +575,12 @@ class LLMClient:
         """
         Smart chat with automatic model routing.
 
-        Routes requests to the cheapest capable model using ClawRouter's
-        14-dimension rule-based scoring algorithm (<1ms, 100% local).
+        Uses BlockRun's product-neutral Router Core portfolio strategy — the
+        same engine the TypeScript SDK and the gateway run. It classifies the
+        task shape locally (<1ms, no extra model call), enforces capability
+        constraints as hard filters, and ranks an ordered candidate portfolio:
+        the cheapest model that can handle the request wins, and the rest become
+        the transient-error fallback chain.
 
         Args:
             prompt: User message
@@ -525,18 +588,19 @@ class LLMClient:
             max_tokens: Max tokens to generate (default: 1024)
             temperature: Sampling temperature
             routing_profile: "free" | "eco" | "auto" | "premium"
-                - free: nvidia/gpt-oss-120b only (FREE)
-                - eco: Cheapest models per tier (DeepSeek, xAI)
+                - free: NVIDIA's $0 models only — no wallet needed
+                - eco: Cheapest capable model per tier
                 - auto: Best balance of cost/quality (default)
-                - premium: Top-tier models (OpenAI, Anthropic)
+                - premium: Top-tier models (Anthropic, OpenAI, Moonshot)
 
         Returns:
             SmartChatResponse with response, model, and routing decision
 
         Example:
             result = client.smart_chat("What is 2+2?")
-            print(result.response)  # '4'
-            print(result.model)     # 'google/gemini-2.5-flash'
+            print(result.response)         # '4'
+            print(result.model)            # 'google/gemini-3.5-flash'
+            print(result.routing.method)   # 'portfolio'
             print(f"Saved {result.routing.savings * 100:.0f}%")
 
             # With routing profile
@@ -545,22 +609,18 @@ class LLMClient:
                 routing_profile="premium"  # Use top-tier models for complex tasks
             )
         """
-        # Get model pricing for routing decision
-        model_pricing = self._get_model_pricing()
-        max_output_tokens = max_tokens or self.DEFAULT_MAX_TOKENS
-
-        # Route the request
-        decision = route_request(
-            prompt=prompt,
-            system_prompt=system,
-            max_output_tokens=max_output_tokens,
-            model_pricing=model_pricing,
+        decision = route_with_catalog(
+            prompt,
+            system,
+            max_tokens or self.DEFAULT_MAX_TOKENS,
+            self._get_model_pricing(),
             routing_profile=routing_profile,
+            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
         )
 
-        # Make the chat request with selected model. Pass the tier's remaining
-        # models as fallbacks so a hung upstream (e.g. NVIDIA NIM) doesn't
-        # hard-fail when smart_chat could just walk to the next visible model.
+        # Make the chat request with selected model. Pass the remaining ranked
+        # candidates as fallbacks so a hung upstream (e.g. NVIDIA NIM) doesn't
+        # hard-fail when smart_chat could just walk to the next capable model.
         response = self.chat(
             model=decision["model"],
             prompt=prompt,
@@ -571,6 +631,81 @@ class LLMClient:
         )
 
         return SmartChatResponse(
+            response=response,
+            model=decision["model"],
+            routing=RoutingDecision(**decision),
+        )
+
+    def smart_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        search: bool | None = None,
+        search_parameters: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
+        routing_profile: RoutingProfile = "auto",
+        **extra: Any,
+    ) -> SmartChatCompletionResponse:
+        """
+        Smart routing for a full message list (OpenAI-compatible).
+
+        The routing counterpart of ``chat_completion``: tools, tool_choice and
+        response_format are part of the routing decision, not just the request.
+        A turn that must call a tool routes to a tool-capable model, a JSON
+        schema forces a structured-output-capable tier, and image parts route to
+        a vision model.
+
+        Capacity is checked against the WHOLE transcript, not the last message —
+        an agent conversation can be 100x its final turn, and a context overflow
+        is a non-transient error the fallback chain cannot rescue.
+
+        Example:
+            result = client.smart_chat_completion(
+                [{"role": "user", "content": "Cancel order B-42"}],
+                tools=[{"type": "function", "function": {"name": "cancel_order", ...}}],
+                tool_choice="required",
+            )
+            print(result.model)                 # a tool-capable model
+            print(result.routing.task_type)     # 'tool_agent'
+        """
+        view = routing_text(messages)
+        decision = route_with_catalog(
+            view["prompt"],
+            view["system_prompt"],
+            max_tokens or self.DEFAULT_MAX_TOKENS,
+            self._get_model_pricing(),
+            routing_profile=routing_profile,
+            requires_structured_output=response_format is not None,
+            tools=tools,
+            tool_choice=tool_choice,
+            conversation_chars=view["conversation_chars"],
+            has_vision=view["has_vision"],
+            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+        )
+        response = self.chat_completion(
+            decision["model"],
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            search=search,
+            search_parameters=search_parameters,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            stop=stop,
+            # An explicit caller-supplied chain wins over the routed one.
+            fallback_models=fallback_models or decision.get("fallbacks") or None,
+            **extra,
+        )
+        return SmartChatCompletionResponse(
             response=response,
             model=decision["model"],
             routing=RoutingDecision(**decision),
@@ -743,7 +878,31 @@ class LLMClient:
             if result.choices[0].message.tool_calls:
                 for tc in result.choices[0].message.tool_calls:
                     print(f"Call: {tc.function.name}({tc.function.arguments})")
+
+            # Virtual routing ids pick the model for you
+            result = client.chat_completion("blockrun/auto", messages)
         """
+        # `blockrun/auto` | `blockrun/eco` | `blockrun/premium` are not models —
+        # they select a routing profile. Hand the turn to the routed path, which
+        # also supplies the ranked fallback chain.
+        virtual_profile = routing_profile_for_model(model)
+        if virtual_profile is not None:
+            return self.smart_chat_completion(
+                messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                search=search,
+                search_parameters=search_parameters,
+                tools=tools,
+                tool_choice=tool_choice,
+                response_format=response_format,
+                stop=stop,
+                fallback_models=fallback_models,
+                routing_profile=virtual_profile,  # type: ignore[arg-type]
+                **extra,
+            ).response
+
         # Validate inputs
         validate_model(model)
         validate_max_tokens(max_tokens)
@@ -972,6 +1131,9 @@ class LLMClient:
                     return
                 resp1.read()
                 if resp1.status_code == 402:
+                    # Account rail: a 402 is the account being out of credit, not a
+                    # challenge to sign. Nothing here can sign, so say so plainly.
+                    raise_for_api_key_402(resp1, self.api_key)
                     payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
                     break  # advance to phase 2
                 if resp1.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
@@ -1021,6 +1183,9 @@ class LLMClient:
                     return
                 resp2.read()
                 if resp2.status_code == 402:
+                    # Account rail: a 402 is the account being out of credit, not a
+                    # challenge to sign. Nothing here can sign, so say so plainly.
+                    raise_for_api_key_402(resp2, self.api_key)
                     raise PaymentError("Payment was rejected. Check your wallet balance.")
                 if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
                     import time
@@ -1246,6 +1411,9 @@ class LLMClient:
 
         # Handle 402 Payment Required
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             # Everything inside signs first, then makes the paid request, so a
             # timeout or network error escaping it already cost a settlement.
             # Tag it so the fallback chain doesn't settle again on the next model.
@@ -1366,6 +1534,9 @@ class LLMClient:
 
         # Check for errors
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
         if retry_response.status_code != 200:
@@ -1440,6 +1611,9 @@ class LLMClient:
             response = self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             try:
                 result = self._handle_payment_and_retry_raw(url, body, response)
             except (httpx.HTTPError, APIError) as exc:
@@ -1540,6 +1714,9 @@ class LLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
         if retry_response.status_code != 200:
@@ -1588,6 +1765,9 @@ class LLMClient:
             response = self._client.get(url, params=params, headers=req_headers)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             result = self._handle_get_payment_and_retry(url, params, response)
             save_to_cache(
                 endpoint,
@@ -1680,6 +1860,9 @@ class LLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
         if retry_response.status_code != 200:
@@ -2192,6 +2375,10 @@ class LLMClient:
     # ── Coinbase Onramp ──────────────────────────────────────────────────────
 
     def onramp(self, address: str) -> dict[str, Any]:
+        # Onramp funds a wallet, and an API-key account has none: credit is
+        # bought with a card at user.blockrun.ai, not minted into an address.
+        if self.api_key:
+            raise wallet_only("onramp")
         """Mint a one-time Coinbase Onramp link to fund a wallet with fiat (FREE).
 
         Opens the door to buying Base USDC with a card or bank (60+ fiat
@@ -2284,7 +2471,20 @@ class LLMClient:
                 m["type"] = cats[0] if cats else "llm"
         return all_models
 
+    @property
+    def payment_mode(self) -> str:
+        """Which rail this client pays on: ``"apikey"`` or ``"wallet"``.
+
+        Worth checking once at startup when both a key and a wallet are
+        configured in the environment: it is the difference between
+        spending credit and spending USDC."""
+        return payment_mode(self)
+
     def get_wallet_address(self) -> str:
+        # No address on the account rail: payment comes from prepaid
+        # credit, so there is nothing to return but the empty string.
+        if self.api_key:
+            return ""
         """Get the wallet address being used for payments."""
         return self.account.address
 
@@ -2336,6 +2536,11 @@ class LLMClient:
             pass
 
     def get_balance(self) -> float:
+        # Returning 0 would be the worst available answer: it is
+        # indistinguishable from an empty wallet, and an agent gating on it
+        # would stop calling a well-funded account.
+        if self.api_key:
+            raise wallet_only("get_balance")
         """
         Get USDC balance on Base network.
 
@@ -2453,31 +2658,44 @@ class AsyncLLMClient:
         """
         from .wallet import load_wallet
 
+        # Account rail first, and before any wallet variable is read: an API
+        # key is a complete credential on its own, so demanding a private key
+        # alongside it would make every API-key user invent a wallet they
+        # never use. See apikey.py for the precedence rule.
+        api_key = resolve_api_key(private_key)
         key = (
-            private_key
-            or os.environ.get("BLOCKRUN_WALLET_KEY")
-            or os.environ.get("BASE_CHAIN_WALLET_KEY")
-            or load_wallet()  # Loads from ~/.blockrun/.session
-        )
-        if not key:
-            raise ValueError(
-                "No wallet configured. Either:\n"
-                "  1. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  2. Pass private_key to AsyncLLMClient()\n"
-                "  3. For agent use: call setup_agent_wallet() first"
+            None
+            if api_key
+            else (
+                private_key
+                or os.environ.get("BLOCKRUN_WALLET_KEY")
+                or os.environ.get("BASE_CHAIN_WALLET_KEY")
+                or load_wallet()  # Loads from ~/.blockrun/.session
             )
+        )
+        if not api_key and not key:
+            raise missing_credential_error()
 
         # Normalize private key format (add 0x prefix if missing)
         if key and not key.startswith("0x"):
             key = "0x" + key
 
         # Validate private key format
-        validate_private_key(key)
+        if key:
+            validate_private_key(key)
 
-        self.account = Account.from_key(key)
+        self.api_key = api_key
+        # No wallet on the account rail: nothing is signed locally.
+        self.account = Account.from_key(key) if key else None
 
         # Validate and set API URL
-        api_url_raw = api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL
+        # BLOCKRUN_API_URL names an x402 gateway; an API-key client must not
+        # follow it and hand the key to a host set up for another rail.
+        api_url_raw = (
+            api_key_base_url(api_url)
+            if api_key
+            else (api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL)
+        )
         validate_api_url(api_url_raw)
         self.api_url = api_url_raw.rstrip("/")
 
@@ -2489,6 +2707,7 @@ class AsyncLLMClient:
         # high-concurrency deployments don't hit pool exhaustion before hitting
         # any upstream rate limit.
         self._client = httpx.AsyncClient(
+            headers=auth_headers(api_key),
             timeout=timeout,
             limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
         )
@@ -2509,6 +2728,8 @@ class AsyncLLMClient:
         self._tx_logger: TransactionLogger | None = (
             TransactionLogger(log_dir) if log_dir is not None else None
         )
+        # Model pricing cache for smart routing
+        self._model_pricing_cache: dict[str, dict[str, float]] | None = None
         self._last_settlement: dict[str, Any] | None = None
 
     def _capture_settlement(self, response: httpx.Response) -> dict[str, Any] | None:
@@ -2517,6 +2738,125 @@ class AsyncLLMClient:
         settlement = decode_settlement_header(header)
         self._last_settlement = settlement
         return settlement
+
+    async def _get_model_pricing(self) -> dict[str, dict[str, float]]:
+        """Model pricing for smart routing (cached for the client's lifetime)."""
+        if self._model_pricing_cache is not None:
+            return self._model_pricing_cache
+        pricing = build_model_pricing(await self.list_models())
+        self._model_pricing_cache = pricing
+        return pricing
+
+    async def route(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        routing_profile: RoutingProfile = "auto",
+        requires_structured_output: bool = False,
+    ) -> RoutingDecision:
+        """Inspect a routing decision without making or paying for a call."""
+        decision = route_with_catalog(
+            prompt,
+            system,
+            max_tokens or self.DEFAULT_MAX_TOKENS,
+            await self._get_model_pricing(),
+            routing_profile=routing_profile,
+            requires_structured_output=requires_structured_output,
+            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+        )
+        return RoutingDecision(**decision)
+
+    async def smart_chat(
+        self,
+        prompt: str,
+        *,
+        system: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        routing_profile: RoutingProfile = "auto",
+    ) -> SmartChatResponse:
+        """Async smart chat with automatic model routing.
+
+        Same Router Core portfolio strategy as the sync client — see
+        :meth:`LLMClient.smart_chat`.
+        """
+        decision = route_with_catalog(
+            prompt,
+            system,
+            max_tokens or self.DEFAULT_MAX_TOKENS,
+            await self._get_model_pricing(),
+            routing_profile=routing_profile,
+            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+        )
+        response = await self.chat(
+            decision["model"],
+            prompt,
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            fallback_models=decision.get("fallbacks") or None,
+        )
+        return SmartChatResponse(
+            response=response,
+            model=decision["model"],
+            routing=RoutingDecision(**decision),
+        )
+
+    async def smart_chat_completion(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        search: bool | None = None,
+        search_parameters: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any | None = None,
+        response_format: dict[str, Any] | None = None,
+        stop: str | list[str] | None = None,
+        fallback_models: list[str] | None = None,
+        routing_profile: RoutingProfile = "auto",
+        **extra: Any,
+    ) -> SmartChatCompletionResponse:
+        """Async smart routing for a full message list — see
+        :meth:`LLMClient.smart_chat_completion`."""
+        view = routing_text(messages)
+        decision = route_with_catalog(
+            view["prompt"],
+            view["system_prompt"],
+            max_tokens or self.DEFAULT_MAX_TOKENS,
+            await self._get_model_pricing(),
+            routing_profile=routing_profile,
+            requires_structured_output=response_format is not None,
+            tools=tools,
+            tool_choice=tool_choice,
+            conversation_chars=view["conversation_chars"],
+            has_vision=view["has_vision"],
+            minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
+        )
+        response = await self.chat_completion(
+            decision["model"],
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            search=search,
+            search_parameters=search_parameters,
+            tools=tools,
+            tool_choice=tool_choice,
+            response_format=response_format,
+            stop=stop,
+            fallback_models=fallback_models or decision.get("fallbacks") or None,
+            **extra,
+        )
+        return SmartChatCompletionResponse(
+            response=response,
+            model=decision["model"],
+            routing=RoutingDecision(**decision),
+        )
 
     async def chat(
         self,
@@ -2573,7 +2913,32 @@ class AsyncLLMClient:
         fallback_models: list[str] | None = None,
         **extra: Any,
     ) -> ChatResponse:
-        """Async full chat completion interface with optional xAI Live Search and tool calling."""
+        """Async full chat completion interface with optional xAI Live Search and tool calling.
+
+        ``blockrun/auto`` | ``blockrun/eco`` | ``blockrun/premium`` are routing
+        profiles rather than models: passing one routes the turn and returns the
+        routed response, ranked fallback chain included.
+        """
+        virtual_profile = routing_profile_for_model(model)
+        if virtual_profile is not None:
+            return (
+                await self.smart_chat_completion(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    search=search,
+                    search_parameters=search_parameters,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    response_format=response_format,
+                    stop=stop,
+                    fallback_models=fallback_models,
+                    routing_profile=virtual_profile,  # type: ignore[arg-type]
+                    **extra,
+                )
+            ).response
+
         # Validate inputs
         validate_model(model)
         validate_max_tokens(max_tokens)
@@ -2763,6 +3128,9 @@ class AsyncLLMClient:
                     return
                 await resp1.aread()
                 if resp1.status_code == 402:
+                    # Account rail: a 402 is the account being out of credit, not a
+                    # challenge to sign. Nothing here can sign, so say so plainly.
+                    raise_for_api_key_402(resp1, self.api_key)
                     payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
                     break
                 if resp1.status_code in statuses_5xx and attempt < len(backoffs):
@@ -2821,6 +3189,9 @@ class AsyncLLMClient:
                     return
                 await resp2.aread()
                 if resp2.status_code == 402:
+                    # Account rail: a 402 is the account being out of credit, not a
+                    # challenge to sign. Nothing here can sign, so say so plainly.
+                    raise_for_api_key_402(resp2, self.api_key)
                     raise PaymentError("Payment was rejected. Check your wallet balance.")
                 if resp2.status_code in statuses_5xx and attempt < len(backoffs):
                     import asyncio
@@ -2942,6 +3313,9 @@ class AsyncLLMClient:
             response = await self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             # See the sync path: past this point the payment is settled.
             try:
                 return await self._handle_payment_and_retry(url, body, response)
@@ -3046,6 +3420,9 @@ class AsyncLLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
         if retry_response.status_code != 200:
@@ -3117,6 +3494,9 @@ class AsyncLLMClient:
             response = await self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             try:
                 result = await self._handle_payment_and_retry_raw(url, body, response)
             except (httpx.HTTPError, APIError) as exc:
@@ -3206,6 +3586,9 @@ class AsyncLLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
         if retry_response.status_code != 200:
@@ -3248,6 +3631,9 @@ class AsyncLLMClient:
             response = await self._client.get(url, params=params, headers=req_headers)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             result = await self._handle_get_payment_and_retry(url, params, response)
             save_to_cache(
                 endpoint,
@@ -3330,6 +3716,9 @@ class AsyncLLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
         if retry_response.status_code != 200:
@@ -3678,7 +4067,20 @@ class AsyncLLMClient:
                 m["type"] = cats[0] if cats else "llm"
         return all_models
 
+    @property
+    def payment_mode(self) -> str:
+        """Which rail this client pays on: ``"apikey"`` or ``"wallet"``.
+
+        Worth checking once at startup when both a key and a wallet are
+        configured in the environment: it is the difference between
+        spending credit and spending USDC."""
+        return payment_mode(self)
+
     def get_wallet_address(self) -> str:
+        # No address on the account rail: payment comes from prepaid
+        # credit, so there is nothing to return but the empty string.
+        if self.api_key:
+            return ""
         """Get the wallet address."""
         return self.account.address
 
@@ -3723,6 +4125,11 @@ class AsyncLLMClient:
             pass
 
     async def get_balance(self) -> float:
+        # Returning 0 would be the worst available answer: it is
+        # indistinguishable from an empty wallet, and an agent gating on it
+        # would stop calling a well-funded account.
+        if self.api_key:
+            raise wallet_only("get_balance")
         """
         Get USDC balance on Base network.
 

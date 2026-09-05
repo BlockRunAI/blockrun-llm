@@ -45,6 +45,15 @@ import httpx
 from dotenv import load_dotenv
 from eth_account import Account
 
+from .apikey import (
+    api_key_base_url,
+    auth_headers,
+    missing_credential_error,
+    payment_mode,
+    raise_for_api_key_402,
+    resolve_api_key,
+    wallet_only,
+)
 from .tx_log import paid_request_error_prefix
 from .types import (
     APIError,
@@ -100,30 +109,42 @@ class PortraitClient:
         """
         from .wallet import load_wallet
 
+        # Account rail first, and before any wallet variable is read: an API
+        # key is a complete credential on its own, so demanding a private key
+        # alongside it would make every API-key user invent a wallet they
+        # never use. See apikey.py for the precedence rule.
+        api_key = resolve_api_key(private_key)
         key = (
-            private_key
-            or os.environ.get("BLOCKRUN_WALLET_KEY")
-            or os.environ.get("BASE_CHAIN_WALLET_KEY")
-            or load_wallet()
-        )
-        if not key:
-            raise ValueError(
-                "Private key required. Either:\n"
-                "  1. Pass private_key parameter\n"
-                "  2. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  3. Place key in ~/.blockrun/.session\n"
-                "NOTE: Your key never leaves your machine - only signatures are sent."
+            None
+            if api_key
+            else (
+                private_key
+                or os.environ.get("BLOCKRUN_WALLET_KEY")
+                or os.environ.get("BASE_CHAIN_WALLET_KEY")
+                or load_wallet()
             )
+        )
+        if not api_key and not key:
+            raise missing_credential_error()
 
-        validate_private_key(key)
-        self.account = Account.from_key(key)
+        if key:
+            validate_private_key(key)
+        self.api_key = api_key
+        # No wallet on the account rail: nothing is signed locally.
+        self.account = Account.from_key(key) if key else None
 
-        api_url_raw = api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL
+        # BLOCKRUN_API_URL names an x402 gateway; an API-key client must not
+        # follow it and hand the key to a host set up for another rail.
+        api_url_raw = (
+            api_key_base_url(api_url)
+            if api_key
+            else (api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL)
+        )
         validate_api_url(api_url_raw)
         self.api_url = api_url_raw.rstrip("/")
 
         self.timeout = timeout
-        self._client = httpx.Client(timeout=timeout)
+        self._client = httpx.Client(headers=auth_headers(api_key), timeout=timeout)
 
     # ------------------------------------------------------------------
     # Enrollment ($0.01 USDC)
@@ -180,9 +201,14 @@ class PortraitClient:
             PortraitList with the wallet address and each portrait's
             asset id, name, image url, and enrollment tx hash.
         """
+        # Keyed by wallet, so the account rail has no default to fall back on:
+        # say which argument is missing instead of an AttributeError on None.
+        if not wallet_address and self.account is None:
+            raise wallet_only("list_portraits")
         addr = wallet_address or self.account.address
         url = f"{self.api_url}/v1/wallet/{addr}/portraits"
         resp = self._client.get(url)
+        raise_for_api_key_402(resp, self.api_key)
         if resp.status_code == 429:
             try:
                 error_body = resp.json()
@@ -211,6 +237,9 @@ class PortraitClient:
         )
 
         if resp.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(resp, self.api_key)
             return self._handle_payment_and_retry(url, body, resp)
 
         if resp.status_code != 200:
@@ -270,6 +299,9 @@ class PortraitClient:
         )
 
         if retry.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
         if retry.status_code == 502:
@@ -299,7 +331,20 @@ class PortraitClient:
     # Utilities
     # ------------------------------------------------------------------
 
+    @property
+    def payment_mode(self) -> str:
+        """Which rail this client pays on: ``"apikey"`` or ``"wallet"``.
+
+        Worth checking once at startup when both a key and a wallet are
+        configured in the environment: it is the difference between
+        spending credit and spending USDC."""
+        return payment_mode(self)
+
     def get_wallet_address(self) -> str:
+        # No address on the account rail: payment comes from prepaid
+        # credit, so there is nothing to return but the empty string.
+        if self.api_key:
+            return ""
         """Return the wallet address used for payments."""
         return self.account.address
 

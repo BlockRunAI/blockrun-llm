@@ -2,6 +2,316 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.15.0 — 2026-09-05
+
+### Added
+- **A BlockRun API key works everywhere a wallet key does.** Every paid path in
+  this SDK assumed x402: a 402 challenge, a locally signed payment, a retry.
+  That made a wallet the price of admission, which is a non-starter for a team
+  whose finance function cannot hold USDC and for any CI runner that should not
+  carry a signing key. A key from [user.blockrun.ai](https://user.blockrun.ai)
+  now works in the same place. It is not a new client type and not a new
+  constructor: the `private_key` parameter every client already takes now
+  accepts a `brk_` key, and `BLOCKRUN_API_KEY` is read when it is empty — so
+  fourteen client classes and every skill that calls them gained the rail
+  without a signature change. Requests go to `api.blockrun.ai` as
+  `Authorization: Bearer …`, draw prepaid credit, and never sign anything.
+  `client.payment_mode` reports which rail a client ended up on.
+
+  Four things had to change beyond attaching a header, and each was a silent
+  failure rather than an import error:
+
+  - `api.blockrun.ai` serves `/v1/...` at the root and answers `/api/v1/...`
+    with `wrong_host`, so the account rail needs its own base URL.
+  - `poll_url` is minted by the x402 gateway relative to *its* host, so it
+    arrives as `/api/v1/...`. Resolved unchanged it would have sent every async
+    job — video, slow images — polling a 404 until its budget ran out.
+  - On the account rail the async submit answers **202 on the first POST**.
+    `ImageClient` raised `API error: 202` and `VideoClient` raised
+    "Expected 402 on first POST", so both were broken for API keys before they
+    started.
+  - `setup_agent_wallet()` minted a keyfile unconditionally. With a key
+    configured there is nothing to sign with, so it now returns an API-key
+    client and writes nothing to disk — which is what lets an agent or a skill
+    call it on either rail.
+
+  `SolanaLLMClient` and `AsyncSolanaLLMClient` take the key too, and no longer
+  require the optional x402 SDK when one is present: on the account rail there
+  is no transfer to sign, so the chain stops being a question.
+
+- **`blockrun_llm.apikey`** holds the rail in one module — precedence,
+  `auth_headers`, poll-URL resolution, and the two refusals — so it is one
+  decision made once rather than fourteen copies that can drift.
+
+### Changed
+- **Wallet-only helpers refuse instead of answering wrongly.** `get_balance()`,
+  `get_balance_testnet()` and `onramp()` raise a `ValueError` naming the helper
+  and pointing at the dashboard. Returning `0` would have been the worst
+  available answer — indistinguishable from an empty wallet, and an agent
+  gating on it would stop calling a well-funded account.
+  `get_wallet_address()` returns `""`. A 402 on this rail is a credit refusal,
+  not a challenge, so it raises a `PaymentError` quoting the gateway's own
+  reason and the top-up page.
+- **One "nothing configured" message.** Every client raised its own wording
+  listing only wallet routes, which stopped being the whole truth the moment a
+  key became a credential. `missing_credential_error()` lists both.
+- **README covers both rails and puts Solana ahead of Base.** It opened with
+  "No API keys required", which is no longer true. Adds an API-key path to
+  Quick Start and a full *Option A* section (signup, key minting, top-up —
+  minimum $5, with the 5.5% + $0.30 fee charged once at purchase rather than
+  per call — precedence, and what changes). The environment table listed two
+  variables and omitted `SOLANA_WALLET_KEY` entirely; it now lists nine.
+
+Wallet users are unaffected: precedence is an explicit argument, then
+`BLOCKRUN_API_KEY`, then the wallet variables, so nothing changes until that
+variable is set. `BLOCKRUN_API_KEY_URL` is deliberately separate from
+`BLOCKRUN_API_URL` — the latter names an x402 gateway, and following it would
+send the key to a host configured for another rail.
+
+## 1.14.0 — 2026-08-31
+
+### Changed
+- **Router Core re-synced to upstream `5ee7c23`** (was `d7bc10c`, two commits
+  behind — the same pin the TypeScript SDK bundles). Upstream V3.5 rebuilds
+  every tier chain around ids the public catalog actually lists: the withheld
+  `kimi-k2.5/k2.6/k2.7`, both grok-4-fast pairs, `grok-4-0709`,
+  `claude-opus-4.6` and `gemini-3-pro-preview` are gone from every rung,
+  including fallbacks, so a routed model is always one a user can find on
+  blockrun.ai/models. Before this sync every profile carried 3–4 off-catalog
+  rungs per decision; now it carries none.
+
+  Primaries moved only where `portfolio.py` already holds calibration evidence
+  for the successor — Gemini 3.5 Flash where Kimi K2.7 was, GPT-5 Mini for
+  agentic MEDIUM, Sonnet 5 over Sonnet 4.6, DeepSeek Reasoner for the cheap
+  reasoning head. The newer generation the catalog already sells enters as
+  fallback rungs: GPT-5.6 Luna/Terra, Gemini 3.6 Flash and 3.5 Flash-Lite,
+  GLM-5.3 and 5.3-Flash, Grok 4.3 and 4.5, Kimi K3, Qwen 3.7 Plus, MiniMax M3.
+  Promotion waits for a calibration run, because version recency is not a
+  quality signal. The expired GLM-5.1 promotion is dropped; the promotions
+  mechanism stays wired with an empty list.
+
+- **Routing priors regenerated: 66 model profiles** (was 30) and a **71-model
+  capability snapshot** (`model_capabilities.py`), both from upstream's probe
+  and catalog-sync scripts. Two stale capability values had been reaching the
+  hard filter: Haiku 4.5 at 8K max output (actually 64K) and Sonnet 4.6 at 200K
+  context (actually 1M). Kimi K3 replaces K2.7 in the Mandarin extraction band,
+  widened to 0.12 so the auto affinity floor gap (0.10) cannot let price
+  re-select a non-native model, and K3 joins the extraction evidence pool since
+  it is no longer on the MEDIUM chain.
+
+### Fixed
+- **`routing_profile="free"` had collapsed to a single model with no
+  fallbacks.** Four of the five ids in the SDK-only `FREE_TIERS` table —
+  `nvidia/step-3.7-flash`, `nemotron-nano-9b-v2`, `mistral-nemotron`,
+  `nemotron-nano-12b-v2-vl` — were retired by NVIDIA, and they were every
+  primary plus all but one fallback. Nothing looked broken because the gateway
+  server-redirects a retired free id: a dead rung returns 200 and answers
+  normally, while quietly serving a different model. That is the shape that
+  defeats a host's `unavailable_models`, and it is why the table rotted
+  unnoticed.
+
+  The table is rebuilt from ids verified by a two-pass probe that reads back
+  the response's own `model` field, since a 200 proves nothing. Two models the
+  catalog still prices at $0 did not survive that check and are excluded:
+  `nemotron-3-ultra-550b` and `nemotron-3-nano-omni-30b-a3b-reasoning` both
+  answer as `nemotron-3-nano-30b`. Every tier is back to four candidates, and
+  the free tier is no longer NVIDIA-only — `cohere/north-mini-code` and
+  `poolside/laguna-xs-2.1` serve at $0 and carry the free coding load.
+
+  A new test asserts fallback *depth* per tier, not just membership: the table
+  stayed internally consistent all through the rot, so membership alone could
+  never have caught it.
+
+## 1.13.0 — 2026-08-26
+
+### Fixed
+- **Solana paid-leg re-sign is gated on payment PHASE, not on the failure
+  cause.** A settlement failure may already have broadcast the transfer, so a
+  lost acknowledgement could previously authorize a *second* payment for one
+  request. Settlement failures are now terminal on every paid path — sync and
+  async, streaming, non-streaming, raw POST and raw GET.
+
+  Everything the gateway rejects **before** broadcast stays retryable, because
+  re-signing there costs the payer nothing and is what each rejection's own
+  message asks for: `PAYMENT_UNDERPAID` ("re-fetch the 402 quote and sign the
+  amount it specifies"), `PAYMENT_REPLAY` ("sign a new payment for each
+  request"), and every verification-phase rejection including
+  `expired_signature`, `verification_unavailable` and the `verification_failed`
+  catch-all that carries facilitator timeouts. These are exactly the concurrent
+  single-wallet failures the whole-request retry exists to fix, so the ~100%
+  success rate under concurrent load is preserved; gating on stale-blockhash
+  alone would have silently reverted it, since `_should_fallback_solana` refuses
+  every `PaymentError` and they would reach the caller with no second model
+  tried.
+
+  `insufficient_funds` and the unrecoverable `invalidMessage` causes (no USDC
+  token account, bad signing key, denylisted payer) remain terminal — no fresh
+  signature makes them pass.
+
+- **`build_payment_rejected_error` preserves the gateway's `code` and `reason`.**
+  These are gateway-owned enums, length-bounded like `details` and
+  `invalidMessage`; `debug` stays filtered. Without them the client could only
+  classify a 402 by prose, and the gateway's two 402 body families disagree on
+  which fields exist: `/v1/chat/completions` sends `code` + `message` +
+  `reason`, while the other paid routes send `error` + `reason` only.
+
+### Added
+- **Dead-model kill-switch: `unavailable_models`.** A host that observes a model
+  answering 400/404/410 at the gateway can pass its id in
+  `options["unavailable_models"]` and it is hard-removed from every routing
+  chain before selection — the first surviving rung is promoted to primary, and
+  an eligibility fail-open can never resurrect it. This is the operational
+  answer to a dead chain rung: effective on the next request instead of waiting
+  for a Router Core release plus SDK repins. `apply_unavailable_models` is
+  exported for hosts that manage tier maps directly. Port of upstream
+  `d7bc10c`, with the case suite ported 1:1.
+
+- **Cross-language decision-snapshot parity.**
+  `tests/unit/test_router_core_snapshot.py` recomputes the upstream frozen
+  corpus — 88 complete decisions (22 prompts × 4 profiles with rotating
+  tool/vision/structured-output shapes) — and compares every pinned field
+  against the TypeScript engine's committed fixture, floats and reasoning
+  strings included. Parity is now proven decision-by-decision rather than
+  test-case-by-test-case.
+
+### Changed
+- **Router Core re-synced to upstream `d7bc10c`** (was `18bf4ab`, four commits
+  behind — the same pin the TypeScript SDK bundles). The visible routing
+  change: the free rungs retarget from the retired `free/gpt-oss-120b/20b`
+  pair (400 Unknown model at the gateway, probed 2026-08-21) to the current
+  NVIDIA free tier — `nvidia/step-3.7-flash` heads eco SIMPLE and the three
+  ultimate-backstop slots, `nvidia/nemotron-nano-9b-v2` takes the fast rung.
+  Both verified live by direct gateway calls. eco once again reaches a $0
+  model on its first candidate; capability entries updated to match.
+
+## 1.12.0 — 2026-08-19
+
+### Added
+- **Smart routing on the Solana clients.** `SolanaLLMClient` and
+  `AsyncSolanaLLMClient` had no routing at all — `smart_chat`, `route` and the
+  routing profiles were Base-only, so a Solana user got no model selection while
+  the TypeScript SDK offered it on both chains. All four Python clients (Base and
+  Solana, sync and async) now expose the same surface: `route()`, `smart_chat()`
+  and `smart_chat_completion()`. Both chains run the same Router Core engine
+  against the same catalog, so an identical request picks an identical model;
+  only the x402 payment floor in the cost metadata differs ($0.002 Base,
+  $0.001 Solana). Pinned by `tests/unit/test_routing_parity.py`.
+
+- **`smart_chat_completion(messages, ...)`** on every client — routing for a full
+  message list rather than a single prompt. `tools`, `tool_choice` and
+  `response_format` are inputs to the *decision*, not just the request: a turn
+  that must call a tool routes to a tool-capable model, a JSON schema forces the
+  structured-output tier, and image parts route to a vision model. Capacity is
+  checked against the whole transcript, because an agent conversation can be
+  100x its final turn and a context overflow is a non-transient error the
+  fallback chain cannot rescue.
+
+- **`blockrun/auto`, `blockrun/eco` and `blockrun/premium` virtual model ids.**
+  Passing one to `chat()` or `chat_completion()` routes the turn instead of
+  calling a model of that name, ranked fallback chain included — TypeScript SDK
+  parity, and it lets OpenAI-compatible code opt into routing by changing one
+  string.
+
+- **`fallback_models` on the Solana `chat()` / `chat_completion()`.** The
+  parameter existed only on the Solana streaming path, so a routed Solana call
+  had a recovery chain it could not walk. The chain now steps to the next ranked
+  model on a timeout, network error or 5xx, using the same
+  `_should_fallback_solana` classifier as the stream path — a settled payment is
+  never retried, so a second model cannot sign a second transfer for one call.
+
+### Fixed
+- **One scoring dimension was silently weighted zero.** The config transpile that
+  produced `router_core/config.py` snake_cased key names, and `imperativeVerbs`
+  is both a keyword-list field *and* a dimension name — so its 0.03 weight
+  landed under `imperative_verbs` while the classifier emitted `imperativeVerbs`,
+  and `weights.get(name, 0)` scored it zero. Build/deploy-shaped requests were
+  under-classified: 3 of 8 sampled imperative prompts ("Create and deploy the
+  service", "Set up the config and deploy it", "Develop a CLI that generates
+  reports") landed in SIMPLE where they should have been ambiguous and defaulted
+  up to MEDIUM. Now guarded by a test asserting the weight keys and the emitted
+  dimension names are the same set, plus the verbatim upstream weight table.
+  Cross-SDK parity re-verified at 24/24 after the fix.
+
+- **A 429 now walks the fallback chain instead of failing the call.** Both
+  clients treated only 5xx as retriable, so a saturated upstream ended the
+  request even with capable models left in the chain. Found live: a rate-limited
+  free model answered 429 and the three remaining free models were never tried.
+  The TypeScript adapter has always counted 429 as transient — the next model in
+  the chain is a different upstream. Settled payments and permanent payment
+  failures are still refused before the status check, so no call can pay twice.
+
+### Changed
+- The `/v1/models` → pricing-map conversion moved to
+  `router_adapter.build_model_pricing()`, shared by all four clients instead of
+  being written out per client. Rows the catalog marks `available: false` are
+  skipped everywhere now (previously only the Base sync client did this, as of
+  1.11.0).
+
+## 1.11.0 — 2026-08-15
+
+### Added
+- **Router Core lands in the Python SDK.** `blockrun_llm/router_core/` is a
+  faithful port of [`@blockrun/router-core`](https://github.com/BlockRunAI/router-core)
+  (upstream commit `18bf4ab`) — the product-neutral routing engine the
+  TypeScript SDK bundles and the gateway runs. The same request now routes
+  identically across all three. `blockrun_llm/router_adapter.py` is the host
+  glue (catalog id resolution, x402 payment floors, capacity filtering), ported
+  from the TypeScript SDK's `src/router-adapter.ts`.
+
+  What the Python SDK did not have before:
+  - **Portfolio (V3) ranking**, not just tier lookup: candidates are scored on
+    task affinity, cost, speed and reliability, so the cheapest *capable* model
+    wins instead of a hardcoded tier primary.
+  - **Hard capability filtering.** A model that cannot hold the conversation,
+    emit the requested `max_tokens`, call tools, or read images is dropped
+    before scoring — previously `smart_chat` could route to a model the request
+    would fail on with a non-transient 400.
+  - **Task classification** (`chat`, `code_edit`, `code_agent`, `tool_agent`,
+    `tool_agent_parallel`, `reasoning_math`, `reasoning_mcq`, `long_context`,
+    `extraction`, `vision`, `debug`) with per-task calibrated model evidence.
+  - **Explainable decisions**: `routing.candidates`, `routing.candidate_scores`
+    (quality / cost / speed / reliability per model), `routing.task_type`,
+    `routing.profile` and `routing.router_version` are now on the response.
+  - **Live tier configuration**, shared with the other products, replacing this
+    SDK's separately hand-maintained tables.
+
+- **`client.route(prompt, ...)`** returns the routing decision without making or
+  paying for a model call (TypeScript SDK parity). The first call may fetch the
+  public catalog for prices; routing itself is local and free.
+
+### Fixed
+- **The `free` profile pointed at models NVIDIA has retired.** Its tier table
+  led with `nvidia/deepseek-v4-flash` (EOL 2026-08-12, HTTP 410) and fell back
+  to `nvidia/llama-4-maverick` and `nvidia/qwen3-coder-480b` (also EOL), so free
+  routing depended entirely on the gateway's redirect safety net. It now routes
+  over the live free lineup (Step 3.7 Flash, Mistral Nemotron, Nemotron Nano
+  Omni / 9B / 12B VL), and the adapter drops any candidate the catalog does not
+  price at $0 — a paid model can no longer leak into a free-profile call.
+- **Models the catalog marks unavailable no longer win routing.** `/v1/models`
+  rows with `available: false` are skipped when building the pricing map; every
+  smart call to one would have failed with a non-transient error.
+
+### Changed
+- `routing.method` is now `"portfolio"` for the default strategy (`"rules"` for
+  the free profile and the config-only V2 rollback). Code that asserted
+  `method == "rules"` needs updating.
+- `blockrun_llm/router.py` is now a thin compatibility shim over the core:
+  `route()` and `classify_by_rules()` keep working, and `RoutingDecision` keeps
+  its previous keys plus the new metadata. Its hand-maintained `AUTO_TIERS` /
+  `ECO_TIERS` / `PREMIUM_TIERS` tables are gone — tier configuration lives in
+  `router_core.DEFAULT_ROUTING_CONFIG`, and `FREE_TIERS` moved to
+  `router_adapter`.
+- Routing cost estimates now include the server margin and the x402 minimum
+  payment, so `routing.cost_estimate` matches what the gateway actually
+  charges. Free models are never floored up to the paid minimum.
+
+### Tests
+- `tests/unit/test_router_core.py` ports all four upstream vitest suites
+  (88 cases) as the parity guard — the Python port must keep choosing the same
+  models as the TypeScript SDK. `tests/unit/test_router_adapter.py` covers the
+  host layer: `free/*` → `nvidia/*` id resolution, the payment floor, capacity
+  filtering, and the free-profile guarantees.
+
 ## 1.10.0 — 2026-07-28
 
 ### Added

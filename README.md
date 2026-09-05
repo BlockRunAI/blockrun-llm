@@ -1,6 +1,12 @@
 # BlockRun LLM SDK (Python)
 
-> **blockrun-llm** is a Python SDK for accessing 80+ large language models (GPT-5.x, Claude 4.x, Gemini 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, prediction-market data (Predexon), Exa neural web search, and Pyth-backed market data — all with automatic pay-per-request USDC micropayments via the x402 protocol. No API keys required; your wallet signature is your authentication. Built for AI agents that need to operate autonomously.
+> **blockrun-llm** is a Python SDK for accessing 80+ large language models (GPT-5.x, Claude 4.x, Gemini 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, prediction-market data (Predexon), Exa neural web search, and Pyth-backed market data. Every call is paid per request — no subscription, no seats, no minimum. Built for AI agents that need to operate autonomously.
+>
+> **Two ways to pay, same SDK, same catalogue.** Sign up at
+> **[user.blockrun.ai](https://user.blockrun.ai)** for an API key and prepaid
+> credit (top up with a card), or hold USDC in your own wallet and let each
+> request settle itself over x402 — on **Solana or Base**. Every client takes
+> either credential in the same first argument.
 >
 > 🆓 **Includes 8 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M context), Nemotron Nano Omni (vision), Qwen3 Next + Coder, Llama 4 Maverick, Mistral Small 4, plus `gpt-oss-120b/20b` (hidden from `/v1/models` but direct calls still work). Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any `nvidia/*` model directly.
 
@@ -11,14 +17,14 @@
 
 ## Supported Chains
 
-| Chain | Network | Payment | Status |
-|-------|---------|---------|--------|
-| **Base** | Base Mainnet (Chain ID: 8453) | USDC | ✅ Primary |
+| Rail | Network | Payment | Status |
+|------|---------|---------|--------|
+| **API key** | none — `api.blockrun.ai` | prepaid credit, topped up with a card | ✅ |
+| **Solana** | Solana Mainnet | USDC (SPL), gasless — the facilitator pays the fee | ✅ Recommended for x402 |
+| **Base** | Base Mainnet (Chain ID: 8453) | USDC | ✅ |
 | **Base Testnet** | Base Sepolia (Chain ID: 84532) | Testnet USDC | ✅ Development |
-| **Solana** | Solana Mainnet | USDC (SPL) | ✅ New |
 
-
-**Protocol:** x402 v2
+**Protocol:** x402 v2 on the wallet rails; plain bearer auth on the API-key rail.
 
 ## Installation
 
@@ -34,27 +40,41 @@ pip install blockrun-llm[dev,solana]  # Everything
 ```python
 from blockrun_llm import LLMClient
 
-client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY (never sent to server)
+# Reads BLOCKRUN_API_KEY if set, otherwise BLOCKRUN_WALLET_KEY for x402.
+client = LLMClient()
 response = client.chat("openai/gpt-5.2", "Hello!")
 ```
 
-That's it. The SDK handles x402 payment automatically.
+```bash
+# API key — sign up at https://user.blockrun.ai, then:
+export BLOCKRUN_API_KEY=brk_live_...
 
-### Try It Free (No USDC Required)
+# …or a wallet, and every call pays itself in USDC:
+export SOLANA_WALLET_KEY=...        # with SolanaLLMClient
+export BLOCKRUN_WALLET_KEY=0x...    # with LLMClient (Base)
+```
 
-Want to kick the tires before funding a wallet? Route to BlockRun's free NVIDIA tier:
+That's it. Either credential can also be passed directly —
+`LLMClient("brk_live_…")` or `LLMClient("0x…")` — and `client.payment_mode`
+reports which rail you ended up on.
+
+### Try It Free (No Balance Required)
+
+Want to kick the tires before topping up or funding a wallet? Route to
+BlockRun's free NVIDIA tier — it settles $0 on both rails, so an unfunded wallet
+or a $0 credit account is enough:
 
 ```python
 from blockrun_llm import LLMClient
 
-client = LLMClient()  # Wallet still required for signing, but $0 charged
+client = LLMClient()  # a credential is still needed; a balance is not
 
 # Option 1: call a free model directly
-response = client.chat("nvidia/deepseek-v4-flash", "Explain x402 in 1 sentence")
+response = client.chat("nvidia/step-3.7-flash", "Explain x402 in 1 sentence")
 
 # Option 2: let the smart router pick the best free model per request
 result = client.smart_chat("What is 2+2?", routing_profile="free")
-print(result.model)     # e.g. 'nvidia/deepseek-v4-flash' (cheapest capable for SIMPLE tier)
+print(result.model)     # e.g. 'nvidia/step-3.7-flash' (cheapest capable for SIMPLE tier)
 print(result.response)  # '4'
 ```
 
@@ -62,21 +82,27 @@ print(result.response)  # '4'
 
 | Model ID | Context | Best For |
 |----------|---------|----------|
-| `nvidia/deepseek-v4-flash` | 1M | DeepSeek V4 Flash — 284B / 13B active MoE, ~5× faster than V4 Pro. Best free chat / summarization / light reasoning |
+| `nvidia/step-3.7-flash` | 131K | Fast general-purpose chat + reasoning |
+| `nvidia/mistral-nemotron` | 131K | Fast free Mistral (Mistral × NVIDIA) |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Only vision-capable free model — text + images + video (≤2 min) + audio (≤1 hr) |
-| `nvidia/llama-4-maverick` | 131K | Meta Llama 4 Maverick MoE |
-| `nvidia/qwen3-coder-480b` | 131K | Coding-optimised 480B MoE |
-| `nvidia/mistral-small-4-119b` | 131K | ⚠️ Upstream timing out as of 2026-06-07 — avoid until NVIDIA recovers it |
-| `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models` (so SmartChat won't auto-pick it) but direct calls still work |
+| `nvidia/nemotron-nano-9b-v2` | 131K | Compact fast chat |
+| `nvidia/nemotron-nano-12b-v2-vl` | 131K | Compact vision |
+| `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B — the free workhorse. Hidden from `/v1/models` (so SmartChat won't auto-pick it) but direct calls still work |
 | `nvidia/gpt-oss-20b` | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models` but direct calls still work |
 
 > Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.435/$0.87 — the 75% launch promo became the permanent list price after 2026-05-31) — `nvidia/deepseek-v4-pro` is hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash.
 
 > **Privacy note for `gpt-oss-120b/20b`**: NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement. The models are hidden from `/v1/models` so SmartChat won't auto-route to them, but direct calls still work — use them only when prompts contain no sensitive data.
 
-> **Retired**: `nvidia/qwen3-next-80b-a3b-thinking` hit NVIDIA end-of-life 2026-05-21 (HTTP 410). The gateway auto-redirects pinned callers to `nvidia/llama-4-maverick`.
+> **Retired**: NVIDIA has EOL'd (HTTP 410) most of its early free lineup — the free DeepSeek family (last: `nvidia/deepseek-v4-flash`, 2026-08-12), `llama-4-maverick`, the qwen3 SKUs, free Mistral small/large, and more. The gateway auto-redirects pinned callers to a healthy free model, so old model IDs still return 200.
 
 ## Solana Support
+
+**Solana is the recommended chain for x402 payments**: settlement is sub-second
+and BlockRun's facilitator co-signs as fee payer, so a transfer costs you no SOL
+and you hold nothing but USDC. Base works identically and remains what the bare
+`LLMClient` uses, so nothing existing changes — but if you are choosing today,
+choose Solana.
 
 Pay for AI calls with Solana USDC via [sol.blockrun.ai](https://sol.blockrun.ai):
 
@@ -88,6 +114,10 @@ client = SolanaLLMClient()
 
 # Or pass key directly
 client = SolanaLLMClient(private_key="your-bs58-solana-key")
+
+# A BlockRun API key works here too — on the account rail there is no transfer
+# to sign, so the chain stops being a question.
+client = SolanaLLMClient(private_key="brk_live_...")
 
 # Same API as LLMClient
 response = client.chat("openai/gpt-5.2", "gm Solana")
@@ -121,7 +151,7 @@ export SOLANA_WALLET_KEY="your-bs58-solana-key"
 > what to switch to instead of failing with a cryptic "must be 66 characters"
 > error.
 
-## Smart Routing (ClawRouter)
+## Smart Routing (Router Core)
 
 Let the SDK automatically pick the cheapest capable model for each request:
 
@@ -130,25 +160,59 @@ from blockrun_llm import LLMClient
 
 client = LLMClient()
 
-# Auto-routes to cheapest capable model
-result = client.smart_chat("What is 2+2?")
-print(result.response)  # '4'
-print(result.model)     # 'moonshot/kimi-k2.6' (Moonshot flagship — vision + reasoning_content)
-print(f"Saved {result.routing.savings * 100:.0f}%")  # 'Saved 94%'
+# Auto-routes to the cheapest capable model
+result = client.smart_chat("Summarize this changelog entry in one line")
+print(result.response)
+print(result.model)             # 'google/gemini-2.5-flash'
+print(result.routing.task_type) # 'chat'
+print(f"Saved {result.routing.savings * 100:.0f}%")  # 'Saved 90%'
 
-# Complex reasoning task -> routes to reasoning model
+# Complex reasoning task -> routes to a reasoning model
 result = client.smart_chat("Prove the Riemann hypothesis step by step")
-print(result.model)  # 'deepseek/deepseek-reasoner'
+print(result.model)  # 'deepseek/deepseek-v4-pro'
+```
+
+Routing works the same on every client — `LLMClient`, `AsyncLLMClient`,
+`SolanaLLMClient` and `AsyncSolanaLLMClient` all expose `route()`,
+`smart_chat()` and `smart_chat_completion()`. Both chains run the same engine
+against the same catalog, so an identical request picks an identical model; only
+the x402 minimum in the cost estimate differs.
+
+```python
+# Route a full message list — tools and response_format shape the decision,
+# not just the request
+result = client.smart_chat_completion(
+    [{"role": "user", "content": "Cancel order B-42"}],
+    tools=[{"type": "function", "function": {"name": "cancel_order", "parameters": {}}}],
+    tool_choice="required",
+)
+print(result.model)               # a tool-capable model
+print(result.routing.task_type)   # 'tool_agent'
+
+# Or opt in from OpenAI-compatible code by changing one string
+response = client.chat_completion("blockrun/auto", messages)
+```
+
+Want to see the decision without paying for a call? `client.route(...)` runs the
+same routing locally and returns the decision only:
+
+```python
+decision = client.route("Prove the Riemann hypothesis step by step")
+print(decision.model)       # 'deepseek/deepseek-v4-pro'
+print(decision.tier)        # 'REASONING'
+print(decision.task_type)   # 'reasoning'
+print(decision.candidates)  # ordered chain; smart_chat walks it on a 5xx/timeout
+print(decision.reasoning)   # human-readable explanation of the pick
 ```
 
 ### Routing Profiles
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier — smart-routes across <!-- br:models.free -->6<!-- /br:models.free --> models (DeepSeek V4 Pro/Flash, Nemotron Nano Omni, Qwen3, GLM-4.7, Llama 4, Mistral) | Zero-cost testing, dev, prod |
-| `eco` | Cheapest models per tier (DeepSeek, NVIDIA) | Cost-sensitive production |
+| `free` | NVIDIA free tier — smart-routes across the <!-- br:models.free -->7<!-- /br:models.free --> $0 models (Step 3.7 Flash, Mistral Nemotron, Nemotron Nano Omni / 9B / 12B VL) | Zero-cost testing, dev, prod |
+| `eco` | Cheapest capable model per tier | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
-| `premium` | Top-tier models (OpenAI, Anthropic) | Quality-critical tasks |
+| `premium` | Top-tier models (Anthropic, OpenAI, Moonshot) | Quality-critical tasks |
 
 ```python
 # Use premium models for complex tasks
@@ -156,36 +220,117 @@ result = client.smart_chat(
     "Write production-grade async Python code",
     routing_profile="premium"
 )
-print(result.model)  # 'openai/gpt-5.4'
+print(result.model)  # 'openai/gpt-5.3-codex'
 ```
 
 ### How It Works
 
-ClawRouter uses a 14-dimension rule-based classifier to analyze each request:
+Routing runs on [Router Core](https://github.com/BlockRunAI/router-core) — the
+same product-neutral engine the TypeScript SDK and the BlockRun gateway use, so
+an identical request routes identically across all three. It is 100% local and
+takes <1ms; no extra model call is made to decide.
 
-- **Token count** - Short vs long prompts
-- **Code presence** - Programming keywords
-- **Reasoning markers** - "prove", "step by step", etc.
-- **Technical terms** - Architecture, optimization, etc.
-- **Creative markers** - Story, poem, brainstorm, etc.
-- **Agentic patterns** - Multi-step, tool use indicators
+Three stages:
 
-The classifier runs in <1ms, 100% locally, and routes to one of four tiers:
+1. **Classify** — a <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions -->-dimension weighted
+   scorer maps the request onto a capability tier (token count, code presence,
+   reasoning markers, technical terms, creative markers, agentic patterns, and
+   more), and a task classifier labels the *shape* of the work: `chat`,
+   `code_edit`, `code_agent`, `tool_agent`, `reasoning_math`, `long_context`,
+   `extraction`, `vision`, …
+2. **Filter** — capability constraints are hard filters, not preferences. A
+   model that cannot hold the conversation, emit the requested output length,
+   call tools, or read images is dropped before scoring, so the router never
+   picks a model the request would fail on.
+3. **Rank** — surviving candidates are scored on task affinity, cost, speed and
+   reliability. The winner serves the request; the rest become the ordered
+   fallback chain that `smart_chat` walks on a timeout or 5xx.
+
+The four capability tiers:
 
 | Tier | Example Tasks | Auto Profile Model |
 |------|---------------|-------------------|
-| SIMPLE | "What is 2+2?", definitions | moonshot/kimi-k2.6 |
-| MEDIUM | Code snippets, explanations | google/gemini-2.5-flash |
+| SIMPLE | Short questions, definitions | google/gemini-2.5-flash |
+| MEDIUM | Code snippets, explanations | moonshot/kimi-k2.7 |
 | COMPLEX | Architecture, long documents | google/gemini-3.1-pro |
-| REASONING | Proofs, multi-step reasoning | deepseek/deepseek-reasoner |
+| REASONING | Proofs, math, multi-step reasoning | deepseek/deepseek-v4-pro |
+
+Every decision is explainable — `result.routing` carries the tier, the task
+type, the confidence, the ranked `candidates`, the per-candidate
+`candidate_scores` (quality / cost / speed / reliability) and a `reasoning`
+string describing why that model won.
 
 ## How Payment Works
 
-No API keys, no subscription. You hold USDC on Base in your own wallet, and
-**each request pays for itself** with an on-chain micropayment. There are two
-phases:
+Two front doors onto the same gateway, the same catalogue and the same response
+shapes. You choose one with the credential you hand the client.
 
-### Phase 1 — Fund your wallet once (USDC on Base)
+| | **API key** — `api.blockrun.ai` | **Wallet (x402)** — `sol.blockrun.ai` / `blockrun.ai` |
+|---|---|---|
+| Authenticates with | `brk_live_…` from [user.blockrun.ai](https://user.blockrun.ai) | a signature from your own wallet |
+| Pays from | prepaid credit on your account | USDC you hold, settled on-chain per call |
+| Set up by | signing in with Google, minting a key, topping up with a card | funding a wallet with USDC |
+| Chain | none — credit is off-chain | **Solana** or **Base** |
+| Custody | BlockRun holds the credit you bought | non-custodial; your key never leaves your machine |
+| Best for | teams that cannot run wallets, CI, anyone who wants a card receipt | agents, autonomous spend, no-signup access |
+
+Free models are free on both.
+
+### Option A — API key (user.blockrun.ai)
+
+1. **Sign in** at **[user.blockrun.ai](https://user.blockrun.ai)** with Google.
+2. **Mint a key** on the *API Keys* page. It is shown once — copy it then.
+3. **Top up** on the *Billing* page with a card. Minimum $5. The processing fee
+   (5.5% + $0.30) is charged **once, at purchase** — never on a call — so $10.85
+   buys $10.00 of credit and every model then bills at the published list price,
+   with no per-call minimum and no per-call fee.
+4. **Export it:**
+
+```bash
+export BLOCKRUN_API_KEY=brk_live_...
+```
+
+```python
+from blockrun_llm import LLMClient
+
+client = LLMClient()               # picks up BLOCKRUN_API_KEY
+print(client.payment_mode)         # 'apikey'
+print(client.chat("openai/gpt-5.2", "What is 2+2?"))
+```
+
+Requests go to `https://api.blockrun.ai/v1` with the key as
+`Authorization: Bearer …`. There is no 402 round trip and nothing is signed —
+the gateway meters the call at exact usage and draws it from your credit.
+Spending, per-call activity and remaining balance are on
+[user.blockrun.ai/dashboard](https://user.blockrun.ai/dashboard).
+
+**Precedence**, since it decides whether a call spends credit or on-chain USDC:
+
+1. an explicit argument — `LLMClient("brk_live_…")` or `LLMClient("0x…")`;
+2. `BLOCKRUN_API_KEY`, which **beats** `BLOCKRUN_WALLET_KEY` /
+   `BASE_CHAIN_WALLET_KEY` / `SOLANA_WALLET_KEY`;
+3. the wallet variables.
+
+An existing wallet setup is untouched until you set `BLOCKRUN_API_KEY`, and
+passing a wallet key explicitly always opts back out. `BLOCKRUN_API_KEY_URL`
+overrides the account-rail host; it is deliberately not `BLOCKRUN_API_URL`,
+which names an x402 gateway — an API-key client following that would send your
+key to a host configured for a different rail.
+
+**What changes.** `get_balance()`, `get_balance_testnet()` and `onramp()` raise
+a `ValueError` pointing at the dashboard rather than answering: returning `0`
+is indistinguishable from an empty wallet, and an agent gating on it would stop
+calling a well-funded account. `get_wallet_address()` returns `""`. Running out
+of credit raises a `PaymentError` naming the top-up page, not a wallet error.
+`setup_agent_wallet()` mints nothing and hands back an API-key client, so a
+skill can call it unconditionally. Everything else is identical.
+
+### Option B — wallet + x402
+
+You hold USDC in your own wallet — on **Solana** or **Base** — and each request
+pays for itself with an on-chain micropayment. No signup, nothing custodial.
+
+#### Phase 1 — Fund your wallet once
 
 You only do this when your balance runs low. Three ways:
 
@@ -203,7 +348,7 @@ print(link["url"])  # open https://pay.coinbase.com/... to buy USDC on Base
 print(client.get_wallet_address())  # send USDC on Base to this 0x… address
 
 # (c) Skip funding entirely — the free NVIDIA models cost $0
-client.chat("nvidia/deepseek-v4-flash", "Hello!")  # routing_profile="free" also works
+client.chat("nvidia/step-3.7-flash", "Hello!")  # routing_profile="free" also works
 ```
 
 `$5` of USDC covers thousands of paid requests. Check your balance any time:
@@ -212,7 +357,7 @@ client.chat("nvidia/deepseek-v4-flash", "Hello!")  # routing_profile="free" also
 print(f"Balance: ${client.get_balance():.2f} USDC")
 ```
 
-### Phase 2 — Every request pays itself (automatic x402)
+#### Phase 2 — Every request pays itself (automatic x402)
 
 ```python
 reply = client.chat("anthropic/claude-sonnet-4.6", "Explain x402 in one line")
@@ -234,7 +379,10 @@ One call, no separate pay step.
 - **Pay-as-you-go, per call.** You pay only the gateway price of each request
   (see [Available Models](#available-models)). The free NVIDIA models are `$0`.
 - **Track spend.** `client.get_spending()` returns this session's
-  `{total_usd, calls}`. Every paid call also appends a line to
+  `{total_usd, calls}`. On the API-key rail the gateway does not tell the client
+  what a call cost, so treat that total as a floor and
+  [user.blockrun.ai/dashboard](https://user.blockrun.ai/dashboard) as the
+  authority. Every paid call also appends a line to
   `~/.blockrun/cost_log.jsonl`; summarize/export it with
   `blockrun_llm.billing` (`get_cost_log_summary`, `export_cost_log_csv`) — see
   [Billing & Cost Tracking](#billing--cost-tracking).
@@ -314,7 +462,7 @@ thinking modes. V4 Pro is the new flagship paid SKU — 1.6T MoE / 49B active,
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
 | `deepseek/deepseek-v4-pro` | $0.435/M | $0.87/M | 1M | V4 flagship — strongest open-weight reasoner. The 75% launch promo became the permanent list price after 2026-05-31 |
-| `deepseek/deepseek-chat` | $0.20/M | $0.40/M | 1M | V4 Flash non-thinking (paid endpoint with 5MB request bodies; same upstream as `nvidia/deepseek-v4-flash`) |
+| `deepseek/deepseek-chat` | $0.14/M | $0.28/M | 1M | V4 Flash non-thinking (paid endpoint with 5MB request bodies) |
 | `deepseek/deepseek-reasoner` | $0.20/M | $0.40/M | 1M | V4 Flash thinking (same upstream as `deepseek-chat`, thinking enabled by default) |
 
 ### MiniMax
@@ -332,8 +480,8 @@ direct calls by full ID still work.
 
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `xai/grok-4.3` | $1.50/M | $4.00/M | 1M | Reasoning model, vision-capable, tuned for agentic workflows |
-| `xai/grok-build-0.1` | $1.50/M | $3.00/M | 256K | Fast agentic coding model — interactive software-engineering workflows |
+| `xai/grok-4.3` | $1.25/M | $2.50/M | 1M | Reasoning model, vision-capable, tuned for agentic workflows |
+| `xai/grok-build-0.1` | $1.00/M | $2.00/M | 256K | Fast agentic coding model — interactive software-engineering workflows |
 
 ### ZAI
 
@@ -349,26 +497,22 @@ glm-5 and glm-5-turbo on 2026-06-06) — the whole family now bills per-token.
 
 ### NVIDIA (Free & Hosted)
 
-Free tier refreshed 2026-04-28: added `nvidia/deepseek-v4-flash` (1M context)
-and `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` (vision). `nvidia/gpt-oss-120b`
-and `nvidia/gpt-oss-20b` were briefly delisted over privacy concerns
-(NVIDIA's free build.nvidia.com tier reserves the right to use prompts for
-service improvement) but **re-enabled 2026-04-30 with `available: true` +
-`hidden: true`** — they no longer appear in `/v1/models` (so SmartChat won't
-auto-pick them) but direct calls by full ID still return HTTP 200.
-`nvidia/deepseek-v4-pro`, `nvidia/deepseek-v3.2`, and `nvidia/glm-4.7` are
-hidden because NVIDIA's NIM deployment is hung — backend MODEL_REDIRECTS
-auto-forwards calls to V4 Flash / qwen3-coder. `nvidia/qwen3-next-80b-a3b-thinking`
-hit NVIDIA end-of-life 2026-05-21 (HTTP 410) and is auto-redirected to
-`nvidia/llama-4-maverick`.
+Free tier refreshed 2026-08-12. NVIDIA has retired (HTTP 410 end-of-life)
+the entire free DeepSeek family — `nvidia/deepseek-v4-flash` was the last to
+go — along with `llama-4-maverick`, `qwen3-coder-480b`, the free Mistral
+small/large SKUs, and others. Retired models stay callable by ID: the gateway
+auto-redirects them to a healthy free model, so pinned callers still get a
+200. `nvidia/gpt-oss-120b` and `nvidia/gpt-oss-20b` remain callable by direct
+ID but are hidden from `/v1/models` over the NVIDIA free tier's
+prompt-retention terms (so SmartChat won't auto-pick them). The live list is
+`GET /v1/models` filtered on the free flag.
 
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `nvidia/deepseek-v4-flash` | **FREE** | **FREE** | 1M | DeepSeek V4 Flash — 284B / 13B active MoE, ~5× faster than V4 Pro. Best free chat / summarization |
+| `nvidia/step-3.7-flash` | **FREE** | **FREE** | 131K | Fast general-purpose chat + reasoning |
+| `nvidia/mistral-nemotron` | **FREE** | **FREE** | 131K | Fast free Mistral |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | **FREE** | **FREE** | 256K | First vision-capable free model — RGB images, mp4 video |
-| `nvidia/mistral-small-4-119b` | **FREE** | **FREE** | 131K | ⚠️ Upstream timing out as of 2026-06-07 |
-| `nvidia/llama-4-maverick` | **FREE** | **FREE** | 131K | Meta Llama 4 Maverick MoE |
-| `nvidia/qwen3-coder-480b` | **FREE** | **FREE** | 131K | Coding-optimised 480B MoE |
+| `nvidia/nemotron-nano-9b-v2` | **FREE** | **FREE** | 131K | Compact fast chat |
 | `nvidia/gpt-oss-120b` | **FREE** | **FREE** | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models`; direct calls work |
 | `nvidia/gpt-oss-20b` | **FREE** | **FREE** | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models`; direct calls work |
 | `moonshot/kimi-k2.5` | $0.60/M | $3.00/M | 262K | Kimi K2.5 direct from Moonshot (replaces `nvidia/kimi-k2.5`) |
@@ -1412,10 +1556,24 @@ print(format_row(
 
 ## Environment Variables
 
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `BLOCKRUN_WALLET_KEY` | Your Base chain wallet private key | Yes (or pass to constructor) |
-| `BLOCKRUN_API_URL` | API endpoint | No (default: https://blockrun.ai/api) |
+One credential is required — an API key **or** a wallet key. Everything else is
+optional.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `BLOCKRUN_API_KEY` | API key from [user.blockrun.ai](https://user.blockrun.ai) (`brk_live_…`). **Takes precedence over every wallet variable.** | — |
+| `SOLANA_WALLET_KEY` | bs58 Solana wallet key, for `SolanaLLMClient` | falls back to `~/.*/solana-wallet.json`, then `~/.blockrun/.solana-session` |
+| `BLOCKRUN_WALLET_KEY` | Base chain wallet private key | falls back to `~/.blockrun/.session` |
+| `BASE_CHAIN_WALLET_KEY` | Alias for `BLOCKRUN_WALLET_KEY` | — |
+| `BLOCKRUN_API_KEY_URL` | Override the API-key gateway | `https://api.blockrun.ai` |
+| `BLOCKRUN_API_URL` | Override the Base x402 gateway | `https://blockrun.ai/api` |
+| `SOLANA_RPC_URL` / `SOLANA_RPC_HEADERS` / `SOLANA_RPC_API_KEY` | RPC for blockhash + mint info while signing | BlockRun's free proxy |
+| `BLOCKRUN_CHAT_TIMEOUT` | Chat HTTP timeout, in seconds | `600` |
+| `BLOCKRUN_MAX_COST_PER_CALL` / `BLOCKRUN_MAX_SESSION_COST` | Opt-in spend limits (wallet rail) | unlimited |
+
+`BLOCKRUN_API_KEY_URL` is deliberately not `BLOCKRUN_API_URL`: that one names an
+x402 gateway, and an API-key client must never follow it and send your key to a
+host you configured for a different rail.
 
 ## Setting Up Your Wallet
 
@@ -1675,8 +1833,8 @@ blockrun-llm is a Python SDK that provides pay-per-request access to 43+ large l
 ### How does payment work?
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
 
-### What is smart routing / ClawRouter?
-ClawRouter is a built-in smart routing engine that analyzes your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions and automatically picks the cheapest model capable of handling it. Routing happens locally in under 1ms. It can save up to <!-- br:savings.autoVsBaselinePct -->87<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
+### What is smart routing / Router Core?
+Router Core is BlockRun's built-in routing engine — shared with the TypeScript SDK and the gateway, so the same request routes the same way everywhere. It scores your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, drops every model that can't actually handle it (context, output length, tools, vision), then picks the cheapest capable one and keeps the rest as a fallback chain. Routing happens locally in under 1ms and makes no extra model call. It can save up to <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
 
 ### How much does it cost?
 Pay only for what you use. Prices start at **FREE** (11 NVIDIA-hosted models). Paid models start at $0.10/M tokens. There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
@@ -1687,3 +1845,32 @@ Yes. Install with `pip install blockrun-llm[solana]` and use `SolanaLLMClient` i
 ## License
 
 MIT
+
+### Changing payment methods safely
+
+Register at [user.blockrun.ai](https://user.blockrun.ai), add credit in
+[Credits](https://user.blockrun.ai/dashboard/credits), and create a key in
+[API keys](https://user.blockrun.ai/dashboard/keys). Set `BLOCKRUN_API_KEY`
+or pass the key as the client's credential. Check activity and actual charges
+in the dashboard; local cost summaries may omit charges without a gateway receipt.
+
+An explicit wallet credential chooses wallet payments even when `BLOCKRUN_API_KEY`
+is set. Choose the Solana wallet client for Solana, or the Base wallet client for
+Base. A `BLOCKRUN_API_KEY` set to something that is not a `brk_` key fails instead
+of silently selecting a wallet and spending USDC you meant to keep. Blank counts
+as unset, so `BLOCKRUN_API_KEY=` in a `.env` file or an unpopulated CI secret
+still falls back to the wallet. Create a new client when changing credentials;
+an existing client keeps its original account.
+
+The optional `AnthropicClient` also accepts a BlockRun API key as its credential
+or through `BLOCKRUN_API_KEY` (`pip install 'blockrun-llm[anthropic]'`). Automatic
+retries are disabled by default on **both** payment rails, because a failed
+response may follow a billable request. It matters most on the wallet rail, where
+the x402 transport signs a fresh payment for every 402 it sees: at the Anthropic
+SDK's own default of 2 retries, one `messages.create()` that 5xxs after the
+gateway settled would sign and settle three separate on-chain transfers. Pass
+`max_retries=` explicitly to opt back in.
+
+The optional integration currently supports Anthropic SDK **0.x**. The extra
+pins `<1` because Anthropic 1.x moved to a different HTTP transport; upgrading
+that dependency independently would break both account and wallet clients.

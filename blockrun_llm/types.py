@@ -671,9 +671,35 @@ class ChatResponseWithCost(BaseModel):
         return self.spending_report.cost_usd
 
 
-# Smart routing types (ClawRouter integration)
+# Smart routing types (Router Core integration)
 RoutingProfile = Literal["free", "eco", "auto", "premium"]
 RoutingTier = Literal["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"]
+RoutingMethod = Literal["rules", "llm", "portfolio"]
+RoutingTaskType = Literal[
+    "chat",
+    "extraction",
+    "code_edit",
+    "code_agent",
+    "tool_agent",
+    "tool_agent_parallel",
+    "debug",
+    "reasoning",
+    "reasoning_mcq",
+    "reasoning_math",
+    "long_context",
+    "vision",
+]
+
+
+class CandidateScore(BaseModel):
+    """Per-candidate portfolio score breakdown, ordered with ``candidates``."""
+
+    model: str
+    score: float
+    quality: float
+    cost: float
+    speed: float
+    reliability: float
 
 
 class RoutingDecision(BaseModel):
@@ -682,12 +708,40 @@ class RoutingDecision(BaseModel):
     model: str
     tier: RoutingTier
     confidence: float
-    method: Literal["rules"]
+    #: "portfolio" for the default V3 strategy, "rules" for the V2 rollback and
+    #: the free profile.
+    method: RoutingMethod
     reasoning: str
     cost_estimate: float
     baseline_cost: float
     savings: float  # 0-1 percentage
     fallbacks: List[str] = []  # remaining models in tier order, for runtime fallback
+    # Router Core metadata — present when the portfolio strategy ran.
+    candidates: List[str] = []  # ordered, capability-eligible; candidates[0] == model
+    candidate_scores: List[CandidateScore] = []
+    task_type: Optional[RoutingTaskType] = None
+    router_version: Optional[Literal["v2-rules", "v3-portfolio"]] = None
+    profile: Optional[Literal["auto", "eco", "premium", "agentic"]] = None
+    agentic_score: Optional[float] = None
+
+
+class SmartChatCompletionResponse(BaseModel):
+    """
+    Response from smart_chat_completion — the routed full completion.
+
+    ``response`` is the ordinary ChatResponse (choices, usage, citations), so
+    tool calls and structured output work exactly as with chat_completion.
+
+    Example:
+        result = client.smart_chat_completion([{"role": "user", "content": "hi"}])
+        print(result.model)                     # the model routing picked
+        print(result.response.choices[0].message.content)
+        print(result.routing.task_type)         # 'chat'
+    """
+
+    response: ChatResponse
+    model: str
+    routing: RoutingDecision
 
 
 class SmartChatResponse(BaseModel):
