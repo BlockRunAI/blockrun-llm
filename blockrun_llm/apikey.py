@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import urlsplit
 
 from .types import APIError, PaymentError
 
@@ -74,8 +75,22 @@ def resolve_api_key(credential: str | None) -> str | None:
     # must not be overridden by the environment.
     if credential and str(credential).strip():
         return None
+    # Blank is unset, not invalid. `BLOCKRUN_API_KEY=` in a .env file, a bare
+    # `docker -e BLOCKRUN_API_KEY`, and an unpopulated `${{ secrets.X }}` all
+    # land here as the empty string, and every one of them means "I am not on
+    # the account rail" — raising would break wallet users who never opted in.
+    # A non-blank value that is not a key is a different thing: someone typed a
+    # credential and got it wrong, and silently spending USDC instead of credit
+    # is the wrong way to tell them.
     env = os.environ.get(ENV_API_KEY, "").strip()
-    return env if is_api_key(env) else None
+    if not env:
+        return None
+    if not is_api_key(env):
+        raise ValueError(
+            f"Invalid BLOCKRUN_API_KEY: expected a key starting with {API_KEY_PREFIX!r}. "
+            "Correct it, clear it, or explicitly pass a wallet key."
+        )
+    return env
 
 
 def api_key_base_url(api_url: str | None = None) -> str:
@@ -136,10 +151,24 @@ def resolve_poll_url(poll_url: str, api_url: str, api_key: str | None) -> str:
     account rail the prefix has to come off here — the alternative is every
     async job (video, slow images) polling a 404 until its budget runs out.
     """
+    if api_key:
+        target = urlsplit(poll_url)
+        gateway = urlsplit(api_url)
+        if target.scheme or target.netloc:
+            if (
+                target.scheme.lower() != gateway.scheme.lower()
+                or target.hostname != gateway.hostname
+                or (target.port or (443 if target.scheme == "https" else 80))
+                != (gateway.port or (443 if gateway.scheme == "https" else 80))
+                or target.username is not None
+                or target.password is not None
+            ):
+                raise ValueError("Refusing to send an API key to a different polling origin.")
+            return poll_url
+        path = poll_url.removeprefix("/api") if poll_url.startswith("/api/") else poll_url
+        return f"{api_url.rstrip('/')}/{path.lstrip('/')}"
     if poll_url.startswith(("http://", "https://")):
         return poll_url
-    if api_key:
-        return f"{api_url}{poll_url.removeprefix('/api')}"
     return f"{api_url.removesuffix('/api')}{poll_url}"
 
 
