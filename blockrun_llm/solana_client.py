@@ -689,6 +689,13 @@ class SolanaLLMClient:
         # immediately after the helper returns (no intervening await).
         self._last_raw_headers: httpx.Headers | None = None
 
+        # Account calls need neither an x402 client nor a local signer. Keep
+        # all shared request/receipt state above this branch initialized.
+        if api_key:
+            self._x402_client = None
+            self._payment_lock = threading.Lock()
+            return
+
         # Initialize x402 SDK client for Solana payment signing.
         self._x402_client = x402ClientSync()
         try:
@@ -3374,6 +3381,11 @@ class AsyncSolanaLLMClient:
         # metadata the shared JSON-only helper would otherwise drop. Read it
         # immediately after the helper returns (no intervening await).
         self._last_raw_headers: httpx.Headers | None = None
+
+        if api_key:
+            self._x402_client = None
+            self._payment_lock = None
+            return
 
         # Async x402 client + same SVM signer the sync class uses.
         from x402 import x402Client  # local import to keep optional dep clean
