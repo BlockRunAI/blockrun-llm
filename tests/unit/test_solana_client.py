@@ -28,7 +28,7 @@ class TestSolanaLLMClientInit:
         # machine running it happens to have ~/.blockrun/.solana-session.
         monkeypatch.delenv("SOLANA_WALLET_KEY", raising=False)
         monkeypatch.setattr("blockrun_llm.solana_wallet.load_solana_wallet", lambda: None)
-        with pytest.raises(ValueError, match="[Pp]rivate key required"):
+        with pytest.raises(ValueError, match="No credential configured"):
             SolanaLLMClient()
 
     def test_init_from_session_file(self, monkeypatch):
