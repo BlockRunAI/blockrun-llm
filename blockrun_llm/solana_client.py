@@ -649,7 +649,13 @@ class SolanaLLMClient:
         self.api_key = api_key
         self._private_key = key
         if api_key:
-            self._api_url = api_key_base_url(None)
+            # A key is answered by api.blockrun.ai, never by sol.blockrun.ai —
+            # so the Solana default must not reach the account rail. An
+            # api_url the caller actually typed still wins, as it does on
+            # every other client.
+            override = None if api_url == SOLANA_API_URL else api_url
+            self._api_url = api_key_base_url(override)
+            validate_api_url(self._api_url)
         else:
             validate_api_url(api_url)
             self._api_url = api_url.rstrip("/")
@@ -3356,7 +3362,13 @@ class AsyncSolanaLLMClient:
         self.api_key = api_key
         self._private_key = key
         if api_key:
-            self._api_url = api_key_base_url(None)
+            # A key is answered by api.blockrun.ai, never by sol.blockrun.ai —
+            # so the Solana default must not reach the account rail. An
+            # api_url the caller actually typed still wins, as it does on
+            # every other client.
+            override = None if api_url == SOLANA_API_URL else api_url
+            self._api_url = api_key_base_url(override)
+            validate_api_url(self._api_url)
         else:
             validate_api_url(api_url)
             self._api_url = api_url.rstrip("/")
