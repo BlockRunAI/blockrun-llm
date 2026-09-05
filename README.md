@@ -1864,3 +1864,7 @@ The optional `AnthropicClient` also accepts a BlockRun API key as its credential
 or through `BLOCKRUN_API_KEY` (`pip install 'blockrun-llm[anthropic]'`). In account
 mode, automatic retries are disabled by default because a failed response may
 follow a billable request; callers can explicitly configure `max_retries`.
+
+The optional integration currently supports Anthropic SDK **0.x**. The extra
+pins `<1` because Anthropic 1.x moved to a different HTTP transport; upgrading
+that dependency independently would break both account and wallet clients.
