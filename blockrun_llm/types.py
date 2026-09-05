@@ -88,6 +88,32 @@ class ChatUsage(BaseModel):
     # headers are sent. Reads are cheaper; writes incur a one-time surcharge.
     cache_read_input_tokens: Optional[int] = None
     cache_creation_input_tokens: Optional[int] = None
+    # Provider-native token detail. reasoning_tokens is a subset of
+    # completion_tokens and must not be added again when calculating spend.
+    prompt_tokens_details: Optional[Dict[str, Any]] = None
+    completion_tokens_details: Optional[Dict[str, Any]] = None
+
+    @property
+    def reasoning_tokens(self) -> Optional[int]:
+        """Reasoning tokens the model spent, when upstream reports them.
+
+        Nested under ``completion_tokens_details`` in the OpenAI shape the
+        gateway forwards. The flat fallback matters because this class allows
+        extras: a payload carrying a top-level ``reasoning_tokens`` used to
+        reach callers through ``__getattr__``, and a property of the same name
+        takes precedence over that, so without the fallback this would answer
+        None for a number the payload demonstrably carried.
+
+        ``bool`` is excluded deliberately — it is an ``int`` subclass, and
+        ``True`` is not a token count.
+        """
+        detail = self.completion_tokens_details or {}
+        value = detail.get("reasoning_tokens")
+        if value is None:
+            value = (self.model_extra or {}).get("reasoning_tokens")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        return value
 
     class Config:
         extra = "allow"
