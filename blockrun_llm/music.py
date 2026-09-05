@@ -47,7 +47,7 @@ from .apikey import (
     resolve_api_key,
 )
 from .tx_log import paid_request_error_prefix
-from .types import APIError, MusicResponse, PaymentError
+from .types import APIError, MusicResponse, PaymentError, retry_after_of
 from .validation import (
     sanitize_error_response,
     validate_api_url,
@@ -203,6 +203,7 @@ class MusicClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         return MusicResponse(**response.json())
@@ -271,6 +272,7 @@ class MusicClient:
                 f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(retry_response),
             )
 
         data = retry_response.json()

@@ -394,12 +394,88 @@ class SpendLimitError(PaymentError):
 
 
 class APIError(BlockrunError):
-    """API-related error."""
+    """API-related error.
 
-    def __init__(self, message: str, status_code: int, response: Optional[dict] = None):
+    ``retry_after`` carries the gateway's ``Retry-After`` header verbatim when
+    there was one. It is the whole mechanism by which a rate-limited caller is
+    told how long to wait, and it matters most on the account rail, where
+    limits are per key and a 429 is the normal way a busy customer is asked to
+    slow down. Dropping it leaves every consumer guessing or spinning against
+    the limit the header exists to prevent.
+
+    Kept as the raw string the header carried rather than a parsed number: the
+    HTTP spec allows both a delay in seconds and an HTTP-date, and inventing a
+    number for the date form would be worse than handing back what arrived.
+    ``retry_after_seconds`` parses the common form when a caller wants one.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status_code: int,
+        response: Optional[dict] = None,
+        retry_after: Optional[str] = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.response = response
+        self.retry_after = retry_after
+
+    @classmethod
+    def from_response(
+        cls,
+        response: Any,
+        message: str,
+        body: Optional[dict] = None,
+    ) -> "APIError":
+        """Build from an HTTP response, keeping its ``Retry-After``.
+
+        The one place that reads the header, so a new raise site cannot forget
+        it. Takes any object with ``status_code`` and ``headers`` so this
+        module stays free of an httpx import.
+        """
+        return cls(
+            message,
+            response.status_code,
+            body,
+            retry_after=retry_after_of(response),
+        )
+
+    @property
+    def retry_after_seconds(self) -> Optional[float]:
+        """``retry_after`` as seconds, when it is the delay-seconds form.
+
+        ``None`` for the HTTP-date form and for anything unparseable — a caller
+        that wants to sleep needs a number it can trust, and guessing one from
+        a date the clocks may disagree about is not that.
+        """
+        if self.retry_after is None:
+            return None
+        try:
+            value = float(self.retry_after.strip())
+        except (TypeError, ValueError):
+            return None
+        return value if value >= 0 else None
+
+
+def retry_after_of(response: Any) -> Optional[str]:
+    """Read ``Retry-After`` off a response, tolerating one that has no headers.
+
+    Header lookup is case-insensitive on httpx, but this also runs against test
+    doubles and the odd hand-built object, so a missing ``headers`` attribute
+    answers ``None`` instead of raising inside an error path.
+    """
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    try:
+        value = headers.get("retry-after") or headers.get("Retry-After")
+    except Exception:
+        return None
+    if value is None:
+        return None
+    value = str(value).strip()
+    return value or None
 
 
 # Image generation types

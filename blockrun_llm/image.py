@@ -45,7 +45,7 @@ from .apikey import (
     resolve_poll_url,
 )
 from .tx_log import paid_request_error_prefix
-from .types import APIError, ImageResponse, PaymentError
+from .types import APIError, ImageResponse, PaymentError, retry_after_of
 from .validation import (
     build_payment_rejected_error,
     sanitize_error_response,
@@ -318,6 +318,7 @@ class ImageClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         # Parse successful response
@@ -405,6 +406,7 @@ class ImageClient:
             f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
             retry_response.status_code,
             sanitize_error_response(error_body),
+            retry_after=retry_after_of(retry_response),
         )
 
     def _absolute_url(self, url: str) -> str:
@@ -474,6 +476,7 @@ class ImageClient:
                     f"Image generation failed upstream: {poll_data.get('error', 'unknown')}",
                     poll_resp.status_code,
                     sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
+                    retry_after=retry_after_of(poll_resp),
                 )
 
             if poll_resp.status_code == 200 and last_status == "completed":
@@ -493,6 +496,7 @@ class ImageClient:
                     f"Image poll failed: HTTP {poll_resp.status_code}",
                     poll_resp.status_code,
                     sanitize_error_response(error_body),
+                    retry_after=retry_after_of(poll_resp),
                 )
 
         raise APIError(

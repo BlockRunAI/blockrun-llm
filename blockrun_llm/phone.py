@@ -55,7 +55,7 @@ from .apikey import (
     resolve_api_key,
 )
 from .tx_log import paid_request_error_prefix
-from .types import APIError, PaymentError
+from .types import APIError, PaymentError, retry_after_of
 from .validation import (
     sanitize_error_response,
     validate_api_url,
@@ -334,6 +334,7 @@ class PhoneClient:
             f"{prefix}: {response.status_code}",
             response.status_code,
             sanitize_error_response(error_body),
+            retry_after=retry_after_of(response),
         )
 
     # ------------------------------------------------------------------ Helpers

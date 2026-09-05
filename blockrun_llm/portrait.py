@@ -60,8 +60,10 @@ from .types import (
     PaymentError,
     PortraitEnrollment,
     PortraitList,
+    retry_after_of,
 )
 from .validation import (
+    raise_api_error,
     sanitize_error_response,
     validate_api_url,
     validate_private_key,
@@ -218,6 +220,7 @@ class PortraitClient:
                 "Rate limit exceeded on portrait listing",
                 resp.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(resp),
             )
         if resp.status_code != 200:
             self._raise_api_error(resp, "Portrait listing failed")
@@ -317,15 +320,7 @@ class PortraitClient:
         return PortraitEnrollment(**retry.json())
 
     def _raise_api_error(self, resp: httpx.Response, prefix: str) -> None:
-        try:
-            error_body = resp.json()
-        except Exception:
-            error_body = {"error": "Request failed"}
-        raise APIError(
-            f"{prefix}: HTTP {resp.status_code}",
-            resp.status_code,
-            sanitize_error_response(error_body),
-        )
+        raise_api_error(resp, prefix)
 
     # ------------------------------------------------------------------
     # Utilities

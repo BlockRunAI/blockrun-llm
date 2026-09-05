@@ -47,8 +47,9 @@ from .apikey import (
     resolve_api_key,
     resolve_poll_url,
 )
-from .types import APIError, PaymentError, VideoResponse
+from .types import APIError, PaymentError, VideoResponse, retry_after_of
 from .validation import (
+    raise_api_error,
     sanitize_error_response,
     validate_api_url,
     validate_private_key,
@@ -412,6 +413,7 @@ class VideoClient:
                 "Submit response missing id/poll_url",
                 submit_resp.status_code,
                 {"response": submit_data},
+                retry_after=retry_after_of(submit_resp),
             )
 
         poll_url = self._absolute(poll_url_rel)
@@ -448,6 +450,7 @@ class VideoClient:
                     f"Upstream generation failed: {poll_data.get('error', 'unknown')}",
                     poll_resp.status_code,
                     sanitize_error_response(poll_data),
+                    retry_after=retry_after_of(poll_resp),
                 )
 
             # Terminal success is keyed on status, NOT the HTTP code — the
@@ -542,15 +545,7 @@ class VideoClient:
         raise PaymentError("402 response but no payment requirements found")
 
     def _raise_api_error(self, resp: httpx.Response, prefix: str) -> None:
-        try:
-            error_body = resp.json()
-        except Exception:
-            error_body = {"error": "Request failed"}
-        raise APIError(
-            f"{prefix}: HTTP {resp.status_code}",
-            resp.status_code,
-            sanitize_error_response(error_body),
-        )
+        raise_api_error(resp, prefix)
 
     @property
     def payment_mode(self) -> str:

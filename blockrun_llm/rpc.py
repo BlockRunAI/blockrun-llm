@@ -64,7 +64,7 @@ from .apikey import (
     resolve_api_key,
 )
 from .tx_log import paid_request_error_prefix
-from .types import APIError, PaymentError, RpcResponse
+from .types import APIError, PaymentError, RpcResponse, retry_after_of
 from .validation import (
     sanitize_error_response,
     validate_api_url,
@@ -342,6 +342,7 @@ class RpcClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         return response.json(), response.headers
@@ -411,6 +412,7 @@ class RpcClient:
                 f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(retry_response),
             )
 
         return retry_response.json(), retry_response.headers

@@ -89,6 +89,7 @@ from .types import (
     VideoResponse,
     chunk_meta,
     chunk_usage_dict,
+    retry_after_of,
     stream_choice_content,
     stream_choice_finish_reason,
 )
@@ -1479,6 +1480,7 @@ class SolanaLLMClient:
             f"{prefix}: {response.status_code}",
             response.status_code,
             sanitize_error_response(error_body),
+            retry_after=retry_after_of(response),
         )
 
     def _request_with_payment(
@@ -1548,6 +1550,7 @@ class SolanaLLMClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         return ChatResponse(**response.json())
@@ -1606,6 +1609,7 @@ class SolanaLLMClient:
                 f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(retry_response),
             )
 
         cost_usd = float(payment_payload.accepted.amount) / 1e6
@@ -1711,6 +1715,7 @@ class SolanaLLMClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         return response.json()
@@ -1770,6 +1775,7 @@ class SolanaLLMClient:
                 f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(retry_response),
             )
 
         cost_usd = float(payment_payload.accepted.amount) / 1e6
@@ -1856,6 +1862,7 @@ class SolanaLLMClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         return response.json()
@@ -1912,6 +1919,7 @@ class SolanaLLMClient:
                 f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(retry_response),
             )
 
         cost_usd = float(payment_payload.accepted.amount) / 1e6
@@ -2028,6 +2036,7 @@ class SolanaLLMClient:
                     f"Image request: HTTP {probe.status_code}",
                     probe.status_code,
                     sanitize_error_response(error_body),
+                    retry_after=retry_after_of(probe),
                 )
             # Free / cached upstream — return whatever the gateway gave us.
             return probe.json()
@@ -2085,6 +2094,7 @@ class SolanaLLMClient:
                 f"Image request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
                 submit_resp.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(submit_resp),
             )
 
         # Step 4: slow path — poll until completed (or budget exhausted).
@@ -2206,6 +2216,7 @@ class SolanaLLMClient:
                     f"{label} failed upstream: {poll_data.get('error', 'unknown')}",
                     poll_resp.status_code,
                     sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
+                    retry_after=retry_after_of(poll_resp),
                 )
 
             # Terminal success is keyed on status, NOT the HTTP code — the
@@ -2240,6 +2251,7 @@ class SolanaLLMClient:
                     f"{label} poll failed: HTTP {poll_resp.status_code}",
                     poll_resp.status_code,
                     sanitize_error_response(error_body),
+                    retry_after=retry_after_of(poll_resp),
                 )
 
         raise APIError(
@@ -2550,6 +2562,7 @@ class SolanaLLMClient:
                 f"List voices failed: HTTP {resp.status_code}",
                 resp.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(resp),
             )
         data = resp.json()
         # Gateway wraps the voice list under "data" (mirrors SpeechClient.list_voices).
@@ -2589,6 +2602,7 @@ class SolanaLLMClient:
                 "Portrait listing failed",
                 resp.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(resp),
             )
         return PortraitList(**resp.json())
 
@@ -2622,7 +2636,10 @@ class SolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                "RealFace init failed", resp.status_code, sanitize_error_response(error_body)
+                "RealFace init failed",
+                resp.status_code,
+                sanitize_error_response(error_body),
+                retry_after=retry_after_of(resp),
             )
         return RealFaceInit(**resp.json())
 
@@ -2646,6 +2663,7 @@ class SolanaLLMClient:
                 "RealFace status check failed",
                 resp.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(resp),
             )
         return RealFaceStatus(**resp.json())
 
@@ -2704,6 +2722,7 @@ class SolanaLLMClient:
                 "RealFace listing failed",
                 resp.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(resp),
             )
         return RealFaceList(**resp.json())
 
@@ -4123,6 +4142,7 @@ class AsyncSolanaLLMClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
         return ChatResponse(**response.json())
 
@@ -4161,6 +4181,7 @@ class AsyncSolanaLLMClient:
                 f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(retry_response),
             )
 
         self._session_calls += 1
@@ -4251,6 +4272,7 @@ class AsyncSolanaLLMClient:
                     f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                     retry_response.status_code,
                     sanitize_error_response(error_body),
+                    retry_after=retry_after_of(retry_response),
                 )
             self._session_calls += 1
             self._session_total_usd += cost_usd
@@ -4271,6 +4293,7 @@ class AsyncSolanaLLMClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
         return response.json()
 
@@ -4348,6 +4371,7 @@ class AsyncSolanaLLMClient:
                     f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                     retry_response.status_code,
                     sanitize_error_response(error_body),
+                    retry_after=retry_after_of(retry_response),
                 )
             self._session_calls += 1
             self._session_total_usd += cost_usd
@@ -4369,6 +4393,7 @@ class AsyncSolanaLLMClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
         return response.json()
 
@@ -4709,6 +4734,7 @@ class AsyncSolanaLLMClient:
                 f"List voices failed: HTTP {resp.status_code}",
                 resp.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(resp),
             )
         data = resp.json()
         # Gateway wraps the voice list under "data" (mirrors SpeechClient.list_voices).
@@ -4740,7 +4766,10 @@ class AsyncSolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                "Portrait listing failed", resp.status_code, sanitize_error_response(error_body)
+                "Portrait listing failed",
+                resp.status_code,
+                sanitize_error_response(error_body),
+                retry_after=retry_after_of(resp),
             )
         return PortraitList(**resp.json())
 
@@ -4768,7 +4797,10 @@ class AsyncSolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                "RealFace init failed", resp.status_code, sanitize_error_response(error_body)
+                "RealFace init failed",
+                resp.status_code,
+                sanitize_error_response(error_body),
+                retry_after=retry_after_of(resp),
             )
         return RealFaceInit(**resp.json())
 
@@ -4792,6 +4824,7 @@ class AsyncSolanaLLMClient:
                 "RealFace status check failed",
                 resp.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(resp),
             )
         return RealFaceStatus(**resp.json())
 
@@ -4847,7 +4880,10 @@ class AsyncSolanaLLMClient:
             except Exception:
                 error_body = {"error": "Request failed"}
             raise APIError(
-                "RealFace listing failed", resp.status_code, sanitize_error_response(error_body)
+                "RealFace listing failed",
+                resp.status_code,
+                sanitize_error_response(error_body),
+                retry_after=retry_after_of(resp),
             )
         return RealFaceList(**resp.json())
 
@@ -5013,6 +5049,7 @@ class AsyncSolanaLLMClient:
                     f"Image request: HTTP {probe.status_code}",
                     probe.status_code,
                     sanitize_error_response(error_body),
+                    retry_after=retry_after_of(probe),
                 )
             return probe.json()
 
@@ -5071,6 +5108,7 @@ class AsyncSolanaLLMClient:
                 f"Image request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
                 submit_resp.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(submit_resp),
             )
 
         # Step 4: slow path — poll until completed (or budget exhausted).
@@ -5180,6 +5218,7 @@ class AsyncSolanaLLMClient:
                     f"{label} failed upstream: {poll_data.get('error', 'unknown')}",
                     poll_resp.status_code,
                     sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
+                    retry_after=retry_after_of(poll_resp),
                 )
 
             # Terminal success is keyed on status, NOT the HTTP code (see the
@@ -5210,6 +5249,7 @@ class AsyncSolanaLLMClient:
                     f"{label} poll failed: HTTP {poll_resp.status_code}",
                     poll_resp.status_code,
                     sanitize_error_response(error_body),
+                    retry_after=retry_after_of(poll_resp),
                 )
 
         raise APIError(

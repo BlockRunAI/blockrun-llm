@@ -83,8 +83,10 @@ from .types import (
     RealFaceInit,
     RealFaceList,
     RealFaceStatus,
+    retry_after_of,
 )
 from .validation import (
+    raise_api_error,
     sanitize_error_response,
     validate_api_url,
     validate_private_key,
@@ -371,6 +373,7 @@ class RealFaceClient:
                 "Rate limit exceeded on RealFace listing",
                 resp.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(resp),
             )
         raise_for_api_key_402(resp, self.api_key)
         if resp.status_code != 200:
@@ -488,15 +491,7 @@ class RealFaceClient:
         return RealFaceEnrollment(**retry.json())
 
     def _raise_api_error(self, resp: httpx.Response, prefix: str) -> None:
-        try:
-            error_body = resp.json()
-        except Exception:
-            error_body = {"error": "Request failed"}
-        raise APIError(
-            f"{prefix}: HTTP {resp.status_code}",
-            resp.status_code,
-            sanitize_error_response(error_body),
-        )
+        raise_api_error(resp, prefix)
 
     # ------------------------------------------------------------------
     # Utilities
