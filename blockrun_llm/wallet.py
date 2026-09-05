@@ -629,6 +629,19 @@ def setup_agent_wallet(silent: bool = False) -> LLMClient:
     """
     import sys
 
+    from .apikey import resolve_api_key
+
+    # With an API key configured this mints nothing: the account rail already
+    # has a funded identity, and writing a keyfile for a wallet that will never
+    # sign anything is a private key to lose for no benefit. This is what lets
+    # a skill or agent call setup_agent_wallet() unconditionally and work on
+    # either rail.
+    api_key = resolve_api_key(None)
+    if api_key:
+        from .client import LLMClient
+
+        return LLMClient(private_key=api_key)
+
     address, key, is_new = get_or_create_wallet()
 
     if is_new:

@@ -50,6 +50,15 @@ import httpx
 from dotenv import load_dotenv
 from eth_account import Account
 
+from .apikey import (
+    api_key_base_url,
+    auth_headers,
+    missing_credential_error,
+    payment_mode,
+    raise_for_api_key_402,
+    resolve_api_key,
+    wallet_only,
+)
 from .router_adapter import (
     BASE_MINIMUM_PAYMENT_USD,
     build_model_pricing,
@@ -118,7 +127,7 @@ def _get_user_agent() -> str:
 # =============================================================================
 
 
-def list_models(api_url: str = "https://blockrun.ai/api") -> list[dict[str, Any]]:
+def list_models(api_url: str | None = None) -> list[dict[str, Any]]:
     """
     List available LLM models with pricing (no wallet required).
 
@@ -137,9 +146,16 @@ def list_models(api_url: str = "https://blockrun.ai/api") -> list[dict[str, Any]
         for m in models:
             print(f"{m['id']}: ${m.get('inputPrice', 'N/A')}/M input")
     """
-    with httpx.Client(timeout=30) as client:
-        # Use /pricing endpoint which includes full model details
-        response = client.get(f"{api_url.rstrip('/')}/pricing")
+    # No credential parameter, so the environment decides. On the account rail
+    # the catalogue lives on another host and needs the key, so honouring one
+    # without the other would 404 or 401.
+    api_key = resolve_api_key(None)
+    api_url = api_url or (api_key_base_url(None) if api_key else "https://blockrun.ai/api")
+    with httpx.Client(timeout=30, headers=auth_headers(api_key)) as client:
+        # The account rail publishes the catalogue at /v1/models only; /pricing
+        # is the x402 gateway's own sheet.
+        path = "/v1/models" if api_key else "/pricing"
+        response = client.get(f"{api_url.rstrip('/')}{path}")
         if response.status_code != 200:
             raise APIError(
                 f"Failed to list models: {response.status_code}",
@@ -147,10 +163,10 @@ def list_models(api_url: str = "https://blockrun.ai/api") -> list[dict[str, Any]
                 {},
             )
         data = response.json()
-        return data.get("models", [])
+        return data.get("data", []) if api_key else data.get("models", [])
 
 
-def list_image_models(api_url: str = "https://blockrun.ai/api") -> list[dict[str, Any]]:
+def list_image_models(api_url: str | None = None) -> list[dict[str, Any]]:
     """
     List available image generation models without requiring a wallet.
 
@@ -158,7 +174,9 @@ def list_image_models(api_url: str = "https://blockrun.ai/api") -> list[dict[str
     The dedicated ``/v1/images/models`` endpoint was deprecated server-side;
     image models now live alongside chat models under one catalog.
     """
-    with httpx.Client(timeout=30) as client:
+    api_key = resolve_api_key(None)
+    api_url = api_url or (api_key_base_url(None) if api_key else "https://blockrun.ai/api")
+    with httpx.Client(timeout=30, headers=auth_headers(api_key)) as client:
         response = client.get(f"{api_url.rstrip('/')}/v1/models")
         if response.status_code != 200:
             raise APIError(
@@ -406,34 +424,47 @@ class LLMClient:
         # SECURITY: Key is stored in memory only, used for LOCAL signing
         from .wallet import load_wallet
 
+        # Account rail first, and before any wallet variable is read: an API
+        # key is a complete credential on its own, so demanding a private key
+        # alongside it would make every API-key user invent a wallet they
+        # never use. See apikey.py for the precedence rule.
+        api_key = resolve_api_key(private_key)
         key = (
-            private_key
-            or os.environ.get("BLOCKRUN_WALLET_KEY")
-            or os.environ.get("BASE_CHAIN_WALLET_KEY")
-            or load_wallet()  # Loads from ~/.blockrun/.session
-        )
-        if not key:
-            raise ValueError(
-                "No wallet configured. Either:\n"
-                "  1. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  2. Pass private_key to LLMClient()\n"
-                "  3. For agent use: call setup_agent_wallet() first"
+            None
+            if api_key
+            else (
+                private_key
+                or os.environ.get("BLOCKRUN_WALLET_KEY")
+                or os.environ.get("BASE_CHAIN_WALLET_KEY")
+                or load_wallet()  # Loads from ~/.blockrun/.session
             )
+        )
+        if not api_key and not key:
+            raise missing_credential_error()
 
         # Normalize private key format (add 0x prefix if missing)
         if key and not key.startswith("0x"):
             key = "0x" + key
 
         # Validate private key format
-        validate_private_key(key)
+        if key:
+            validate_private_key(key)
 
         # Initialize wallet account
         # SECURITY: Key stays local, only used to sign EIP-712 messages
         # The key is NEVER transmitted - only signatures are sent
-        self.account = Account.from_key(key)
+        self.api_key = api_key
+        # No wallet on the account rail: nothing is signed locally.
+        self.account = Account.from_key(key) if key else None
 
         # Validate and set API URL
-        api_url_raw = api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL
+        # BLOCKRUN_API_URL names an x402 gateway; an API-key client must not
+        # follow it and hand the key to a host set up for another rail.
+        api_url_raw = (
+            api_key_base_url(api_url)
+            if api_key
+            else (api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL)
+        )
         validate_api_url(api_url_raw)
         self.api_url = api_url_raw.rstrip("/")
 
@@ -441,6 +472,7 @@ class LLMClient:
         self.search_timeout = search_timeout
 
         self._client = httpx.Client(
+            headers=auth_headers(api_key),
             timeout=timeout,
             limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
         )
@@ -1099,6 +1131,9 @@ class LLMClient:
                     return
                 resp1.read()
                 if resp1.status_code == 402:
+                    # Account rail: a 402 is the account being out of credit, not a
+                    # challenge to sign. Nothing here can sign, so say so plainly.
+                    raise_for_api_key_402(resp1, self.api_key)
                     payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
                     break  # advance to phase 2
                 if resp1.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
@@ -1148,6 +1183,9 @@ class LLMClient:
                     return
                 resp2.read()
                 if resp2.status_code == 402:
+                    # Account rail: a 402 is the account being out of credit, not a
+                    # challenge to sign. Nothing here can sign, so say so plainly.
+                    raise_for_api_key_402(resp2, self.api_key)
                     raise PaymentError("Payment was rejected. Check your wallet balance.")
                 if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
                     import time
@@ -1373,6 +1411,9 @@ class LLMClient:
 
         # Handle 402 Payment Required
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             # Everything inside signs first, then makes the paid request, so a
             # timeout or network error escaping it already cost a settlement.
             # Tag it so the fallback chain doesn't settle again on the next model.
@@ -1493,6 +1534,9 @@ class LLMClient:
 
         # Check for errors
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
         if retry_response.status_code != 200:
@@ -1567,6 +1611,9 @@ class LLMClient:
             response = self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             try:
                 result = self._handle_payment_and_retry_raw(url, body, response)
             except (httpx.HTTPError, APIError) as exc:
@@ -1667,6 +1714,9 @@ class LLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
         if retry_response.status_code != 200:
@@ -1715,6 +1765,9 @@ class LLMClient:
             response = self._client.get(url, params=params, headers=req_headers)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             result = self._handle_get_payment_and_retry(url, params, response)
             save_to_cache(
                 endpoint,
@@ -1807,6 +1860,9 @@ class LLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
         if retry_response.status_code != 200:
@@ -2319,6 +2375,10 @@ class LLMClient:
     # ── Coinbase Onramp ──────────────────────────────────────────────────────
 
     def onramp(self, address: str) -> dict[str, Any]:
+        # Onramp funds a wallet, and an API-key account has none: credit is
+        # bought with a card at user.blockrun.ai, not minted into an address.
+        if self.api_key:
+            raise wallet_only("onramp")
         """Mint a one-time Coinbase Onramp link to fund a wallet with fiat (FREE).
 
         Opens the door to buying Base USDC with a card or bank (60+ fiat
@@ -2411,7 +2471,20 @@ class LLMClient:
                 m["type"] = cats[0] if cats else "llm"
         return all_models
 
+    @property
+    def payment_mode(self) -> str:
+        """Which rail this client pays on: ``"apikey"`` or ``"wallet"``.
+
+        Worth checking once at startup when both a key and a wallet are
+        configured in the environment: it is the difference between
+        spending credit and spending USDC."""
+        return payment_mode(self)
+
     def get_wallet_address(self) -> str:
+        # No address on the account rail: payment comes from prepaid
+        # credit, so there is nothing to return but the empty string.
+        if self.api_key:
+            return ""
         """Get the wallet address being used for payments."""
         return self.account.address
 
@@ -2463,6 +2536,11 @@ class LLMClient:
             pass
 
     def get_balance(self) -> float:
+        # Returning 0 would be the worst available answer: it is
+        # indistinguishable from an empty wallet, and an agent gating on it
+        # would stop calling a well-funded account.
+        if self.api_key:
+            raise wallet_only("get_balance")
         """
         Get USDC balance on Base network.
 
@@ -2580,31 +2658,44 @@ class AsyncLLMClient:
         """
         from .wallet import load_wallet
 
+        # Account rail first, and before any wallet variable is read: an API
+        # key is a complete credential on its own, so demanding a private key
+        # alongside it would make every API-key user invent a wallet they
+        # never use. See apikey.py for the precedence rule.
+        api_key = resolve_api_key(private_key)
         key = (
-            private_key
-            or os.environ.get("BLOCKRUN_WALLET_KEY")
-            or os.environ.get("BASE_CHAIN_WALLET_KEY")
-            or load_wallet()  # Loads from ~/.blockrun/.session
-        )
-        if not key:
-            raise ValueError(
-                "No wallet configured. Either:\n"
-                "  1. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  2. Pass private_key to AsyncLLMClient()\n"
-                "  3. For agent use: call setup_agent_wallet() first"
+            None
+            if api_key
+            else (
+                private_key
+                or os.environ.get("BLOCKRUN_WALLET_KEY")
+                or os.environ.get("BASE_CHAIN_WALLET_KEY")
+                or load_wallet()  # Loads from ~/.blockrun/.session
             )
+        )
+        if not api_key and not key:
+            raise missing_credential_error()
 
         # Normalize private key format (add 0x prefix if missing)
         if key and not key.startswith("0x"):
             key = "0x" + key
 
         # Validate private key format
-        validate_private_key(key)
+        if key:
+            validate_private_key(key)
 
-        self.account = Account.from_key(key)
+        self.api_key = api_key
+        # No wallet on the account rail: nothing is signed locally.
+        self.account = Account.from_key(key) if key else None
 
         # Validate and set API URL
-        api_url_raw = api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL
+        # BLOCKRUN_API_URL names an x402 gateway; an API-key client must not
+        # follow it and hand the key to a host set up for another rail.
+        api_url_raw = (
+            api_key_base_url(api_url)
+            if api_key
+            else (api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL)
+        )
         validate_api_url(api_url_raw)
         self.api_url = api_url_raw.rstrip("/")
 
@@ -2616,6 +2707,7 @@ class AsyncLLMClient:
         # high-concurrency deployments don't hit pool exhaustion before hitting
         # any upstream rate limit.
         self._client = httpx.AsyncClient(
+            headers=auth_headers(api_key),
             timeout=timeout,
             limits=httpx.Limits(max_connections=200, max_keepalive_connections=50),
         )
@@ -3036,6 +3128,9 @@ class AsyncLLMClient:
                     return
                 await resp1.aread()
                 if resp1.status_code == 402:
+                    # Account rail: a 402 is the account being out of credit, not a
+                    # challenge to sign. Nothing here can sign, so say so plainly.
+                    raise_for_api_key_402(resp1, self.api_key)
                     payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
                     break
                 if resp1.status_code in statuses_5xx and attempt < len(backoffs):
@@ -3094,6 +3189,9 @@ class AsyncLLMClient:
                     return
                 await resp2.aread()
                 if resp2.status_code == 402:
+                    # Account rail: a 402 is the account being out of credit, not a
+                    # challenge to sign. Nothing here can sign, so say so plainly.
+                    raise_for_api_key_402(resp2, self.api_key)
                     raise PaymentError("Payment was rejected. Check your wallet balance.")
                 if resp2.status_code in statuses_5xx and attempt < len(backoffs):
                     import asyncio
@@ -3215,6 +3313,9 @@ class AsyncLLMClient:
             response = await self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             # See the sync path: past this point the payment is settled.
             try:
                 return await self._handle_payment_and_retry(url, body, response)
@@ -3319,6 +3420,9 @@ class AsyncLLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
         if retry_response.status_code != 200:
@@ -3390,6 +3494,9 @@ class AsyncLLMClient:
             response = await self._client.post(url, json=body, headers=req_headers)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             try:
                 result = await self._handle_payment_and_retry_raw(url, body, response)
             except (httpx.HTTPError, APIError) as exc:
@@ -3479,6 +3586,9 @@ class AsyncLLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
         if retry_response.status_code != 200:
@@ -3521,6 +3631,9 @@ class AsyncLLMClient:
             response = await self._client.get(url, params=params, headers=req_headers)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             result = await self._handle_get_payment_and_retry(url, params, response)
             save_to_cache(
                 endpoint,
@@ -3603,6 +3716,9 @@ class AsyncLLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
         if retry_response.status_code != 200:
@@ -3951,7 +4067,20 @@ class AsyncLLMClient:
                 m["type"] = cats[0] if cats else "llm"
         return all_models
 
+    @property
+    def payment_mode(self) -> str:
+        """Which rail this client pays on: ``"apikey"`` or ``"wallet"``.
+
+        Worth checking once at startup when both a key and a wallet are
+        configured in the environment: it is the difference between
+        spending credit and spending USDC."""
+        return payment_mode(self)
+
     def get_wallet_address(self) -> str:
+        # No address on the account rail: payment comes from prepaid
+        # credit, so there is nothing to return but the empty string.
+        if self.api_key:
+            return ""
         """Get the wallet address."""
         return self.account.address
 
@@ -3996,6 +4125,11 @@ class AsyncLLMClient:
             pass
 
     async def get_balance(self) -> float:
+        # Returning 0 would be the worst available answer: it is
+        # indistinguishable from an empty wallet, and an agent gating on it
+        # would stop calling a well-funded account.
+        if self.api_key:
+            raise wallet_only("get_balance")
         """
         Get USDC balance on Base network.
 

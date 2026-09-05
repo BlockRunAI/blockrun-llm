@@ -2,6 +2,72 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.15.0 — 2026-09-05
+
+### Added
+- **A BlockRun API key works everywhere a wallet key does.** Every paid path in
+  this SDK assumed x402: a 402 challenge, a locally signed payment, a retry.
+  That made a wallet the price of admission, which is a non-starter for a team
+  whose finance function cannot hold USDC and for any CI runner that should not
+  carry a signing key. A key from [user.blockrun.ai](https://user.blockrun.ai)
+  now works in the same place. It is not a new client type and not a new
+  constructor: the `private_key` parameter every client already takes now
+  accepts a `brk_` key, and `BLOCKRUN_API_KEY` is read when it is empty — so
+  fourteen client classes and every skill that calls them gained the rail
+  without a signature change. Requests go to `api.blockrun.ai` as
+  `Authorization: Bearer …`, draw prepaid credit, and never sign anything.
+  `client.payment_mode` reports which rail a client ended up on.
+
+  Four things had to change beyond attaching a header, and each was a silent
+  failure rather than an import error:
+
+  - `api.blockrun.ai` serves `/v1/...` at the root and answers `/api/v1/...`
+    with `wrong_host`, so the account rail needs its own base URL.
+  - `poll_url` is minted by the x402 gateway relative to *its* host, so it
+    arrives as `/api/v1/...`. Resolved unchanged it would have sent every async
+    job — video, slow images — polling a 404 until its budget ran out.
+  - On the account rail the async submit answers **202 on the first POST**.
+    `ImageClient` raised `API error: 202` and `VideoClient` raised
+    "Expected 402 on first POST", so both were broken for API keys before they
+    started.
+  - `setup_agent_wallet()` minted a keyfile unconditionally. With a key
+    configured there is nothing to sign with, so it now returns an API-key
+    client and writes nothing to disk — which is what lets an agent or a skill
+    call it on either rail.
+
+  `SolanaLLMClient` and `AsyncSolanaLLMClient` take the key too, and no longer
+  require the optional x402 SDK when one is present: on the account rail there
+  is no transfer to sign, so the chain stops being a question.
+
+- **`blockrun_llm.apikey`** holds the rail in one module — precedence,
+  `auth_headers`, poll-URL resolution, and the two refusals — so it is one
+  decision made once rather than fourteen copies that can drift.
+
+### Changed
+- **Wallet-only helpers refuse instead of answering wrongly.** `get_balance()`,
+  `get_balance_testnet()` and `onramp()` raise a `ValueError` naming the helper
+  and pointing at the dashboard. Returning `0` would have been the worst
+  available answer — indistinguishable from an empty wallet, and an agent
+  gating on it would stop calling a well-funded account.
+  `get_wallet_address()` returns `""`. A 402 on this rail is a credit refusal,
+  not a challenge, so it raises a `PaymentError` quoting the gateway's own
+  reason and the top-up page.
+- **One "nothing configured" message.** Every client raised its own wording
+  listing only wallet routes, which stopped being the whole truth the moment a
+  key became a credential. `missing_credential_error()` lists both.
+- **README covers both rails and puts Solana ahead of Base.** It opened with
+  "No API keys required", which is no longer true. Adds an API-key path to
+  Quick Start and a full *Option A* section (signup, key minting, top-up —
+  minimum $5, with the 5.5% + $0.30 fee charged once at purchase rather than
+  per call — precedence, and what changes). The environment table listed two
+  variables and omitted `SOLANA_WALLET_KEY` entirely; it now lists nine.
+
+Wallet users are unaffected: precedence is an explicit argument, then
+`BLOCKRUN_API_KEY`, then the wallet variables, so nothing changes until that
+variable is set. `BLOCKRUN_API_KEY_URL` is deliberately separate from
+`BLOCKRUN_API_URL` — the latter names an x402 gateway, and following it would
+send the key to a host configured for another rail.
+
 ## 1.14.0 — 2026-08-31
 
 ### Changed

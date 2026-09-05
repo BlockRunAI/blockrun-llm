@@ -35,6 +35,15 @@ import httpx
 from dotenv import load_dotenv
 from eth_account import Account
 
+from .apikey import (
+    api_key_base_url,
+    auth_headers,
+    missing_credential_error,
+    payment_mode,
+    raise_for_api_key_402,
+    resolve_api_key,
+    resolve_poll_url,
+)
 from .tx_log import paid_request_error_prefix
 from .types import APIError, ImageResponse, PaymentError
 from .validation import (
@@ -92,36 +101,48 @@ class ImageClient:
         # Get private key from param, environment, or ~/.blockrun/.session file
         from .wallet import load_wallet
 
+        # Account rail first, and before any wallet variable is read: an API
+        # key is a complete credential on its own, so demanding a private key
+        # alongside it would make every API-key user invent a wallet they
+        # never use. See apikey.py for the precedence rule.
+        api_key = resolve_api_key(private_key)
         key = (
-            private_key
-            or os.environ.get("BLOCKRUN_WALLET_KEY")
-            or os.environ.get("BASE_CHAIN_WALLET_KEY")
-            or load_wallet()  # Loads from ~/.blockrun/.session
-        )
-        if not key:
-            raise ValueError(
-                "Private key required. Either:\n"
-                "  1. Pass private_key parameter\n"
-                "  2. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  3. Place key in ~/.blockrun/.session\n"
-                "NOTE: Your key never leaves your machine - only signatures are sent."
+            None
+            if api_key
+            else (
+                private_key
+                or os.environ.get("BLOCKRUN_WALLET_KEY")
+                or os.environ.get("BASE_CHAIN_WALLET_KEY")
+                or load_wallet()  # Loads from ~/.blockrun/.session
             )
+        )
+        if not api_key and not key:
+            raise missing_credential_error()
 
         # Validate private key format
-        validate_private_key(key)
+        if key:
+            validate_private_key(key)
 
         # Initialize wallet account (key stays local, never transmitted)
-        self.account = Account.from_key(key)
+        self.api_key = api_key
+        # No wallet on the account rail: nothing is signed locally.
+        self.account = Account.from_key(key) if key else None
 
         # Validate and set API URL
-        api_url_raw = api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL
+        # BLOCKRUN_API_URL names an x402 gateway; an API-key client must not
+        # follow it and hand the key to a host set up for another rail.
+        api_url_raw = (
+            api_key_base_url(api_url)
+            if api_key
+            else (api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL)
+        )
         validate_api_url(api_url_raw)
         self.api_url = api_url_raw.rstrip("/")
 
         self.timeout = timeout
 
         # HTTP client
-        self._client = httpx.Client(timeout=timeout)
+        self._client = httpx.Client(headers=auth_headers(api_key), timeout=timeout)
 
     def generate(
         self,
@@ -275,7 +296,17 @@ class ImageClient:
 
         # Handle 402 Payment Required
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             return self._handle_payment_and_retry(url, body, response)
+
+        # Account rail: the key already paid, so a slow model returns its async
+        # envelope on the FIRST post. The wallet rail only ever sees a 202 after
+        # the signed retry, so without this branch every slow model raised
+        # "API error: 202" for API-key callers.
+        if self.api_key and response.status_code == 202:
+            return self._poll_until_completed(response, None)
 
         # Handle other errors
         if response.status_code != 200:
@@ -352,6 +383,9 @@ class ImageClient:
 
         # Check for errors
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise build_payment_rejected_error(retry_response)
 
         if retry_response.status_code == 200:
@@ -382,13 +416,12 @@ class ImageClient:
         """
         if url.startswith(("http://", "https://")):
             return url
-        base = self.api_url.removesuffix("/api")
-        return f"{base}{url}"
+        return resolve_poll_url(url, self.api_url, self.api_key)
 
     def _poll_until_completed(
         self,
         submit_resp: httpx.Response,
-        payment_payload: str,
+        payment_payload: str | None,
     ) -> ImageResponse:
         """Poll the gateway's ``poll_url`` with the same PAYMENT-SIGNATURE
         until the upstream returns the finished image.
@@ -413,7 +446,9 @@ class ImageClient:
             )
 
         poll_url = self._absolute_url(poll_url_rel)
-        poll_headers = {"PAYMENT-SIGNATURE": payment_payload}
+        # A signature exists only on the wallet rail; the key rides on the
+        # client's default headers.
+        poll_headers = {"PAYMENT-SIGNATURE": payment_payload} if payment_payload else {}
         deadline = _time.monotonic() + self.IMAGE_POLL_BUDGET_SECONDS
         last_status = submit_data.get("status", "queued")
 
@@ -428,6 +463,9 @@ class ImageClient:
             last_status = poll_data.get("status", last_status)
 
             if poll_resp.status_code == 402:
+                # Account rail: a 402 is the account being out of credit, not a
+                # challenge to sign. Nothing here can sign, so say so plainly.
+                raise_for_api_key_402(poll_resp, self.api_key)
                 # Settlement failed on this poll — surface the gateway reason.
                 raise build_payment_rejected_error(poll_resp)
 
@@ -468,7 +506,20 @@ class ImageClient:
             {"id": job_id, "last_status": last_status},
         )
 
+    @property
+    def payment_mode(self) -> str:
+        """Which rail this client pays on: ``"apikey"`` or ``"wallet"``.
+
+        Worth checking once at startup when both a key and a wallet are
+        configured in the environment: it is the difference between
+        spending credit and spending USDC."""
+        return payment_mode(self)
+
     def get_wallet_address(self) -> str:
+        # No address on the account rail: payment comes from prepaid
+        # credit, so there is nothing to return but the empty string.
+        if self.api_key:
+            return ""
         """Get the wallet address being used for payments."""
         return self.account.address
 

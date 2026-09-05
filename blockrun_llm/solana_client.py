@@ -29,6 +29,16 @@ from typing import Any
 import httpx
 from typing_extensions import Self
 
+from .apikey import (
+    api_key_base_url,
+    auth_headers,
+    missing_credential_error,
+    payment_mode,
+    raise_for_api_key_402,
+    resolve_api_key,
+    wallet_only,
+)
+
 # Shared with the Base client: signing is settlement on either chain, so the
 # "already paid, do not retry on another model" tag has to mean the same thing
 # in both fallback chains. client.py does not import this module, so there is
@@ -608,7 +618,13 @@ class SolanaLLMClient:
         the request, response, USD cost, and the on-chain settlement
         signature returned by the facilitator.
         """
-        if not _HAS_X402:
+        # An API key answers the chain question rather than being answered by
+        # it: api.blockrun.ai settles from credit, so there is no Solana
+        # transfer to sign, no wallet to load, and no reason to require the
+        # x402 SDK at all. Checked before the import guard for exactly that
+        # reason.
+        api_key = resolve_api_key(private_key)
+        if not api_key and not _HAS_X402:
             raise ImportError(
                 "Solana payment requires the x402 SDK. "
                 "Install with: pip install blockrun-llm[solana]"
@@ -616,19 +632,26 @@ class SolanaLLMClient:
         from .solana_wallet import load_solana_wallet
 
         key = (
-            private_key
-            or os.environ.get("SOLANA_WALLET_KEY")
-            or load_solana_wallet()  # disk: newest ~/.*/solana-wallet.json, else ~/.blockrun/.solana-session
-        )
-        if not key:
-            raise ValueError(
-                "Private key required. Pass private_key, set SOLANA_WALLET_KEY, "
-                "or have a Solana wallet on disk "
-                "(~/.<provider>/solana-wallet.json or ~/.blockrun/.solana-session)."
+            None
+            if api_key
+            else (
+                private_key
+                or os.environ.get("SOLANA_WALLET_KEY")
+                or load_solana_wallet()  # disk: newest ~/.*/solana-wallet.json, else ~/.blockrun/.solana-session
             )
+        )
+        if not api_key and not key:
+            raise missing_credential_error(
+                extra="Set SOLANA_WALLET_KEY, or keep a Solana wallet on disk "
+                "(~/.<provider>/solana-wallet.json or ~/.blockrun/.solana-session)"
+            )
+        self.api_key = api_key
         self._private_key = key
-        validate_api_url(api_url)
-        self._api_url = api_url.rstrip("/")
+        if api_key:
+            self._api_url = api_key_base_url(None)
+        else:
+            validate_api_url(api_url)
+            self._api_url = api_url.rstrip("/")
         # Model pricing cache for smart routing
         self._model_pricing_cache: dict[str, dict[str, float]] | None = None
 
@@ -642,7 +665,7 @@ class SolanaLLMClient:
         self._search_timeout = search_timeout
         # httpx.Client carries the chat baseline as its default; image /
         # search / per-call overrides are applied per request below.
-        self._client = httpx.Client(timeout=timeout)
+        self._client = httpx.Client(timeout=timeout, headers=auth_headers(api_key))
         self._session_total_usd = 0.0
         # Opt-in spend limits. None (the default) means unlimited, which is the
         # behavior every release before 1.9.0 had: every 402 quote was signed
@@ -723,7 +746,20 @@ class SolanaLLMClient:
         if tx_hash and isinstance(data, dict) and not data.get("txHash"):
             data["txHash"] = tx_hash
 
+    @property
+    def payment_mode(self) -> str:
+        """Which rail this client pays on: ``"apikey"`` or ``"wallet"``.
+
+        Worth checking once at startup when both a key and a wallet are
+        configured in the environment: it is the difference between
+        spending credit and spending USDC."""
+        return payment_mode(self)
+
     def get_wallet_address(self) -> str:
+        # No address on the account rail: payment comes from prepaid
+        # credit, so there is nothing to return but the empty string.
+        if self.api_key:
+            return ""
         if not self._address:
             self._address = get_solana_public_key(self._private_key)
         return self._address
@@ -732,6 +768,11 @@ class SolanaLLMClient:
         return "sol.blockrun.ai" in self._api_url
 
     def get_balance(self) -> float:
+        # Returning 0 would be the worst available answer: it is
+        # indistinguishable from an empty wallet, and an agent gating on it
+        # would stop calling a well-funded account.
+        if self.api_key:
+            raise wallet_only("get_balance")
         """Get USDC balance on Solana (matches LLMClient.get_balance() API)."""
         from .solana_wallet import get_solana_usdc_balance
 
@@ -1237,6 +1278,9 @@ class SolanaLLMClient:
                     return
                 resp1.read()
                 if resp1.status_code == 402:
+                    # Account rail: a 402 is the account being out of credit, not a
+                    # challenge to sign. Nothing here can sign, so say so plainly.
+                    raise_for_api_key_402(resp1, self.api_key)
                     payment_headers, cost_usd = self._sign_payment_from_response(resp1)
                     break
                 if resp1.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
@@ -1265,6 +1309,9 @@ class SolanaLLMClient:
                         return
                     resp2.read()
                     if resp2.status_code == 402:
+                        # Account rail: a 402 is the account being out of credit, not a
+                        # challenge to sign. Nothing here can sign, so say so plainly.
+                        raise_for_api_key_402(resp2, self.api_key)
                         raise build_payment_rejected_error(resp2)
                     if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
                         import time
@@ -1467,6 +1514,9 @@ class SolanaLLMClient:
             response = self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             # Past this point the SPL USDC transfer has been signed. Tag
             # anything that escapes so no fallback chain can buy a retry.
             try:
@@ -1528,6 +1578,9 @@ class SolanaLLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise build_payment_rejected_error(retry_response)
 
         if not retry_response.is_success:
@@ -1613,6 +1666,9 @@ class SolanaLLMClient:
             response = self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             # Past this point the SPL USDC transfer has been signed. Tag
             # anything that escapes so no fallback chain can buy a retry.
             try:
@@ -1686,6 +1742,9 @@ class SolanaLLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise build_payment_rejected_error(retry_response)
 
         if not retry_response.is_success:
@@ -1760,6 +1819,9 @@ class SolanaLLMClient:
             response = self._client.get(url, params=params, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             result = self._handle_get_payment_and_retry(url, params, response, timeout=eff_timeout)
             save_to_cache(
                 endpoint,
@@ -1822,6 +1884,9 @@ class SolanaLLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise build_payment_rejected_error(retry_response)
 
         if not retry_response.is_success:
@@ -1970,6 +2035,9 @@ class SolanaLLMClient:
             )
 
         if submit_resp.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(submit_resp, self.api_key)
             raise build_payment_rejected_error(submit_resp)
 
         if submit_resp.status_code == 200:
@@ -2063,6 +2131,9 @@ class SolanaLLMClient:
             last_status = poll_data.get("status", last_status)
 
             if poll_resp.status_code == 402:
+                # Account rail: a 402 is the account being out of credit, not a
+                # challenge to sign. Nothing here can sign, so say so plainly.
+                raise_for_api_key_402(poll_resp, self.api_key)
                 # Mid-poll 402 = settlement of the signed payment failed. For
                 # long jobs this is almost always a stale blockhash: the payment
                 # was signed at submit time, but the on-chain settlement only
@@ -3236,7 +3307,13 @@ class AsyncSolanaLLMClient:
         fallback for ``rpc_url`` / ``rpc_headers`` — see
         :func:`_resolve_rpc_config`. ``transaction_log`` works the same way
         — opt-in per-call log to a project folder (default ``./log/``)."""
-        if not _HAS_X402:
+        # An API key answers the chain question rather than being answered by
+        # it: api.blockrun.ai settles from credit, so there is no Solana
+        # transfer to sign, no wallet to load, and no reason to require the
+        # x402 SDK at all. Checked before the import guard for exactly that
+        # reason.
+        api_key = resolve_api_key(private_key)
+        if not api_key and not _HAS_X402:
             raise ImportError(
                 "Solana payment requires the x402 SDK. "
                 "Install with: pip install blockrun-llm[solana]"
@@ -3244,19 +3321,26 @@ class AsyncSolanaLLMClient:
         from .solana_wallet import load_solana_wallet
 
         key = (
-            private_key
-            or os.environ.get("SOLANA_WALLET_KEY")
-            or load_solana_wallet()  # disk: newest ~/.*/solana-wallet.json, else ~/.blockrun/.solana-session
-        )
-        if not key:
-            raise ValueError(
-                "Private key required. Pass private_key, set SOLANA_WALLET_KEY, "
-                "or have a Solana wallet on disk "
-                "(~/.<provider>/solana-wallet.json or ~/.blockrun/.solana-session)."
+            None
+            if api_key
+            else (
+                private_key
+                or os.environ.get("SOLANA_WALLET_KEY")
+                or load_solana_wallet()  # disk: newest ~/.*/solana-wallet.json, else ~/.blockrun/.solana-session
             )
+        )
+        if not api_key and not key:
+            raise missing_credential_error(
+                extra="Set SOLANA_WALLET_KEY, or keep a Solana wallet on disk "
+                "(~/.<provider>/solana-wallet.json or ~/.blockrun/.solana-session)"
+            )
+        self.api_key = api_key
         self._private_key = key
-        validate_api_url(api_url)
-        self._api_url = api_url.rstrip("/")
+        if api_key:
+            self._api_url = api_key_base_url(None)
+        else:
+            validate_api_url(api_url)
+            self._api_url = api_url.rstrip("/")
         # Model pricing cache for smart routing
         self._model_pricing_cache: dict[str, dict[str, float]] | None = None
 
@@ -3267,7 +3351,7 @@ class AsyncSolanaLLMClient:
         self._timeout = timeout
         self._image_timeout = image_timeout
         self._search_timeout = search_timeout
-        self._client = httpx.AsyncClient(timeout=timeout)
+        self._client = httpx.AsyncClient(timeout=timeout, headers=auth_headers(api_key))
         self._session_total_usd = 0.0
         # Opt-in spend limits. None (the default) means unlimited, which is the
         # behavior every release before 1.9.0 had: every 402 quote was signed
@@ -3382,7 +3466,20 @@ class AsyncSolanaLLMClient:
     # Identity / state
     # ------------------------------------------------------------------
 
+    @property
+    def payment_mode(self) -> str:
+        """Which rail this client pays on: ``"apikey"`` or ``"wallet"``.
+
+        Worth checking once at startup when both a key and a wallet are
+        configured in the environment: it is the difference between
+        spending credit and spending USDC."""
+        return payment_mode(self)
+
     def get_wallet_address(self) -> str:
+        # No address on the account rail: payment comes from prepaid
+        # credit, so there is nothing to return but the empty string.
+        if self.api_key:
+            return ""
         if not self._address:
             self._address = get_solana_public_key(self._private_key)
         return self._address
@@ -3764,6 +3861,9 @@ class AsyncSolanaLLMClient:
                     return
                 await resp1.aread()
                 if resp1.status_code == 402:
+                    # Account rail: a 402 is the account being out of credit, not a
+                    # challenge to sign. Nothing here can sign, so say so plainly.
+                    raise_for_api_key_402(resp1, self.api_key)
                     payment_headers, cost_usd = await self._sign_payment_from_response(resp1)
                     break
                 if resp1.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
@@ -3793,6 +3893,9 @@ class AsyncSolanaLLMClient:
                         return
                     await resp2.aread()
                     if resp2.status_code == 402:
+                        # Account rail: a 402 is the account being out of credit, not a
+                        # challenge to sign. Nothing here can sign, so say so plainly.
+                        raise_for_api_key_402(resp2, self.api_key)
                         raise build_payment_rejected_error(resp2)
                     if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
                         import asyncio
@@ -3962,6 +4065,9 @@ class AsyncSolanaLLMClient:
             response = await self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             # Past this point the SPL USDC transfer has been signed. Tag
             # anything that escapes so no fallback chain can buy a retry.
             try:
@@ -4006,6 +4112,9 @@ class AsyncSolanaLLMClient:
             )
 
         if retry_response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(retry_response, self.api_key)
             raise build_payment_rejected_error(retry_response)
         if not retry_response.is_success:
             try:
@@ -4083,6 +4192,9 @@ class AsyncSolanaLLMClient:
             response = await self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             payment_headers, cost_usd = await self._sign_payment_from_response(response)
             retry_response = await self._client.post(
                 url, json=body, headers=payment_headers, timeout=eff_timeout
@@ -4177,6 +4289,9 @@ class AsyncSolanaLLMClient:
             )
 
         if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
             payment_headers, cost_usd = await self._sign_payment_from_response(response)
             retry_response = await self._client.get(
                 url, params=params, headers=payment_headers, timeout=eff_timeout
@@ -4256,6 +4371,11 @@ class AsyncSolanaLLMClient:
     # ── Balance ─────────────────────────────────────────────────────────────
 
     async def get_balance(self) -> float:
+        # Returning 0 would be the worst available answer: it is
+        # indistinguishable from an empty wallet, and an agent gating on it
+        # would stop calling a well-funded account.
+        if self.api_key:
+            raise wallet_only("get_balance")
         """Get USDC balance on Solana (async; matches the sync client API).
 
         The underlying RPC read is synchronous, so it runs in a worker thread
@@ -4879,6 +4999,9 @@ class AsyncSolanaLLMClient:
             )
 
         if submit_resp.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(submit_resp, self.api_key)
             raise build_payment_rejected_error(submit_resp)
 
         if submit_resp.status_code == 200:
@@ -4964,6 +5087,9 @@ class AsyncSolanaLLMClient:
             last_status = poll_data.get("status", last_status)
 
             if poll_resp.status_code == 402:
+                # Account rail: a 402 is the account being out of credit, not a
+                # challenge to sign. Nothing here can sign, so say so plainly.
+                raise_for_api_key_402(poll_resp, self.api_key)
                 # Mid-poll 402 = settlement failed, almost always a stale
                 # blockhash (the payment was signed at submit time but only
                 # settles when the job completes; by then the signed tx's

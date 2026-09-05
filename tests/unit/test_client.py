@@ -28,7 +28,7 @@ class TestLLMClientInit:
         # Mock load_wallet to return None (no session file)
         monkeypatch.setattr("blockrun_llm.wallet.load_wallet", lambda: None)
         # Should raise ValueError with helpful message
-        with pytest.raises(ValueError, match="No wallet configured"):
+        with pytest.raises(ValueError, match="No credential configured"):
             LLMClient(private_key=None)
 
     def test_init_invalid_key_format(self):
