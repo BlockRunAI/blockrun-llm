@@ -36,6 +36,7 @@ from .apikey import (
     payment_mode,
     raise_for_api_key_402,
     resolve_api_key,
+    resolve_poll_url,
     wallet_only,
 )
 
@@ -688,6 +689,13 @@ class SolanaLLMClient:
         # metadata the shared JSON-only helper would otherwise drop. Read it
         # immediately after the helper returns (no intervening await).
         self._last_raw_headers: httpx.Headers | None = None
+
+        # Account calls need neither an x402 client nor a local signer. Keep
+        # all shared request/receipt state above this branch initialized.
+        if api_key:
+            self._x402_client = None
+            self._payment_lock = threading.Lock()
+            return
 
         # Initialize x402 SDK client for Solana payment signing.
         self._x402_client = x402ClientSync()
@@ -1916,6 +1924,12 @@ class SolanaLLMClient:
         configured ``api_url`` already includes the trailing ``/api`` so
         we strip it once to avoid ``/api/api/...``.
         """
+        if self.api_key:
+            # api.blockrun.ai serves these routes at /v1/... and answers
+            # /api/v1/... with wrong_host, so the gateway-minted prefix has to
+            # come off. Shared with the Base clients, which also pins the
+            # Authorization header to the gateway's own origin.
+            return resolve_poll_url(url, self._api_url, self.api_key)
         base = self._api_url.removesuffix("/api")
         if url.startswith(("http://", "https://")):
             # The poll loop sends (and re-signs) the wallet's PAYMENT-SIGNATURE
@@ -1992,6 +2006,11 @@ class SolanaLLMClient:
         if probe.status_code in (502, 503):
             _time.sleep(1)
             probe = self._client.post(url, json=body, headers=probe_headers, timeout=eff_timeout)
+
+        # Account rail: a 402 here is "out of credit", not a challenge to sign.
+        # Checked before the x402 branch below, which has no signer to reach for
+        # and, without the optional SDK installed, no decoder either.
+        raise_for_api_key_402(probe, self.api_key)
 
         if probe.status_code != 402:
             if not probe.is_success:
@@ -3375,6 +3394,11 @@ class AsyncSolanaLLMClient:
         # immediately after the helper returns (no intervening await).
         self._last_raw_headers: httpx.Headers | None = None
 
+        if api_key:
+            self._x402_client = None
+            self._payment_lock = None
+            return
+
         # Async x402 client + same SVM signer the sync class uses.
         from x402 import x402Client  # local import to keep optional dep clean
 
@@ -4473,6 +4497,12 @@ class AsyncSolanaLLMClient:
     def _absolute_url(self, url: str) -> str:
         """Resolve a server-supplied relative ``poll_url`` against the API host
         (``api_url`` already includes the trailing ``/api`` — strip it once)."""
+        if self.api_key:
+            # api.blockrun.ai serves these routes at /v1/... and answers
+            # /api/v1/... with wrong_host, so the gateway-minted prefix has to
+            # come off. Shared with the Base clients, which also pins the
+            # Authorization header to the gateway's own origin.
+            return resolve_poll_url(url, self._api_url, self.api_key)
         base = self._api_url.removesuffix("/api")
         if url.startswith(("http://", "https://")):
             # The poll loop sends (and re-signs) the wallet's PAYMENT-SIGNATURE
@@ -4955,6 +4985,11 @@ class AsyncSolanaLLMClient:
             probe = await self._client.post(
                 url, json=body, headers=probe_headers, timeout=eff_timeout
             )
+
+        # Account rail: a 402 here is "out of credit", not a challenge to sign.
+        # Checked before the x402 branch below, which has no signer to reach for
+        # and, without the optional SDK installed, no decoder either.
+        raise_for_api_key_402(probe, self.api_key)
 
         if probe.status_code != 402:
             if not probe.is_success:

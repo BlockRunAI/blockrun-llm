@@ -1845,3 +1845,32 @@ Yes. Install with `pip install blockrun-llm[solana]` and use `SolanaLLMClient` i
 ## License
 
 MIT
+
+### Changing payment methods safely
+
+Register at [user.blockrun.ai](https://user.blockrun.ai), add credit in
+[Credits](https://user.blockrun.ai/dashboard/credits), and create a key in
+[API keys](https://user.blockrun.ai/dashboard/keys). Set `BLOCKRUN_API_KEY`
+or pass the key as the client's credential. Check activity and actual charges
+in the dashboard; local cost summaries may omit charges without a gateway receipt.
+
+An explicit wallet credential chooses wallet payments even when `BLOCKRUN_API_KEY`
+is set. Choose the Solana wallet client for Solana, or the Base wallet client for
+Base. A `BLOCKRUN_API_KEY` set to something that is not a `brk_` key fails instead
+of silently selecting a wallet and spending USDC you meant to keep. Blank counts
+as unset, so `BLOCKRUN_API_KEY=` in a `.env` file or an unpopulated CI secret
+still falls back to the wallet. Create a new client when changing credentials;
+an existing client keeps its original account.
+
+The optional `AnthropicClient` also accepts a BlockRun API key as its credential
+or through `BLOCKRUN_API_KEY` (`pip install 'blockrun-llm[anthropic]'`). Automatic
+retries are disabled by default on **both** payment rails, because a failed
+response may follow a billable request. It matters most on the wallet rail, where
+the x402 transport signs a fresh payment for every 402 it sees: at the Anthropic
+SDK's own default of 2 retries, one `messages.create()` that 5xxs after the
+gateway settled would sign and settle three separate on-chain transfers. Pass
+`max_retries=` explicitly to opt back in.
+
+The optional integration currently supports Anthropic SDK **0.x**. The extra
+pins `<1` because Anthropic 1.x moved to a different HTTP transport; upgrading
+that dependency independently would break both account and wallet clients.

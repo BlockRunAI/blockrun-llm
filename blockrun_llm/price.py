@@ -102,7 +102,7 @@ class PriceClient:
                 or load_wallet()
             )
         )
-        if not key and require_wallet:
+        if not api_key and not key and require_wallet:
             raise ValueError(
                 "Private key required for paid endpoints. Either:\n"
                 "  1. Pass private_key parameter\n"
@@ -111,11 +111,9 @@ class PriceClient:
                 "  4. Pass require_wallet=False if only using free endpoints."
             )
 
-        self.account = None
         if key:
-            if key:
-                validate_private_key(key)
-            self.api_key = api_key
+            validate_private_key(key)
+        self.api_key = api_key
         # No wallet on the account rail: nothing is signed locally.
         self.account = Account.from_key(key) if key else None
 

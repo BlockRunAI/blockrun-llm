@@ -41,7 +41,9 @@ dev = [
     "ruff==0.16.0",   # Pin version: an unpinned linter breaks CI with no code change
 ]
 anthropic = [
-    "anthropic>=0.40.0",
+    # Anthropic 1.x switched to httpx2; the x402 transport uses httpx.
+    # Keep the supported major until both payment modes are migrated together.
+    "anthropic>=0.40.0,<1",
 ]
 solana = [
     "x402[svm]>=2.0.0",

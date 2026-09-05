@@ -67,7 +67,8 @@ class TestPrecedence:
 
     def test_a_non_brk_env_value_is_not_a_key(self, monkeypatch):
         monkeypatch.setenv(ENV_API_KEY, "not-a-key")
-        assert resolve_api_key(None) is None
+        with pytest.raises(ValueError, match="BLOCKRUN_API_KEY"):
+            resolve_api_key(None)
 
 
 class TestClientConstruction:
@@ -133,11 +134,14 @@ class TestPollURL:
         got = resolve_poll_url("/api/v1/images/generations/job_1", "https://blockrun.ai/api", None)
         assert got == "https://blockrun.ai/api/v1/images/generations/job_1"
 
-    def test_absolute_url_is_left_alone(self):
-        assert (
-            resolve_poll_url("https://elsewhere.example/x", DEFAULT_API_KEY_URL, "brk_x")
-            == "https://elsewhere.example/x"
-        )
+    @pytest.mark.parametrize("url", ["https://elsewhere.example/x", "//elsewhere.example/x"])
+    def test_account_rejects_foreign_poll_origin(self, url):
+        with pytest.raises(ValueError, match="origin"):
+            resolve_poll_url(url, DEFAULT_API_KEY_URL, "brk_x")
+
+    def test_same_origin_signed_url_preserves_query(self):
+        url = DEFAULT_API_KEY_URL + "/v1/videos/generations/job?token=a%2Fb&signature=x"
+        assert resolve_poll_url(url, DEFAULT_API_KEY_URL, "brk_x") == url
 
 
 class TestRequests:
@@ -274,3 +278,39 @@ class TestSetupAgentWallet:
         assert client.payment_mode == PAYMENT_MODE_API_KEY
         assert client.get_wallet_address() == ""
         assert not (tmp_path / ".blockrun" / ".session").exists()
+
+
+@pytest.mark.parametrize("bad_key", ["not-a-key", "sk-openai-shaped", "0x" + "ab" * 32])
+def test_invalid_env_never_selects_a_wallet(monkeypatch, bad_key):
+    monkeypatch.setenv(ENV_API_KEY, bad_key)
+    monkeypatch.setenv("BLOCKRUN_WALLET_KEY", WALLET_KEY)
+    with pytest.raises(ValueError, match="BLOCKRUN_API_KEY"):
+        LLMClient()
+    # Explicit wallet selection remains available even with a broken env key.
+    with LLMClient(private_key=WALLET_KEY) as client:
+        assert client.payment_mode == PAYMENT_MODE_WALLET
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+def test_blank_env_is_unset_not_invalid(monkeypatch, blank):
+    """`BLOCKRUN_API_KEY=` is how a .env file, `docker -e VAR` and an
+    unpopulated CI secret all say "not set". Raising there would break wallet
+    users who never opted into the account rail at all."""
+    monkeypatch.setenv(ENV_API_KEY, blank)
+    monkeypatch.setenv("BLOCKRUN_WALLET_KEY", WALLET_KEY)
+    assert resolve_api_key(None) is None
+    with LLMClient() as client:
+        assert client.payment_mode == PAYMENT_MODE_WALLET
+        assert "authorization" not in client._client.headers
+
+
+def test_rotating_env_only_affects_new_clients(monkeypatch):
+    monkeypatch.setenv(ENV_API_KEY, API_KEY)
+    with LLMClient() as first:
+        monkeypatch.setenv(ENV_API_KEY, "brk_test_second")
+        with LLMClient() as second:
+            assert first._client.headers["authorization"] == f"Bearer {API_KEY}"
+            assert second._client.headers["authorization"] == "Bearer brk_test_second"
+        monkeypatch.delenv(ENV_API_KEY)
+        with LLMClient(private_key=WALLET_KEY) as wallet:
+            assert "authorization" not in wallet._client.headers

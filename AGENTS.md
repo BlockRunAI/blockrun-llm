@@ -4,12 +4,12 @@ Guidance for AI coding agents working with the BlockRun Python SDK.
 
 ## Project Overview
 
-**blockrun-llm** is a Python SDK for pay-per-request access to AI models (GPT, Claude, Gemini, DeepSeek, NVIDIA) via x402 micropayments on Base. **Includes 8 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M ctx), Nemotron Nano Omni (vision), Qwen3 Next + Coder, Llama 4 Maverick, Mistral Small 4, plus `gpt-oss-120b/20b` (hidden from `/v1/models` but direct calls still work). Accessible via `routing_profile="free"` or any `nvidia/*` model id.
+**blockrun-llm** is a Python SDK for pay-per-request access to AI models (GPT, Claude, Gemini, DeepSeek, NVIDIA) using API account credit or x402 wallets on Solana and Base. **Includes 8 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M ctx), Nemotron Nano Omni (vision), Qwen3 Next + Coder, Llama 4 Maverick, Mistral Small 4, plus `gpt-oss-120b/20b` (hidden from `/v1/models` but direct calls still work). Accessible via `routing_profile="free"` or any `nvidia/*` model id.
 
 **Package:** `blockrun-llm` (PyPI)
 **Python:** >=3.9
-**Network:** Base (Chain ID: 8453)
-**Payment:** USDC via x402 v2 (or $0 for `nvidia/*` free tier)
+**Networks:** Solana and Base (Chain ID: 8453)
+**Payment:** API account credit, or USDC via x402 v2; free models are also available.
 
 ## Repository Structure
 
@@ -65,7 +65,8 @@ mypy blockrun_llm/          # Type check
 ### Architecture
 - `LLMClient` - Synchronous client
 - `AsyncLLMClient` - Async client with context manager
-- All API calls go through x402 payment flow
+- Account API calls authenticate with a BlockRun key; wallet calls use x402.
+- A configured invalid API key is an error, never permission to use a wallet.
 
 ### Error Handling
 - `APIError` - General API errors
