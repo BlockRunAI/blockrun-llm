@@ -38,6 +38,15 @@ import httpx
 from dotenv import load_dotenv
 from eth_account import Account
 
+from .apikey import (
+    api_key_base_url,
+    auth_headers,
+    missing_credential_error,
+    payment_mode,
+    raise_for_api_key_402,
+    resolve_api_key,
+    resolve_poll_url,
+)
 from .types import APIError, PaymentError, VideoResponse
 from .validation import (
     sanitize_error_response,
@@ -110,30 +119,42 @@ class VideoClient:
         """
         from .wallet import load_wallet
 
+        # Account rail first, and before any wallet variable is read: an API
+        # key is a complete credential on its own, so demanding a private key
+        # alongside it would make every API-key user invent a wallet they
+        # never use. See apikey.py for the precedence rule.
+        api_key = resolve_api_key(private_key)
         key = (
-            private_key
-            or os.environ.get("BLOCKRUN_WALLET_KEY")
-            or os.environ.get("BASE_CHAIN_WALLET_KEY")
-            or load_wallet()
-        )
-        if not key:
-            raise ValueError(
-                "Private key required. Either:\n"
-                "  1. Pass private_key parameter\n"
-                "  2. Set BLOCKRUN_WALLET_KEY environment variable\n"
-                "  3. Place key in ~/.blockrun/.session\n"
-                "NOTE: Your key never leaves your machine - only signatures are sent."
+            None
+            if api_key
+            else (
+                private_key
+                or os.environ.get("BLOCKRUN_WALLET_KEY")
+                or os.environ.get("BASE_CHAIN_WALLET_KEY")
+                or load_wallet()
             )
+        )
+        if not api_key and not key:
+            raise missing_credential_error()
 
-        validate_private_key(key)
-        self.account = Account.from_key(key)
+        if key:
+            validate_private_key(key)
+        self.api_key = api_key
+        # No wallet on the account rail: nothing is signed locally.
+        self.account = Account.from_key(key) if key else None
 
-        api_url_raw = api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL
+        # BLOCKRUN_API_URL names an x402 gateway; an API-key client must not
+        # follow it and hand the key to a host set up for another rail.
+        api_url_raw = (
+            api_key_base_url(api_url)
+            if api_key
+            else (api_url or os.environ.get("BLOCKRUN_API_URL") or self.DEFAULT_API_URL)
+        )
         validate_api_url(api_url_raw)
         self.api_url = api_url_raw.rstrip("/")
 
         self.timeout = timeout
-        self._client = httpx.Client(timeout=timeout)
+        self._client = httpx.Client(headers=auth_headers(api_key), timeout=timeout)
 
     def generate(
         self,
@@ -352,26 +373,36 @@ class VideoClient:
             headers={"Content-Type": "application/json"},
         )
 
-        if resp402.status_code != 402:
-            self._raise_api_error(resp402, "Expected 402 on first POST")
+        if self.api_key:
+            # Account rail: the API key IS the payment, so the FIRST post already
+            # carries it and comes back with the async envelope. There is no 402
+            # to answer here — one means the account is out of credit.
+            raise_for_api_key_402(resp402, self.api_key)
+            if resp402.status_code not in (200, 202):
+                self._raise_api_error(resp402, "Submit failed")
+            payment_payload = None
+            submit_resp = resp402
+        else:
+            if resp402.status_code != 402:
+                self._raise_api_error(resp402, "Expected 402 on first POST")
 
-        payment_payload = self._sign_from_challenge(resp402, submit_url)
+            payment_payload = self._sign_from_challenge(resp402, submit_url)
 
-        # Step 2: submit job with payment -> 202 { id, poll_url }
-        submit_resp = self._client.post(
-            submit_url,
-            json=body,
-            headers={
-                "Content-Type": "application/json",
-                "PAYMENT-SIGNATURE": payment_payload,
-            },
-        )
+            # Step 2: submit job with payment -> 202 { id, poll_url }
+            submit_resp = self._client.post(
+                submit_url,
+                json=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "PAYMENT-SIGNATURE": payment_payload,
+                },
+            )
 
-        if submit_resp.status_code == 402:
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            if submit_resp.status_code == 402:
+                raise PaymentError("Payment was rejected. Check your wallet balance.")
 
-        if submit_resp.status_code not in (200, 202):
-            self._raise_api_error(submit_resp, "Submit failed")
+            if submit_resp.status_code not in (200, 202):
+                self._raise_api_error(submit_resp, "Submit failed")
 
         submit_data = submit_resp.json()
         job_id = submit_data.get("id")
@@ -399,7 +430,7 @@ class VideoClient:
 
             poll_resp = self._client.get(
                 poll_url,
-                headers={"PAYMENT-SIGNATURE": payment_payload},
+                headers={"PAYMENT-SIGNATURE": payment_payload} if payment_payload else {},
             )
 
             try:
@@ -433,6 +464,9 @@ class VideoClient:
                 return VideoResponse(**poll_data)
 
             if poll_resp.status_code == 402:
+                # Account rail: a 402 is the account being out of credit, not a
+                # challenge to sign. Nothing here can sign, so say so plainly.
+                raise_for_api_key_402(poll_resp, self.api_key)
                 # Mid-poll 402 = the signed authorization expired (600s
                 # window) on a budget longer than that. Re-challenge +
                 # re-sign and keep going. A fresh signature that 402s again
@@ -492,8 +526,7 @@ class VideoClient:
         if url.startswith(("http://", "https://")):
             return url
         # self.api_url already ends without '/'; poll_url starts with '/api/...'
-        base = self.api_url.removesuffix("/api")
-        return f"{base}{url}"
+        return resolve_poll_url(url, self.api_url, self.api_key)
 
     def _extract_payment_required(self, resp: httpx.Response) -> dict[str, Any]:
         header = resp.headers.get("payment-required")
@@ -519,7 +552,20 @@ class VideoClient:
             sanitize_error_response(error_body),
         )
 
+    @property
+    def payment_mode(self) -> str:
+        """Which rail this client pays on: ``"apikey"`` or ``"wallet"``.
+
+        Worth checking once at startup when both a key and a wallet are
+        configured in the environment: it is the difference between
+        spending credit and spending USDC."""
+        return payment_mode(self)
+
     def get_wallet_address(self) -> str:
+        # No address on the account rail: payment comes from prepaid
+        # credit, so there is nothing to return but the empty string.
+        if self.api_key:
+            return ""
         """Get the wallet address being used for payments."""
         return self.account.address
 

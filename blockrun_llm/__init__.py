@@ -57,6 +57,15 @@ Other Chains:
 from __future__ import annotations
 
 from .anthropic_client import AnthropicClient
+from .apikey import (
+    DEFAULT_API_KEY_URL,
+    ENV_API_KEY,
+    ENV_API_KEY_URL,
+    PAYMENT_MODE_API_KEY,
+    PAYMENT_MODE_WALLET,
+    is_api_key,
+    resolve_api_key,
+)
 from .cache import (
     clear_cache,
     export_cost_log_csv,
@@ -187,9 +196,14 @@ from .wallet import (
     create_wallet as generate_wallet,  # User-friendly alias
 )
 
-__version__ = "1.14.0"
+__version__ = "1.15.0"
 __all__ = [
+    "DEFAULT_API_KEY_URL",
+    "ENV_API_KEY",
+    "ENV_API_KEY_URL",
     "NETWORK_ALIASES",
+    "PAYMENT_MODE_API_KEY",
+    "PAYMENT_MODE_WALLET",
     "SUPPORTED_NETWORKS",
     "WALLET_DIR",
     "WALLET_FILE",
@@ -295,6 +309,7 @@ __all__ = [
     "get_wallet_address",
     "import_solana_wallet",
     "import_wallet",
+    "is_api_key",
     "list_discovered_solana_wallets",
     "list_discovered_wallets",
     "list_image_models",
@@ -304,6 +319,7 @@ __all__ = [
     "load_wallet",
     "open_solana_wallet_qr",
     "open_wallet_qr",
+    "resolve_api_key",
     "save_wallet_qr",
     "scan_solana_wallets",
     "scan_wallets",
