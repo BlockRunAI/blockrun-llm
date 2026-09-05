@@ -95,11 +95,25 @@ class ChatUsage(BaseModel):
 
     @property
     def reasoning_tokens(self) -> Optional[int]:
-        """Return the upstream reasoning-token breakdown when available."""
-        if not self.completion_tokens_details:
+        """Reasoning tokens the model spent, when upstream reports them.
+
+        Nested under ``completion_tokens_details`` in the OpenAI shape the
+        gateway forwards. The flat fallback matters because this class allows
+        extras: a payload carrying a top-level ``reasoning_tokens`` used to
+        reach callers through ``__getattr__``, and a property of the same name
+        takes precedence over that, so without the fallback this would answer
+        None for a number the payload demonstrably carried.
+
+        ``bool`` is excluded deliberately — it is an ``int`` subclass, and
+        ``True`` is not a token count.
+        """
+        detail = self.completion_tokens_details or {}
+        value = detail.get("reasoning_tokens")
+        if value is None:
+            value = (self.model_extra or {}).get("reasoning_tokens")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             return None
-        value = self.completion_tokens_details.get("reasoning_tokens")
-        return value if isinstance(value, int) and value >= 0 else None
+        return value
 
     class Config:
         extra = "allow"
