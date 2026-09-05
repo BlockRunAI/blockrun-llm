@@ -282,9 +282,12 @@ string describing why that model won.
 
 ## How Payment Works
 
-No API keys, no subscription. You hold USDC on Base in your own wallet, and
-**each request pays for itself** with an on-chain micropayment. There are two
-phases:
+**Account API:** set `BLOCKRUN_API_KEY` to pay from prepaid account credits,
+without a wallet. Manage credits and usage in the [account dashboard](https://user.blockrun.ai/dashboard).
+
+**Wallet x402:** pay per request with USDC on Solana (preferred for new wallets)
+or Base. A wallet signature authenticates each payment; no account API key is
+required. The following funding example uses Base:
 
 ### Phase 1 — Fund your wallet once (USDC on Base)
 
@@ -1767,10 +1770,10 @@ The `AnthropicClient` wraps `anthropic.Anthropic` with a custom httpx transport 
 ## Frequently Asked Questions
 
 ### What is blockrun-llm?
-blockrun-llm is a Python SDK that provides pay-per-request access to 43+ large language models from OpenAI, Anthropic, Google, DeepSeek, NVIDIA, ZAI, and more. It uses the x402 protocol for automatic USDC micropayments — no API keys, no subscriptions, no vendor lock-in.
+blockrun-llm is a Python SDK for BlockRun models, media, search and data APIs. Authenticate with a BlockRun account API key and use prepaid credits, or pay per request with USDC via x402 on Solana or Base. [Register and get started](https://user.blockrun.ai).
 
 ### How does payment work?
-When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
+With `BLOCKRUN_API_KEY`, calls use bearer authentication and account credits; no wallet is required. In wallet mode, the SDK signs the x402 payment locally and includes payment proof in the request. Wallet payments use USDC on Solana or Base.
 
 ### What is smart routing / Router Core?
 Router Core is BlockRun's built-in routing engine — shared with the TypeScript SDK and the gateway, so the same request routes the same way everywhere. It scores your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, drops every model that can't actually handle it (context, output length, tools, vision), then picks the cheapest capable one and keeps the rest as a fallback chain. Routing happens locally in under 1ms and makes no extra model call. It can save up to <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
