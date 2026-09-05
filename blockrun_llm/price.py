@@ -49,7 +49,14 @@ from .apikey import (
     resolve_api_key,
 )
 from .tx_log import paid_request_error_prefix
-from .types import APIError, PaymentError, PriceHistoryResponse, PricePoint, SymbolListResponse
+from .types import (
+    APIError,
+    PaymentError,
+    PriceHistoryResponse,
+    PricePoint,
+    SymbolListResponse,
+    retry_after_of,
+)
 from .validation import (
     sanitize_error_response,
     validate_api_url,
@@ -260,6 +267,7 @@ class PriceClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
         return response.json()
 
@@ -319,6 +327,7 @@ class PriceClient:
                 f"{paid_request_error_prefix(retry.headers)}: {retry.status_code}",
                 retry.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(retry),
             )
         return retry.json()
 

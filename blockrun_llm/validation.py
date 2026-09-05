@@ -12,7 +12,7 @@ This module provides validation functions to ensure:
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -622,3 +622,25 @@ def check_spend_limits(
             limit_usd=max_session_cost,
             scope="session",
         )
+
+
+def raise_api_error(resp: Any, prefix: str) -> NoReturn:
+    """Turn a failed HTTP response into an ``APIError``, keeping ``Retry-After``.
+
+    Three clients carried byte-identical private copies of this. One copy means
+    a change to how failures are reported — such as keeping the rate-limit
+    header — lands everywhere at once instead of in two places out of three.
+    """
+    # Local, like build_payment_rejected_error below: types.py is imported by
+    # every client, and importing it at module scope here would close a cycle.
+    from .types import APIError
+
+    try:
+        error_body = resp.json()
+    except Exception:
+        error_body = {"error": "Request failed"}
+    raise APIError.from_response(
+        resp,
+        f"{prefix}: HTTP {resp.status_code}",
+        sanitize_error_response(error_body),
+    )

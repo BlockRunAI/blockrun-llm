@@ -87,6 +87,7 @@ from .types import (
     SmartChatResponse,
     chunk_meta,
     chunk_usage_dict,
+    retry_after_of,
     stream_choice_content,
     stream_choice_finish_reason,
 )
@@ -161,6 +162,7 @@ def list_models(api_url: str | None = None) -> list[dict[str, Any]]:
                 f"Failed to list models: {response.status_code}",
                 response.status_code,
                 {},
+                retry_after=retry_after_of(response),
             )
         data = response.json()
         return data.get("data", []) if api_key else data.get("models", [])
@@ -183,6 +185,7 @@ def list_image_models(api_url: str | None = None) -> list[dict[str, Any]]:
                 f"Failed to list models: {response.status_code}",
                 response.status_code,
                 {},
+                retry_after=retry_after_of(response),
             )
         models = response.json().get("data", [])
     return [m for m in models if "image" in (m.get("categories") or [])]
@@ -1385,6 +1388,7 @@ class LLMClient:
             f"{prefix}: {response.status_code}",
             response.status_code,
             sanitize_error_response(error_body),
+            retry_after=retry_after_of(response),
         )
 
     def _request_with_payment(self, endpoint: str, body: dict[str, Any]) -> ChatResponse:
@@ -1433,6 +1437,7 @@ class LLMClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         # Parse successful response. A 200 on the first attempt means no payment
@@ -1548,6 +1553,7 @@ class LLMClient:
                 f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(retry_response),
             )
 
         # Parse response
@@ -1639,6 +1645,7 @@ class LLMClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         return response.json()
@@ -1728,6 +1735,7 @@ class LLMClient:
                 f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(retry_response),
             )
 
         self._session_calls += 1
@@ -1788,6 +1796,7 @@ class LLMClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         return response.json()
@@ -1874,6 +1883,7 @@ class LLMClient:
                 f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(retry_response),
             )
 
         self._session_calls += 1
@@ -2429,6 +2439,7 @@ class LLMClient:
                 f"Failed to list models: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         return response.json().get("data", [])
@@ -3332,6 +3343,7 @@ class AsyncLLMClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         # 200 on first attempt => no payment required (free / cached). Charge $0.
@@ -3434,6 +3446,7 @@ class AsyncLLMClient:
                 f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(retry_response),
             )
 
         # Extract cost and save locally
@@ -3521,6 +3534,7 @@ class AsyncLLMClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         return response.json()
@@ -3600,6 +3614,7 @@ class AsyncLLMClient:
                 f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(retry_response),
             )
 
         cost_usd = float(details.get("amount", 0)) / 1e6
@@ -3654,6 +3669,7 @@ class AsyncLLMClient:
                 f"API error: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         return response.json()
@@ -3730,6 +3746,7 @@ class AsyncLLMClient:
                 f"{paid_request_error_prefix(retry_response.headers)}: {retry_response.status_code}",
                 retry_response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(retry_response),
             )
 
         cost_usd = float(details.get("amount", 0)) / 1e6
@@ -4033,6 +4050,7 @@ class AsyncLLMClient:
                 f"Failed to list models: {response.status_code}",
                 response.status_code,
                 sanitize_error_response(error_body),
+                retry_after=retry_after_of(response),
             )
 
         return response.json().get("data", [])
