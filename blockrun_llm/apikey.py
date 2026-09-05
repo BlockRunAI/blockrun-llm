@@ -75,12 +75,20 @@ def resolve_api_key(credential: str | None) -> str | None:
     # must not be overridden by the environment.
     if credential and str(credential).strip():
         return None
-    if ENV_API_KEY not in os.environ:
+    # Blank is unset, not invalid. `BLOCKRUN_API_KEY=` in a .env file, a bare
+    # `docker -e BLOCKRUN_API_KEY`, and an unpopulated `${{ secrets.X }}` all
+    # land here as the empty string, and every one of them means "I am not on
+    # the account rail" — raising would break wallet users who never opted in.
+    # A non-blank value that is not a key is a different thing: someone typed a
+    # credential and got it wrong, and silently spending USDC instead of credit
+    # is the wrong way to tell them.
+    env = os.environ.get(ENV_API_KEY, "").strip()
+    if not env:
         return None
-    env = os.environ[ENV_API_KEY].strip()
     if not is_api_key(env):
         raise ValueError(
-            "Invalid BLOCKRUN_API_KEY. Correct or unset it, or explicitly pass a wallet key."
+            f"Invalid BLOCKRUN_API_KEY: expected a key starting with {API_KEY_PREFIX!r}. "
+            "Correct it, clear it, or explicitly pass a wallet key."
         )
     return env
 

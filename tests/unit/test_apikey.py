@@ -280,7 +280,7 @@ class TestSetupAgentWallet:
         assert not (tmp_path / ".blockrun" / ".session").exists()
 
 
-@pytest.mark.parametrize("bad_key", ["", "   ", "not-a-key"])
+@pytest.mark.parametrize("bad_key", ["not-a-key", "sk-openai-shaped", "0x" + "ab" * 32])
 def test_invalid_env_never_selects_a_wallet(monkeypatch, bad_key):
     monkeypatch.setenv(ENV_API_KEY, bad_key)
     monkeypatch.setenv("BLOCKRUN_WALLET_KEY", WALLET_KEY)
@@ -289,6 +289,19 @@ def test_invalid_env_never_selects_a_wallet(monkeypatch, bad_key):
     # Explicit wallet selection remains available even with a broken env key.
     with LLMClient(private_key=WALLET_KEY) as client:
         assert client.payment_mode == PAYMENT_MODE_WALLET
+
+
+@pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+def test_blank_env_is_unset_not_invalid(monkeypatch, blank):
+    """`BLOCKRUN_API_KEY=` is how a .env file, `docker -e VAR` and an
+    unpopulated CI secret all say "not set". Raising there would break wallet
+    users who never opted into the account rail at all."""
+    monkeypatch.setenv(ENV_API_KEY, blank)
+    monkeypatch.setenv("BLOCKRUN_WALLET_KEY", WALLET_KEY)
+    assert resolve_api_key(None) is None
+    with LLMClient() as client:
+        assert client.payment_mode == PAYMENT_MODE_WALLET
+        assert "authorization" not in client._client.headers
 
 
 def test_rotating_env_only_affects_new_clients(monkeypatch):

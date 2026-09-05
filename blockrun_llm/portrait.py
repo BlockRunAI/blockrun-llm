@@ -52,6 +52,7 @@ from .apikey import (
     payment_mode,
     raise_for_api_key_402,
     resolve_api_key,
+    wallet_only,
 )
 from .tx_log import paid_request_error_prefix
 from .types import (
@@ -200,9 +201,14 @@ class PortraitClient:
             PortraitList with the wallet address and each portrait's
             asset id, name, image url, and enrollment tx hash.
         """
+        # Keyed by wallet, so the account rail has no default to fall back on:
+        # say which argument is missing instead of an AttributeError on None.
+        if not wallet_address and self.account is None:
+            raise wallet_only("list_portraits")
         addr = wallet_address or self.account.address
         url = f"{self.api_url}/v1/wallet/{addr}/portraits"
         resp = self._client.get(url)
+        raise_for_api_key_402(resp, self.api_key)
         if resp.status_code == 429:
             try:
                 error_body = resp.json()

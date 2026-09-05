@@ -24,7 +24,12 @@ import httpx
 from dotenv import load_dotenv
 from eth_account import Account
 
-from .apikey import api_key_base_url, resolve_api_key
+from .apikey import (
+    PAYMENT_MODE_API_KEY,
+    PAYMENT_MODE_WALLET,
+    api_key_base_url,
+    resolve_api_key,
+)
 from .validation import validate_api_url, validate_private_key
 from .wallet import load_wallet
 from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
@@ -159,13 +164,20 @@ class AnthropicClient:
 
         # Resolve the payment method before reading or parsing a wallet.
         self.api_key = resolve_api_key(private_key)
-        self.payment_mode = "apikey" if self.api_key else "wallet"
+        self.payment_mode = PAYMENT_MODE_API_KEY if self.api_key else PAYMENT_MODE_WALLET
+
+        # An ambiguous failed POST may already be billed, so retrying is an
+        # explicit caller choice rather than a default inherited from Anthropic.
+        # This has to hold on BOTH rails, and it matters more on the wallet one:
+        # the transport below signs a fresh payment for every 402 it sees, so a
+        # 5xx retried after the gateway already settled signs and settles again.
+        # At Anthropic's default of 2 that is three on-chain USDC transfers for
+        # one messages.create().
+        kwargs.setdefault("max_retries", 0)
+
         if self.api_key:
             self._api_url = api_key_base_url(api_url)
             validate_api_url(self._api_url)
-            # An ambiguous failed POST may already be billed. Retrying is an
-            # explicit caller choice, not a default inherited from Anthropic.
-            kwargs.setdefault("max_retries", 0)
             self._client = anthropic.Anthropic(
                 base_url=self._api_url,
                 api_key=self.api_key,
