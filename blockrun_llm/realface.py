@@ -211,6 +211,7 @@ class RealFaceClient:
 
         url = f"{self.api_url}{self.INIT_ENDPOINT}"
         resp = self._client.post(url, json=body, headers={"Content-Type": "application/json"})
+        raise_for_api_key_402(resp, self.api_key)
         if resp.status_code != 200:
             self._raise_api_error(resp, "RealFace init failed")
         return RealFaceInit(**resp.json())
@@ -239,6 +240,7 @@ class RealFaceClient:
 
         url = f"{self.api_url}{self.STATUS_ENDPOINT}"
         resp = self._client.get(url, params={"groupId": group_id})
+        raise_for_api_key_402(resp, self.api_key)
         if resp.status_code != 200:
             self._raise_api_error(resp, "RealFace status check failed")
         return RealFaceStatus(**resp.json())
@@ -365,6 +367,7 @@ class RealFaceClient:
                 resp.status_code,
                 sanitize_error_response(error_body),
             )
+        raise_for_api_key_402(resp, self.api_key)
         if resp.status_code != 200:
             self._raise_api_error(resp, "RealFace listing failed")
         return RealFaceList(**resp.json())
@@ -388,6 +391,7 @@ class RealFaceClient:
             raise_for_api_key_402(resp, self.api_key)
             return self._handle_payment_and_retry(url, body, resp)
 
+        raise_for_api_key_402(resp, self.api_key)
         if resp.status_code != 200:
             self._raise_api_error(resp, "RealFace enrollment failed")
 

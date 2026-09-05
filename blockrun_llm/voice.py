@@ -262,6 +262,7 @@ class VoiceClient:
 
         url = f"{self.api_url}/v1/voice/call/{call_id.strip()}"
         response = self._client.get(url, headers={"Accept": "application/json"})
+        raise_for_api_key_402(response, self.api_key)
 
         if response.status_code == 404:
             raise APIError(f"Call not found: {call_id}", 404, {"call_id": call_id})

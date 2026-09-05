@@ -252,6 +252,7 @@ class SpeechClient:
             `voice_id` as the `voice` argument to generate().
         """
         response = self._client.get(f"{self.api_url}/v1/audio/voices")
+        raise_for_api_key_402(response, self.api_key)
 
         if response.status_code != 200:
             try:

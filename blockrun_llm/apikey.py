@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import urlsplit
 
 from .types import APIError, PaymentError
 
@@ -74,8 +75,14 @@ def resolve_api_key(credential: str | None) -> str | None:
     # must not be overridden by the environment.
     if credential and str(credential).strip():
         return None
-    env = os.environ.get(ENV_API_KEY, "").strip()
-    return env if is_api_key(env) else None
+    if ENV_API_KEY not in os.environ:
+        return None
+    env = os.environ[ENV_API_KEY].strip()
+    if not is_api_key(env):
+        raise ValueError(
+            "Invalid BLOCKRUN_API_KEY. Correct or unset it, or explicitly pass a wallet key."
+        )
+    return env
 
 
 def api_key_base_url(api_url: str | None = None) -> str:
@@ -136,10 +143,24 @@ def resolve_poll_url(poll_url: str, api_url: str, api_key: str | None) -> str:
     account rail the prefix has to come off here — the alternative is every
     async job (video, slow images) polling a 404 until its budget runs out.
     """
+    if api_key:
+        target = urlsplit(poll_url)
+        gateway = urlsplit(api_url)
+        if target.scheme or target.netloc:
+            if (
+                target.scheme.lower() != gateway.scheme.lower()
+                or target.hostname != gateway.hostname
+                or (target.port or (443 if target.scheme == "https" else 80))
+                != (gateway.port or (443 if gateway.scheme == "https" else 80))
+                or target.username is not None
+                or target.password is not None
+            ):
+                raise ValueError("Refusing to send an API key to a different polling origin.")
+            return poll_url
+        path = poll_url.removeprefix("/api") if poll_url.startswith("/api/") else poll_url
+        return f"{api_url.rstrip('/')}/{path.lstrip('/')}"
     if poll_url.startswith(("http://", "https://")):
         return poll_url
-    if api_key:
-        return f"{api_url}{poll_url.removeprefix('/api')}"
     return f"{api_url.removesuffix('/api')}{poll_url}"
 
 

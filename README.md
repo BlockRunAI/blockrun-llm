@@ -1845,3 +1845,22 @@ Yes. Install with `pip install blockrun-llm[solana]` and use `SolanaLLMClient` i
 ## License
 
 MIT
+
+### Changing payment methods safely
+
+Register at [user.blockrun.ai](https://user.blockrun.ai), add credit in
+[Credits](https://user.blockrun.ai/dashboard/credits), and create a key in
+[API keys](https://user.blockrun.ai/dashboard/keys). Set `BLOCKRUN_API_KEY`
+or pass the key as the client's credential. Check activity and actual charges
+in the dashboard; local cost summaries may omit charges without a gateway receipt.
+
+An explicit wallet credential chooses wallet payments even when `BLOCKRUN_API_KEY`
+is set. Choose the Solana wallet client for Solana, or the Base wallet client for
+Base. An empty or invalid `BLOCKRUN_API_KEY` fails instead of silently selecting
+a wallet. Unset it to restore automatic wallet selection. Create a new client
+when changing credentials; an existing client keeps its original account.
+
+The optional `AnthropicClient` also accepts a BlockRun API key as its credential
+or through `BLOCKRUN_API_KEY` (`pip install 'blockrun-llm[anthropic]'`). In account
+mode, automatic retries are disabled by default because a failed response may
+follow a billable request; callers can explicitly configure `max_retries`.

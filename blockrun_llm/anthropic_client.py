@@ -24,6 +24,7 @@ import httpx
 from dotenv import load_dotenv
 from eth_account import Account
 
+from .apikey import api_key_base_url, resolve_api_key
 from .validation import validate_api_url, validate_private_key
 from .wallet import load_wallet
 from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
@@ -136,8 +137,9 @@ class AnthropicClient:
         Initialize the BlockRun Anthropic client.
 
         Args:
-            private_key: Base chain wallet private key (or set BLOCKRUN_WALLET_KEY env var).
-                         Key is used for LOCAL signing only — never transmitted.
+            private_key: BlockRun API key or Base wallet private key. With no argument,
+                         BLOCKRUN_API_KEY takes precedence over wallet configuration.
+                         Wallet keys are used for local signing only.
             api_url: BlockRun API endpoint (default: https://blockrun.ai/api).
             timeout: Request timeout in seconds (default: 600, override via
                      BLOCKRUN_CHAT_TIMEOUT env). Reasoning models need 200–300s+.
@@ -154,6 +156,23 @@ class AnthropicClient:
                 "The 'anthropic' package is required for AnthropicClient.\n"
                 "Install it with: pip install blockrun-llm[anthropic]"
             )
+
+        # Resolve the payment method before reading or parsing a wallet.
+        self.api_key = resolve_api_key(private_key)
+        self.payment_mode = "apikey" if self.api_key else "wallet"
+        if self.api_key:
+            self._api_url = api_key_base_url(api_url)
+            validate_api_url(self._api_url)
+            # An ambiguous failed POST may already be billed. Retrying is an
+            # explicit caller choice, not a default inherited from Anthropic.
+            kwargs.setdefault("max_retries", 0)
+            self._client = anthropic.Anthropic(
+                base_url=self._api_url,
+                api_key=self.api_key,
+                http_client=httpx.Client(timeout=timeout, follow_redirects=False),
+                **kwargs,
+            )
+            return
 
         key = (
             private_key
