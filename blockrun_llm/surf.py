@@ -5,9 +5,9 @@ Surf is a single backend partner exposing ~83 crypto-intelligence endpoints
 (exchange data, on-chain SQL, prediction markets, wallet/social analytics, …).
 
 Pricing is tiered:
-    Tier 1  $0.001  market data, lists, single-token reads
-    Tier 2  $0.005  AI-derived intelligence (rankings, trends, search)
-    Tier 3  $0.020  heavy LLM reports + on-chain SQL/structured queries
+    Tier 1  $0.0075  market data, lists, single-token reads
+    Tier 2  $0.0075  AI-derived intelligence (rankings, trends, search)
+    Tier 3  $0.0075  heavy LLM reports + on-chain SQL/structured queries
 
 Usage:
     from blockrun_llm import SurfClient
@@ -16,7 +16,7 @@ Usage:
 
     # Discovery
     print(SurfClient.endpoints())                       # full catalog (list of dicts)
-    print(client.price("market/ranking"))               # 0.001
+    print(client.price("market/ranking"))               # 0.0075
     print(client.endpoint_info("onchain/sql"))          # {'method': 'POST', 'tier': 3, ...}
 
     # GET endpoints — pass query params
@@ -62,9 +62,9 @@ load_dotenv()
 
 # Mirrors src/lib/surf.ts SURF_TIER_*_PRICE on the backend.
 SURF_TIER_PRICES: dict[int, float] = {
-    1: 0.001,
-    2: 0.005,
-    3: 0.020,
+    1: 0.0075,
+    2: 0.0075,
+    3: 0.0075,
 }
 
 
@@ -180,7 +180,8 @@ class SurfClient(EvmAccountMode):
 
     Wraps the `/v1/surf/*` partner proxy. Use SurfClient.endpoints() for discovery
     and `get()` / `post()` / `call()` to fetch data. Payment is automatic on every
-    request via x402 (tier 1 / 2 / 3 → $0.001 / $0.005 / $0.020).
+    request via account credits or x402. All tiers currently cost $0.0075/call;
+    discovery prices are estimates and gateway billing is authoritative.
     """
 
     DEFAULT_API_URL = "https://blockrun.ai/api"

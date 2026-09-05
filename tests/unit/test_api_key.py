@@ -179,6 +179,38 @@ def test_explicit_wallet_and_validation():
         client.get_wallet_address()
 
 
+def test_account_and_wallet_clients_keep_separate_credentials_after_env_change(monkeypatch):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json=CHAT)
+
+    account = wire(LLMClient(), handler)
+    wallet = wire(LLMClient(private_key=WALLET), handler)
+    address = wallet.get_wallet_address()
+    monkeypatch.setenv("BLOCKRUN_API_KEY", "brk_live_different_account")
+    monkeypatch.setenv("BLOCKRUN_API_BASE_URL", "https://different.example")
+    with account, wallet:
+        assert account.chat("openai/gpt-5.2", "hi") == "ok"
+        assert wallet.chat("openai/gpt-5.2", "hi") == "ok"
+        assert wallet.get_wallet_address() == address
+    assert str(seen[0].url) == "https://api.blockrun.ai/v1/chat/completions"
+    assert seen[0].headers["authorization"] == f"Bearer {KEY}"
+    assert "payment-signature" not in seen[0].headers
+    assert str(seen[1].url) == "https://blockrun.ai/api/v1/chat/completions"
+    assert "authorization" not in seen[1].headers
+
+
+@pytest.mark.parametrize("key", ["", "   ", "bad"])
+def test_invalid_env_key_never_falls_back_but_explicit_wallet_still_works(key, monkeypatch):
+    monkeypatch.setenv("BLOCKRUN_API_KEY", key)
+    with pytest.raises(ValueError, match="Invalid BlockRun API key"):
+        LLMClient()
+    with LLMClient(private_key=WALLET) as client:
+        assert client.auth_mode == "wallet"
+
+
 @pytest.mark.parametrize("cls", [ImageClient, VideoClient, MusicClient])
 def test_media_first_response_polled_without_payment(cls, monkeypatch):
     monkeypatch.setattr("blockrun_llm.api_key.time.sleep", lambda _: None)
@@ -272,7 +304,8 @@ async def test_async_generic_poll():
     assert count == 2
 
 
-def test_anthropic_account_quota_is_native_error_without_replay():
+@pytest.mark.parametrize("status", [402, 429, 500, 502])
+def test_anthropic_account_quota_is_native_error_without_replay(status):
     anthropic = pytest.importorskip("anthropic")
     from blockrun_llm import AnthropicClient
 
@@ -281,7 +314,7 @@ def test_anthropic_account_quota_is_native_error_without_replay():
     def handler(request):
         seen.append(request)
         return httpx.Response(
-            402, json={"error": {"type": "insufficient_credits", "message": "top up"}}
+            status, json={"error": {"type": "api_error", "message": "uncertain completion"}}
         )
 
     client = AnthropicClient()
@@ -296,7 +329,7 @@ def test_anthropic_account_quota_is_native_error_without_replay():
                 max_tokens=10,
                 messages=[{"role": "user", "content": "hi"}],
             )
-        assert error.value.status_code == 402
+        assert error.value.status_code == status
         assert len(seen) == 1
         assert seen[0].headers["authorization"] == f"Bearer {KEY}"
         assert str(seen[0].url) == "https://api.blockrun.ai/v1/messages"
@@ -356,3 +389,48 @@ def test_setup_preserves_wallet_preference(saved, base, expected, monkeypatch, t
 def test_account_rejects_unenforceable_wallet_limits(cls):
     with pytest.raises(ValueError, match="Wallet spend limits"):
         cls(max_cost_per_call=0.01)
+
+
+def test_solana_account_context_manager_closes_client_even_on_error(monkeypatch):
+    monkeypatch.setenv("BLOCKRUN_API_KEY", KEY)
+    client = SolanaLLMClient()
+    with pytest.raises(RuntimeError, match="consumer failure"), client as active:
+        assert active is client
+        assert active.auth_mode == "api-key"
+        raise RuntimeError("consumer failure")
+    assert client._client.is_closed
+
+
+@pytest.mark.parametrize("status", [502, 503, 504, 522, 524])
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_account_poll_recovers_same_job_after_gateway_hiccup(status, asynchronous):
+    seen = []
+
+    def handler(request):
+        seen.append((request.method, str(request.url)))
+        if len(seen) == 1:
+            return httpx.Response(
+                202, json={"status": "queued", "poll_url": "/v1/jobs/existing?token=signed"}
+            )
+        if len(seen) == 2:
+            return httpx.Response(status, json={"error": {"message": "temporary gateway failure"}})
+        return httpx.Response(200, json={"status": "completed", "id": "existing"})
+
+    async def run_async():
+        async with AsyncAPIClient() as client:
+            await client._client.aclose()
+            client._client = httpx.AsyncClient(
+                auth=client._auth, transport=httpx.MockTransport(handler)
+            )
+            return await client.poll("/v1/jobs", interval_seconds=0)
+
+    if asynchronous:
+        result = asyncio.run(run_async())
+    else:
+        with APIClient() as client:
+            client._client.close()
+            client._client = httpx.Client(auth=client._auth, transport=httpx.MockTransport(handler))
+            result = client.poll("/v1/jobs", interval_seconds=0)
+    assert result["status"] == "completed"
+    assert [method for method, _ in seen] == ["POST", "GET", "GET"]
+    assert seen[1] == seen[2]

@@ -1057,6 +1057,12 @@ class SolanaLLMClient(AccountMode):
         """Close the HTTP client."""
         self._client.close()
 
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
     def list_models(self) -> list[dict[str, Any]]:
         resp = self._client.get(f"{self._api_url}/v1/models")
         resp.raise_for_status()

@@ -194,6 +194,8 @@ class AnthropicClient(AccountMode):
             else _BlockRunX402Transport(account=account, api_url=self._api_url)
         )
         if self._api_auth:
+            # Do not replay potentially billed POSTs after an ambiguous failure.
+            kwargs.setdefault("max_retries", 0)
             self._api_auth.raise_errors = (
                 False  # Let the official SDK preserve its native HTTP errors.
             )

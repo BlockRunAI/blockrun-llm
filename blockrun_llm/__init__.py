@@ -1,10 +1,10 @@
 """
-BlockRun LLM SDK - Pay-per-request AI via x402 on Base (USDC)
+BlockRun SDK - Account API credits or x402 USDC wallets on Solana and Base
 
 For developers (bring your own wallet):
     from blockrun_llm import LLMClient
 
-    client = LLMClient()  # Uses BLOCKRUN_WALLET_KEY from env
+    client = LLMClient()  # BLOCKRUN_API_KEY for account credits; otherwise a Base wallet
     response = client.chat("openai/gpt-5.2", "Hello!")
     print(response)
 
@@ -43,7 +43,7 @@ Text-to-speech (BlockRun Voice / ElevenLabs):
     result = client.generate("Welcome to BlockRun.", voice="sarah")
     print(result.data[0].url)  # audio URL
 
-Multi-chain RPC (40+ chains, $0.002/call):
+Multi-chain RPC (40+ chains; gateway pricing applies):
     from blockrun_llm import RpcClient
 
     client = RpcClient()

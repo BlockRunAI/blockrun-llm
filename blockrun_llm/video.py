@@ -16,7 +16,7 @@ Async flow (client-polled):
 The client signs once and replays the same PAYMENT-SIGNATURE on every poll,
 re-signing automatically if the 600s authorization window lapses mid-poll.
 Settlement happens only on the first completed poll, so upstream failure or
-the caller giving up = zero charge.
+a client timeout alone cannot establish the final billing status.
 
 Usage:
     from blockrun_llm import VideoClient
@@ -469,10 +469,9 @@ class VideoClient(EvmAccountMode):
 
         raise APIError(
             f"Video generation did not complete within {budget_seconds:.0f}s "
-            f"(last status: {last_status}). No payment was taken. The job is "
-            f"NOT lost: it stays claimable for ~48h — re-GET poll_url with a "
-            f"fresh signature from the same wallet to fetch (and settle) the "
-            f"finished video.",
+            f"(last status: {last_status}). A polling timeout does not confirm billing status. "
+            "Resume the existing poll_url using the same account or wallet; check "
+            "account Activity or wallet receipts before submitting another job.",
             504,
             {"id": job_id, "last_status": last_status, "poll_url": poll_url},
         )

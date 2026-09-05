@@ -22,11 +22,21 @@
 
 ## Installation
 
+> **Release status:** As of September 4, 2026, PyPI `blockrun-llm==1.14.0` does not include the account API support described below. These examples apply to this source checkout; install it with `pip install .` for local evaluation. Use a release containing these changes once published.
+
 ```bash
-pip install blockrun-llm              # Account API keys and Base wallets — core deps
+pip install blockrun-llm              # Published release; see API release status above
 pip install blockrun-llm[solana]      # Solana (preferred) + Base wallet payments
 pip install blockrun-llm[dev]         # Base + dev tools (pytest, black, ruff, mypy)
 pip install blockrun-llm[dev,solana]  # Everything
+```
+
+For the API-enabled source checkout, run from its repository root:
+
+```bash
+python -m pip install .
+# Optional Solana wallet dependencies:
+python -m pip install '.[solana]'
 ```
 
 ## Quick Start
@@ -820,8 +830,7 @@ client.release_number(bought["phone_number"])   # free
 
 `SurfClient` wraps `/v1/surf/*` — the asksurf.ai partner gateway, ~83 crypto
 endpoints across exchanges, on-chain SQL, prediction markets (Polymarket +
-Kalshi), wallets, social analytics, and project intelligence. Tiered pricing:
-$0.001 / $0.005 / $0.020 per call (tier 1 / 2 / 3).
+Kalshi), wallets, social analytics, and project intelligence. All tiers currently cost $0.0075/call.
 
 ```python
 from blockrun_llm import SurfClient
@@ -830,7 +839,7 @@ client = SurfClient()
 
 # Discovery
 print(SurfClient.endpoints())                       # full catalog
-print(client.price("market/ranking"))               # 0.001
+print(client.price("market/ranking"))               # 0.0075
 print(client.endpoint_info("onchain/sql"))          # {'method': 'POST', 'tier': 3, ...}
 
 # GET — pass query params (validated against the catalog)
@@ -843,6 +852,8 @@ rows = client.post("onchain/sql", {"query": "SELECT count() FROM ethereum.blocks
 # Generic helper — auto-routes GET vs POST from the catalog
 result = client.call("token/holders", params={"address": "0x...", "chain": "ethereum"})
 ```
+
+These service prices are estimates; the gateway quote and account Activity receipt are authoritative. Wallet payment-rail fees may apply separately.
 
 ## Standalone Search (`SearchClient`)
 
@@ -899,8 +910,8 @@ Supported stock markets: `us, hk, jp, kr, gb, de, fr, nl, ie, lu, cn, ca`.
 
 Standard JSON-RPC 2.0 access to <!-- br:chains.rpc -->40<!-- /br:chains.rpc --> chains through one endpoint — Ethereum,
 Base, Solana, Polygon, BSC, Arbitrum, Optimism, Avalanche, Bitcoin, Sui, and
-more (powered by Tatum's RPC gateway). No API key, no per-chain endpoints:
-flat **$0.002 per call** in USDC; a JSON-RPC batch charges per element.
+more (powered by Tatum's RPC gateway). No separate Tatum API key or per-chain endpoint is needed. Calls use account
+credits or the selected x402 wallet; a JSON-RPC batch is priced per element.
 
 ```python
 from blockrun_llm import RpcClient
@@ -1008,9 +1019,11 @@ print(link["url"])  # https://pay.coinbase.com/... — open to buy USDC on Base
 
 ## Prediction Markets (Powered by Predexon v2)
 
-Access real-time prediction market data from Polymarket, Kalshi, Limitless, sports, and Binance Futures via [Predexon](https://predexon.com). No API keys needed — pay-per-request via x402. Tier 1 endpoints are $0.001/call, Tier 2 (wallet identity / clustering) are $0.005/call.
+Access real-time prediction market data from Polymarket, Kalshi, Limitless, sports, and Binance Futures via [Predexon](https://predexon.com). Use a BlockRun account API key or x402 wallet payments; no separate Predexon key is needed. All tiers currently cost $0.0075/call.
 
 Each method below is available on `LLMClient` (Base), `AsyncLLMClient`, and `SolanaLLMClient`.
+
+These service prices are estimates; the gateway quote and account Activity receipt are authoritative. Wallet payment-rail fees may apply separately.
 
 ### Typed helpers
 
@@ -1072,7 +1085,7 @@ pairs = client.pm("matching-markets/pairs")                   # cross-platform p
 
 ## Exa Web Search (Powered by Exa)
 
-Access [Exa](https://exa.ai)'s neural web search via x402. No API keys needed — pay-per-request in USDC. Available on both `LLMClient` (Base, recommended) and `SolanaLLMClient` (Solana).
+Access [Exa](https://exa.ai)'s neural web search using account credits or x402 wallet payments. No separate Exa key is needed. Use `SolanaLLMClient` for a Solana wallet or `LLMClient` for a Base wallet; availability depends on the selected gateway.
 
 | Endpoint | Method | Price |
 |---|---|---|
@@ -1109,8 +1122,7 @@ result = client.exa("search", {"query": "transformer architecture", "numResults"
 ```
 
 For Solana payments use `from blockrun_llm import SolanaLLMClient` — same method
-names, same call shape; the Solana gateway requires the backend to be configured
-with `EXA_API_KEY`, so prefer Base unless you need SOL/SPL settlement.
+names and call shape. The selected gateway must support the requested service.
 
 ## Standalone Search
 
@@ -1515,7 +1527,9 @@ print(format_row(
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `BLOCKRUN_WALLET_KEY` | Your Base chain wallet private key | Yes (or pass to constructor) |
-| `BLOCKRUN_API_URL` | API endpoint | No (default: https://blockrun.ai/api) |
+| `BLOCKRUN_API_KEY` | Account API key; no payment wallet required | Account mode |
+| `BLOCKRUN_API_BASE_URL` | Account gateway override (default: https://api.blockrun.ai/v1) | No |
+| `BLOCKRUN_API_URL` | Wallet gateway endpoint | No (default: https://blockrun.ai/api) |
 
 ## Setting Up Your Wallet
 
@@ -1732,7 +1746,7 @@ print(f"Session: ${spending['total_usd']:.4f} across {spending['calls']} calls")
 
 ## Anthropic SDK Compatibility
 
-Use the official Anthropic Python SDK with BlockRun's API gateway and automatic x402 payments:
+Use the official Anthropic Python SDK with BlockRun account API credits or automatic x402 wallet payments:
 
 ```bash
 pip install blockrun-llm[anthropic]
@@ -1787,3 +1801,17 @@ Yes. Install with `pip install blockrun-llm[solana]` and use `SolanaLLMClient` i
 ## License
 
 MIT
+
+
+## Account setup, billing, and switching back to wallets
+
+1. [Sign in to BlockRun](https://user.blockrun.ai), open [Billing](https://user.blockrun.ai/dashboard/credits), and add prepaid account credits. The checkout shows both the credit amount and the total card charge, including any processing fee; these amounts can differ.
+2. Create a key on [API Keys](https://user.blockrun.ai/dashboard/keys). Keep it in your server or local process environment as `BLOCKRUN_API_KEY`; never put it in browser code, logs, or a repository. Follow this README's client configuration example.
+3. Check [Activity](https://user.blockrun.ai/dashboard/activity) after a call. Chat uses reported token usage; media and data services can use per-image, duration, or per-request prices. Account credits and an on-chain USDC wallet are separate balances. Local wallet spend counters are not account receipts.
+4. A 401 means check the API key, 402 means check account credits or account status, and 429 means respect `Retry-After`. Poll an accepted media job using the complete returned `poll_url`, including its query parameters, with the same account key. Do not reconstruct the URL from the job ID. If polling times out, check that job and Activity before submitting another paid job.
+
+Accepted account jobs recover from temporary gateway polling errors by querying the same job within the original deadline. They do not resubmit the paid creation request. Authentication, credit, and rate-limit errors remain visible to the caller.
+
+The Anthropic account wrapper defaults to `max_retries=0` to avoid replaying potentially billed POSTs; explicitly overriding this option opts into the upstream SDK's retry behavior. Wallet mode keeps its existing behavior.
+
+To return to wallet billing, unset `BLOCKRUN_API_KEY` and create a new wallet client, or pass an explicit `private_key` to the appropriate wallet client. Existing wallet keys are preserved. Choose Solana for new wallets, or keep an existing Base wallet. Do not pass an explicit API key and private key together.

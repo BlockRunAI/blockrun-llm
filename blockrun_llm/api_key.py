@@ -17,6 +17,7 @@ from .validation import validate_api_url
 
 API_KEY_URL = "https://api.blockrun.ai"
 PORTAL_URL = "https://user.blockrun.ai"
+TRANSIENT_POLL_STATUS = {502, 503, 504, 522, 524}
 
 
 def resolve_api_auth(
@@ -132,7 +133,12 @@ class ApiKeyAuth(httpx.Auth):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            data = client.get(url, timeout=remaining).json()
+            try:
+                data = client.get(url, timeout=remaining).json()
+            except APIError as error:
+                if error.status_code not in TRANSIENT_POLL_STATUS:
+                    raise
+                continue
             if self._terminal(data):
                 return cast(dict[str, Any], data)
         raise APIError(
@@ -167,7 +173,12 @@ class ApiKeyAuth(httpx.Auth):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
-            data = (await client.get(url, timeout=remaining)).json()
+            try:
+                data = (await client.get(url, timeout=remaining)).json()
+            except APIError as error:
+                if error.status_code not in TRANSIENT_POLL_STATUS:
+                    raise
+                continue
             if self._terminal(data):
                 return cast(dict[str, Any], data)
         raise APIError(
