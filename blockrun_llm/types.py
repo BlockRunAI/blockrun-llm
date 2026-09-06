@@ -409,6 +409,10 @@ class APIError(BlockrunError):
     ``retry_after_seconds`` parses the common form when a caller wants one.
     """
 
+    #: Sanitizer placeholders. Appending one of these tells the caller nothing
+    #: that ``HTTP 500`` did not already say.
+    _EMPTY_UPSTREAM = frozenset({"api request failed", "request failed", "stream request failed"})
+
     def __init__(
         self,
         message: str,
@@ -416,10 +420,33 @@ class APIError(BlockrunError):
         response: Optional[dict] = None,
         retry_after: Optional[str] = None,
     ):
-        super().__init__(message)
         self.status_code = status_code
         self.response = response
         self.retry_after = retry_after
+        super().__init__(self._with_upstream(message, response))
+
+    @classmethod
+    def _with_upstream(cls, message: str, response: Optional[dict]) -> str:
+        """Fold the gateway's own explanation into the message.
+
+        Raise sites build a message from the status code and stash the
+        sanitized body on ``.response``, so the one line worth reading never
+        reached ``str(exc)``. A free-tier 429 printed as ``API error: 429``
+        while the body said *"Free tier rate limit reached (30 requests/minute
+        per IP). Retry after 10s, or use a paid model"* — the difference
+        between a caller who knows what to do and one who guesses.
+        """
+        if not isinstance(response, dict):
+            return message
+        upstream = response.get("message")
+        if not isinstance(upstream, str):
+            return message
+        upstream = upstream.strip()
+        if not upstream or upstream.lower() in cls._EMPTY_UPSTREAM:
+            return message
+        if upstream in message:
+            return message
+        return f"{message}: {upstream}"
 
     @classmethod
     def from_response(
