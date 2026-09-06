@@ -174,3 +174,53 @@ def test_the_signature_stays_backwards_compatible():
     keep working untouched."""
     err = APIError("boom", 502, {"error": "upstream"})
     assert (err.status_code, err.response, err.retry_after) == (502, {"error": "upstream"}, None)
+
+
+class TestUpstreamMessageReachesTheCaller:
+    """The gateway writes the one line worth reading; the SDK used to drop it.
+
+    Raise sites build their message from the status code and stash the
+    sanitized body on `.response`, so a free-tier 429 printed as
+    `API error: 429` while the body said what to actually do about it. Read
+    against a live gateway, that difference is a caller who retries correctly
+    versus one who concludes their paid key is being throttled.
+    """
+
+    LIVE = (
+        "Free tier rate limit reached (30 requests/minute per IP). "
+        "Retry after 10s, or use a paid model"
+    )
+
+    def test_the_gateway_explanation_lands_in_str(self):
+        err = APIError("API error: 429", 429, {"message": self.LIVE, "code": "rate_limit"})
+        assert self.LIVE in str(err)
+
+    def test_the_body_is_still_there_untouched(self):
+        body = {"message": self.LIVE, "code": "rate_limit"}
+        assert APIError("API error: 429", 429, body).response == body
+
+    @pytest.mark.parametrize(
+        "placeholder",
+        ["API request failed", "Request failed", "Stream request failed", "  ", ""],
+    )
+    def test_sanitizer_placeholders_are_not_appended(self, placeholder):
+        """These are what the sanitizer emits when the body carried nothing.
+        Appending one restates the status code and buries the real prefix."""
+        err = APIError("Image request: HTTP 500", 500, {"message": placeholder})
+        assert str(err) == "Image request: HTTP 500"
+
+    def test_an_already_included_message_is_not_repeated(self):
+        err = APIError("Upstream said: boom", 500, {"message": "boom"})
+        assert str(err) == "Upstream said: boom"
+
+    def test_a_bodyless_error_is_unchanged(self):
+        assert str(APIError("stream probe exhausted retries", 0, None)) == (
+            "stream probe exhausted retries"
+        )
+
+    def test_a_non_string_message_is_ignored(self):
+        assert str(APIError("API error: 500", 500, {"message": {"nested": 1}})) == "API error: 500"
+
+    def test_status_and_retry_after_survive_the_rewrite(self):
+        err = APIError("API error: 429", 429, {"message": self.LIVE}, retry_after="10")
+        assert (err.status_code, err.retry_after, err.retry_after_seconds) == (429, "10", 10.0)
