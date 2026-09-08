@@ -42,8 +42,8 @@ from .apikey import (
     payment_mode,
     raise_for_api_key_402,
     resolve_api_key,
-    resolve_poll_url,
 )
+from .jobs import poll_until_completed
 from .tx_log import paid_request_error_prefix
 from .types import APIError, ImageResponse, PaymentError, retry_after_of
 from .validation import (
@@ -409,106 +409,25 @@ class ImageClient:
             retry_after=retry_after_of(retry_response),
         )
 
-    def _absolute_url(self, url: str) -> str:
-        """Resolve a relative ``poll_url`` against the configured API host.
-
-        Server-returned poll URLs look like ``/api/v1/images/generations/<id>``;
-        our ``self.api_url`` already ends with ``/api`` so we strip it once
-        to avoid double-prefixing.
-        """
-        if url.startswith(("http://", "https://")):
-            return url
-        return resolve_poll_url(url, self.api_url, self.api_key)
-
     def _poll_until_completed(
         self,
         submit_resp: httpx.Response,
         payment_payload: str | None,
     ) -> ImageResponse:
-        """Poll the gateway's ``poll_url`` with the same PAYMENT-SIGNATURE
-        until the upstream returns the finished image.
-
-        Settlement happens on the first ``status=completed`` poll, so
-        timeout = no spend. Returns the parsed :class:`ImageResponse`.
-        """
-        import time as _time
-
-        try:
-            submit_data = submit_resp.json()
-        except Exception:
-            submit_data = {}
-
-        poll_url_rel = submit_data.get("poll_url")
-        job_id = submit_data.get("id")
-        if not poll_url_rel:
-            raise APIError(
-                "Slow-path 202 missing poll_url",
-                202,
-                {"response": submit_data},
-            )
-
-        poll_url = self._absolute_url(poll_url_rel)
-        # A signature exists only on the wallet rail; the key rides on the
-        # client's default headers.
-        poll_headers = {"PAYMENT-SIGNATURE": payment_payload} if payment_payload else {}
-        deadline = _time.monotonic() + self.IMAGE_POLL_BUDGET_SECONDS
-        last_status = submit_data.get("status", "queued")
-
-        while _time.monotonic() < deadline:
-            _time.sleep(self.IMAGE_POLL_INTERVAL_SECONDS)
-
-            poll_resp = self._client.get(poll_url, headers=poll_headers)
-            try:
-                poll_data = poll_resp.json()
-            except Exception:
-                poll_data = {}
-            last_status = poll_data.get("status", last_status)
-
-            if poll_resp.status_code == 402:
-                # Account rail: a 402 is the account being out of credit, not a
-                # challenge to sign. Nothing here can sign, so say so plainly.
-                raise_for_api_key_402(poll_resp, self.api_key)
-                # Settlement failed on this poll — surface the gateway reason.
-                raise build_payment_rejected_error(poll_resp)
-
-            if last_status == "failed":
-                raise APIError(
-                    f"Image generation failed upstream: {poll_data.get('error', 'unknown')}",
-                    poll_resp.status_code,
-                    sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
-                    retry_after=retry_after_of(poll_resp),
-                )
-
-            if poll_resp.status_code == 200 and last_status == "completed":
-                return ImageResponse(**poll_data)
-
-            if poll_resp.status_code in (202, 504):
-                # 202 = still queued/in_progress; 504 = transient upstream
-                # hiccup. Both retriable inside the budget.
-                continue
-
-            if poll_resp.status_code != 200:
-                try:
-                    error_body = poll_resp.json()
-                except Exception:
-                    error_body = {"error": "Request failed"}
-                raise APIError(
-                    f"Image poll failed: HTTP {poll_resp.status_code}",
-                    poll_resp.status_code,
-                    sanitize_error_response(error_body),
-                    retry_after=retry_after_of(poll_resp),
-                )
-
-        raise APIError(
-            (
-                f"Image generation did not complete within "
-                f"{self.IMAGE_POLL_BUDGET_SECONDS:.0f}s "
-                f"(last status: {last_status}). Settlement only happens on "
-                "completion, so no payment was taken."
-            ),
-            504,
-            {"id": job_id, "last_status": last_status},
+        """Poll the gateway's ``poll_url`` until the upstream returns the
+        finished image. Settlement happens on the first ``status=completed``
+        poll, so timeout = no spend. Shared with music — see jobs.py."""
+        data = poll_until_completed(
+            self._client,
+            submit_resp,
+            payment_payload,
+            api_url=self.api_url,
+            api_key=self.api_key,
+            interval_seconds=self.IMAGE_POLL_INTERVAL_SECONDS,
+            budget_seconds=self.IMAGE_POLL_BUDGET_SECONDS,
+            label="Image",
         )
+        return ImageResponse(**data)
 
     @property
     def payment_mode(self) -> str:

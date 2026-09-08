@@ -46,6 +46,7 @@ from .apikey import (
     raise_for_api_key_402,
     resolve_api_key,
 )
+from .jobs import poll_until_completed
 from .tx_log import paid_request_error_prefix
 from .types import APIError, MusicResponse, PaymentError, retry_after_of
 from .validation import (
@@ -71,6 +72,11 @@ class MusicClient:
     DEFAULT_API_URL = "https://blockrun.ai/api"
     DEFAULT_MODEL = "minimax/music-2.5+"
     DEFAULT_TIMEOUT = 210.0  # music gen takes 1-3 min
+    # A track takes one to three minutes and the gateway answers 202 +
+    # poll_url at once, so the wait happens here, poll by poll. Settlement is
+    # on the completed poll: a budget that runs out has cost nothing.
+    MUSIC_POLL_INTERVAL_SECONDS = 5.0
+    MUSIC_POLL_BUDGET_SECONDS = 300.0
 
     def __init__(
         self,
@@ -194,6 +200,12 @@ class MusicClient:
             raise_for_api_key_402(response, self.api_key)
             return self._handle_payment_and_retry(url, body, response)
 
+        # Account rail: the key already paid, so the job's 202 comes on the
+        # FIRST post. Music is never fast enough to finish inline, so without
+        # this branch every API-key music request raised "API error: 202".
+        if self.api_key and response.status_code == 202:
+            return self._poll_until_completed(response, None)
+
         if response.status_code != 200:
             try:
                 error_body = response.json()
@@ -263,6 +275,11 @@ class MusicClient:
             raise_for_api_key_402(retry_response, self.api_key)
             raise PaymentError("Payment was rejected. Check your wallet balance.")
 
+        if retry_response.status_code == 202:
+            # The signed create is queued: replay the same signature on each
+            # poll — the job is bound to this wallet — and settle on completion.
+            return self._poll_until_completed(retry_response, payment_payload)
+
         if retry_response.status_code != 200:
             try:
                 error_body = retry_response.json()
@@ -283,6 +300,21 @@ class MusicClient:
         if tx_hash:
             data["txHash"] = tx_hash
 
+        return MusicResponse(**data)
+
+    def _poll_until_completed(
+        self, submit_resp: httpx.Response, payment_payload: str | None
+    ) -> MusicResponse:
+        data = poll_until_completed(
+            self._client,
+            submit_resp,
+            payment_payload,
+            api_url=self.api_url,
+            api_key=self.api_key,
+            interval_seconds=self.MUSIC_POLL_INTERVAL_SECONDS,
+            budget_seconds=self.MUSIC_POLL_BUDGET_SECONDS,
+            label="Music",
+        )
         return MusicResponse(**data)
 
     @property
