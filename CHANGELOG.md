@@ -2,6 +2,45 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.16.0 — 2026-09-08
+
+### Fixed
+- **Music generation works, on both rails.** MiniMax takes one to three
+  minutes per track and the gateway answers `202 + poll_url` — since
+  2026-09-08, immediately. `MusicClient` treated every non-200 as an error, so
+  a music request could not succeed at all: the gateway's ledger shows every
+  music create in the last 30 days answered 202, and this SDK raised
+  `API error: 202` for each. The client now polls the job the way the image
+  client already did — replaying the create's `PAYMENT-SIGNATURE` on the
+  wallet rail, carrying the key on the account rail — and returns the track on
+  the completed poll. Settlement happens on that poll, so a poll budget that
+  runs out (`MUSIC_POLL_BUDGET_SECONDS`, 300s) has cost nothing. The loop
+  itself moved to `blockrun_llm/jobs.py`; images and music share it. (#63)
+- **`str(exc)` now carries the gateway's explanation.** Raise sites built the
+  message from the status code alone and stashed the body on `.response`, so
+  a free-tier stream 429 printed as `API error: 429` while the body said
+  "Free tier rate limit reached (30 requests/minute per IP)". The one line
+  worth reading reaches the string a caller logs.
+- **`APIError.retry_after`.** api.blockrun.ai answers a rate limit with
+  `Retry-After` and it never survived the SDK boundary, so every account-rail
+  consumer had to guess or spin. The raw header is kept as sent (seconds or an
+  HTTP-date); `retry_after_seconds` resolves it to a number when it can. (#61)
+- **Solana clients honour an explicit `api_url` on the account rail.** The
+  Solana constructors passed a hard-coded `None` to avoid sending an API key
+  to sol.blockrun.ai, which also discarded a URL the caller typed. The rule —
+  API key to api.blockrun.ai, Solana key to sol.blockrun.ai, Base key to
+  blockrun.ai — is now pinned by a table over all 17 exported clients.
+- **A blank `BLOCKRUN_API_KEY=` reads as unset**, not as a key; explicit
+  payment selection survives client construction; the account clients that
+  were missing pieces of the wallet clients' surface are complete; Solana
+  signer initialisation is skipped for API accounts. (#60)
+
+### Added
+- **`ChatUsage.reasoning_tokens`.** Reasoning models report their thinking
+  tokens under `completion_tokens_details.reasoning_tokens` (OpenAI shape) or
+  as a flat `reasoning_tokens`; both are read, the nested shape authoritative.
+  (#42)
+
 ## 1.15.0 — 2026-09-05
 
 ### Added
