@@ -41,7 +41,10 @@ def _apikey_client(transport: httpx.MockTransport, monkeypatch: pytest.MonkeyPat
 def _payment_required_402() -> httpx.Response:
     return httpx.Response(
         402,
-        headers={"content-type": "application/json", "payment-required": build_payment_required_response()},
+        headers={
+            "content-type": "application/json",
+            "payment-required": build_payment_required_response(),
+        },
         json={"error": "Payment Required", "price": {"amount": "0.1575"}},
     )
 
@@ -51,8 +54,11 @@ def _queued(job_id: str) -> httpx.Response:
         202,
         headers={"content-type": "application/json"},
         json={
-            "id": job_id, "object": "audio.generation.job", "status": "queued",
-            "model": "minimax/music-2.5+", "poll_url": f"/api/v1/audio/generations/{job_id}",
+            "id": job_id,
+            "object": "audio.generation.job",
+            "status": "queued",
+            "model": "minimax/music-2.5+",
+            "poll_url": f"/api/v1/audio/generations/{job_id}",
             "created": 1700000000,
         },
     )
@@ -63,8 +69,11 @@ def _completed(job_id: str) -> httpx.Response:
         200,
         headers={"content-type": "application/json", "x-payment-receipt": "0xabc"},
         json={
-            "id": job_id, "object": "audio.generation.job", "status": "completed",
-            "model": "minimax/music-2.5+", "created": 1700000000,
+            "id": job_id,
+            "object": "audio.generation.job",
+            "status": "completed",
+            "model": "minimax/music-2.5+",
+            "created": 1700000000,
             "data": [{"url": "https://blockrun.ai/media/track.mp3", "duration_seconds": 182}],
             "payment": {"status": "settled"},
         },
@@ -85,8 +94,11 @@ def test_music_wallet_rail_polls_to_completion(monkeypatch: pytest.MonkeyPatch) 
         if request.method == "GET" and "/v1/audio/generations/mus_1" in request.url.path:
             polls["n"] += 1
             if polls["n"] == 1:
-                return httpx.Response(202, headers={"content-type": "application/json"},
-                                      json={"id": "mus_1", "status": "in_progress"})
+                return httpx.Response(
+                    202,
+                    headers={"content-type": "application/json"},
+                    json={"id": "mus_1", "status": "in_progress"},
+                )
             return _completed("mus_1")
         return httpx.Response(404)
 
@@ -134,10 +146,16 @@ def test_music_poll_surfaces_upstream_failure(monkeypatch: pytest.MonkeyPatch) -
             if "PAYMENT-SIGNATURE" not in request.headers:
                 return _payment_required_402()
             return _queued("mus_3")
-        return httpx.Response(200, headers={"content-type": "application/json"}, json={
-            "id": "mus_3", "status": "failed", "error": "The operation was aborted due to timeout",
-            "payment_status": "not_charged",
-        })
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={
+                "id": "mus_3",
+                "status": "failed",
+                "error": "The operation was aborted due to timeout",
+                "payment_status": "not_charged",
+            },
+        )
 
     with pytest.raises(APIError) as excinfo:
         _wallet_client(httpx.MockTransport(handler)).generate("waiting")
@@ -153,8 +171,11 @@ def test_music_poll_times_out_without_settlement(monkeypatch: pytest.MonkeyPatch
             if "PAYMENT-SIGNATURE" not in request.headers:
                 return _payment_required_402()
             return _queued("mus_4")
-        return httpx.Response(202, headers={"content-type": "application/json"},
-                              json={"id": "mus_4", "status": "in_progress"})
+        return httpx.Response(
+            202,
+            headers={"content-type": "application/json"},
+            json={"id": "mus_4", "status": "in_progress"},
+        )
 
     with pytest.raises(APIError) as excinfo:
         _wallet_client(httpx.MockTransport(handler)).generate("forever")
@@ -167,10 +188,15 @@ def test_music_fast_path_unchanged() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if "PAYMENT-SIGNATURE" not in request.headers:
             return _payment_required_402()
-        return httpx.Response(200, headers={"content-type": "application/json", "x-payment-receipt": "0xfast"}, json={
-            "created": 1700000000, "model": "minimax/music-2.5+",
-            "data": [{"url": "https://blockrun.ai/media/fast.mp3"}],
-        })
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json", "x-payment-receipt": "0xfast"},
+            json={
+                "created": 1700000000,
+                "model": "minimax/music-2.5+",
+                "data": [{"url": "https://blockrun.ai/media/fast.mp3"}],
+            },
+        )
 
     result = _wallet_client(httpx.MockTransport(handler)).generate("quick jingle")
     assert result.data[0].url == "https://blockrun.ai/media/fast.mp3"
