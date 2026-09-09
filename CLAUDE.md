@@ -1,6 +1,6 @@
 # BlockRun LLM SDK (Python)
 
-Python SDK for <!-- br:models.chatVisible -->76<!-- /br:models.chatVisible --> LLMs plus image/video/music/speech generation, standalone search, multi-chain RPC, and Pyth-backed market data — paid two ways: a BlockRun API key drawing on prepaid account credit, or USDC micropayments via x402 where the wallet signature is the authentication and the key never leaves your machine.
+Python SDK for <!-- br:models.chatVisible -->78<!-- /br:models.chatVisible --> LLMs plus image/video/music/speech generation, standalone search, multi-chain RPC, and Pyth-backed market data — paid two ways: a BlockRun API key drawing on prepaid account credit, or USDC micropayments via x402 where the wallet signature is the authentication and the key never leaves your machine.
 
 ## Commands
 
