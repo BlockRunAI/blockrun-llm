@@ -209,7 +209,7 @@ print(decision.reasoning)   # human-readable explanation of the pick
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier — smart-routes across the <!-- br:models.free -->7<!-- /br:models.free --> $0 models (Step 3.7 Flash, Mistral Nemotron, Nemotron Nano Omni / 9B / 12B VL) | Zero-cost testing, dev, prod |
+| `free` | NVIDIA free tier — smart-routes across the <!-- br:models.free -->6<!-- /br:models.free --> $0 models (Step 3.7 Flash, Mistral Nemotron, Nemotron Nano Omni / 9B / 12B VL) | Zero-cost testing, dev, prod |
 | `eco` | Cheapest capable model per tier | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
 | `premium` | Top-tier models (Anthropic, OpenAI, Moonshot) | Quality-critical tasks |
