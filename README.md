@@ -22,6 +22,7 @@
 | **API key** | none — `api.blockrun.ai` | prepaid credit, topped up with a card | ✅ |
 | **Solana** | Solana Mainnet | USDC (SPL), gasless — the facilitator pays the fee | ✅ Recommended for x402 |
 | **Base** | Base Mainnet (Chain ID: 8453) | USDC | ✅ |
+| **Arc** | Circle Arc (Chain ID: 5042) — `arc.blockrun.ai` | USDC (Arc's native token), settled by Circle — no gas per call | ✅ |
 | **Base Testnet** | Base Sepolia (Chain ID: 84532) | Testnet USDC | ✅ Development |
 
 **Protocol:** x402 v2 on the wallet rails; plain bearer auth on the API-key rail.
@@ -150,6 +151,24 @@ export SOLANA_WALLET_KEY="your-bs58-solana-key"
 > `setup_agent_wallet()`. If you do mix them up, the SDK now tells you exactly
 > what to switch to instead of failing with a cryptic "must be 66 characters"
 > error.
+
+## Arc Support
+
+The same `LLMClient` pays on [Circle's Arc](https://www.arc.network) via [arc.blockrun.ai](https://arc.blockrun.ai) — point `api_url` at it and hold USDC on Arc in the same EVM wallet:
+
+```python
+from blockrun_llm import LLMClient
+
+client = LLMClient(api_url="https://arc.blockrun.ai/api")  # BLOCKRUN_WALLET_KEY as usual
+print(client.chat("openai/gpt-4o", "gm Arc"))
+```
+
+The 402 from that host names `eip155:5042`, and the SDK signs the EIP-3009 authorization against Arc's USDC (`0x3600…0000`, EIP-712 domain `USDC` v2) — never Base's. Circle's facilitator verifies and settles it on Arc; you pay no gas. Which networks the SDK can sign for is the `EVM_NETWORKS` table in `blockrun_llm.x402` (Base, Arc, Base Sepolia); a 402 naming any other network, or a non-USDC asset, is refused before anything is signed.
+
+**Setup:**
+1. Same wallet key as Base: `export BLOCKRUN_WALLET_KEY="0x..."`
+2. Fund it with USDC on Arc (Arc's native token, shown as the ERC-20 at `0x3600…0000`)
+3. `api_url="https://arc.blockrun.ai/api"` — payments are automatic via x402
 
 ## Smart Routing (Router Core)
 

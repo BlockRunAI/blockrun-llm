@@ -2,6 +2,31 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.17.0 — 2026-09-16
+
+### Added
+- **Arc.** `LLMClient(api_url="https://arc.blockrun.ai/api")` pays on Circle's
+  Arc. The chain table knew Base and Base Sepolia and fell back to Base for
+  anything else, while `asset` and `extra` were taken from the 402 as given —
+  so against arc.blockrun.ai (`eip155:5042`, USDC at `0x3600…`, domain name
+  `USDC`) every payment was a signature over chainId 8453 with Arc's contract:
+  invalid, a 401 from the facilitator, after the SDK had reported a payment.
+
+  `EVM_NETWORKS` in `blockrun_llm.x402` maps a 402's `network` to the SDK's
+  own chain id, USDC address and EIP-712 domain (Base, Arc, Base Sepolia; the
+  `base-sepolia` alias still resolves). The 402 selects the network and
+  supplies nothing else: its `extra` no longer reaches the domain, an unknown
+  network raises `ValueError` naming what is supported, and a 402 whose
+  `asset` is not that network's USDC raises before anything is signed. Every
+  EVM client passes the 402's `asset` through. `accepted.asset` and
+  `accepted.extra` in the payload now describe the network actually signed.
+  Mirrors `@blockrun/llm` 3.16.0.
+
+  Verified against arc.blockrun.ai with an unfunded throwaway key: Circle's
+  `/verify` answers `insufficient_funds` and recovers the throwaway's own
+  address as `payer` — the signature verifies on Arc's domain; only the
+  balance is missing.
+
 ## 1.16.0 — 2026-09-08
 
 ### Fixed
