@@ -522,6 +522,7 @@ class VideoClient:
                 details.get("maxTimeoutSeconds", 0) or 0, self.MAX_TIMEOUT_SECONDS
             ),
             extra=details.get("extra"),
+            asset=details.get("asset"),
             extensions=extensions,
         )
 
