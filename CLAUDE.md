@@ -18,7 +18,7 @@ mypy blockrun_llm/                # type check
 ```
 blockrun_llm/
 ├── __init__.py              # Package exports
-├── client.py                # LLMClient (Base chain)
+├── client.py                # LLMClient (EVM: Base, Arc — the 402's network picks the chain)
 ├── solana_client.py         # SolanaLLMClient
 ├── wallet.py                # EVM wallet management
 ├── solana_wallet.py         # Solana wallet management
@@ -51,8 +51,11 @@ blockrun_llm/
 ## Supported chains
 
 - Base Mainnet (primary) — USDC
+- Arc (Circle, chain 5042) — USDC, via `api_url="https://arc.blockrun.ai/api"`; same `LLMClient` and key
 - Base Sepolia (testnet) — Testnet USDC
 - Solana Mainnet — USDC SPL
+
+The EVM domain signed follows the 402's `network` through `EVM_NETWORKS` in `blockrun_llm/x402.py`; a 402's `extra` is never trusted for it, an unknown network and a non-USDC `asset` are refused.
 
 ## Conventions
 

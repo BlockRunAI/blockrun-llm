@@ -205,6 +205,7 @@ class SearchClient:
             resource_description=resource.get("description", "BlockRun Search"),
             max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
             extra=details.get("extra"),
+            asset=details.get("asset"),
             extensions=extensions,
         )
 

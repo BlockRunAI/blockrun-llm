@@ -24,6 +24,68 @@ USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 BASE_SEPOLIA_CHAIN_ID = 84532
 USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 
+# Circle's Arc (arc.blockrun.ai). USDC is the chain's native token, exposed as
+# the ERC-20 at 0x3600…0000; its EIP-712 domain name is "USDC", not Base's
+# "USD Coin".
+ARC_CHAIN_ID = 5042
+USDC_ARC = "0x3600000000000000000000000000000000000000"
+
+# The EVM networks a BlockRun gateway settles on, keyed by the CAIP-2 `network`
+# a 402 carries, each with the SDK's OWN chain id, USDC address and EIP-712
+# domain. The 402 SELECTS a network from this table; it never supplies the
+# domain — until the Arc release the table fell back to Base for any network
+# it did not know and took `asset` and `extra` from the 402 as given, which on
+# arc.blockrun.ai signed chainId 8453 against Arc's contract: an invalid
+# signature, a 401 from the facilitator, after the SDK had reported a payment.
+EVM_NETWORKS: dict[str, dict] = {
+    "eip155:8453": {
+        "name": "Base",
+        "chain_id": BASE_CHAIN_ID,
+        "usdc": USDC_BASE,
+        "domain": {
+            "name": "USD Coin",
+            "version": "2",
+            "chainId": BASE_CHAIN_ID,
+            "verifyingContract": USDC_BASE,
+        },
+    },
+    "eip155:5042": {
+        "name": "Arc",
+        "chain_id": ARC_CHAIN_ID,
+        "usdc": USDC_ARC,
+        "domain": {
+            "name": "USDC",
+            "version": "2",
+            "chainId": ARC_CHAIN_ID,
+            "verifyingContract": USDC_ARC,
+        },
+    },
+    "eip155:84532": {
+        "name": "Base Sepolia",
+        "chain_id": BASE_SEPOLIA_CHAIN_ID,
+        "usdc": USDC_BASE_SEPOLIA,
+        "domain": {
+            "name": "USDC",
+            "version": "2",
+            "chainId": BASE_SEPOLIA_CHAIN_ID,
+            "verifyingContract": USDC_BASE_SEPOLIA,
+        },
+    },
+}
+# The pre-CAIP alias this SDK accepted for the testnet.
+_NETWORK_ALIASES = {"base-sepolia": "eip155:84532"}
+
+
+def evm_network(network: str) -> dict:
+    """The table entry for a 402's `network`, or a ValueError naming what IS supported."""
+    net = EVM_NETWORKS.get(_NETWORK_ALIASES.get(network, network))
+    if net is None:
+        raise ValueError(
+            f'Unsupported x402 network "{network}": this SDK signs USDC payments on '
+            + ", ".join(EVM_NETWORKS)
+        )
+    return net
+
 
 # BlockRun's x402 builder code — the ERC-8021 Schema 2 service code (`s`) that
 # tags every payment this SDK signs as BlockRun-originated for on-chain
@@ -50,36 +112,14 @@ def with_builder_code_service_code(
 
 
 def get_chain_config(network: str) -> tuple[int, str]:
-    """
-    Get chain ID and USDC contract address for a given network.
-
-    Args:
-        network: Network identifier in EIP-155 format (e.g., "eip155:8453" or "eip155:84532")
-
-    Returns:
-        Tuple of (chain_id, usdc_address)
-    """
-    if network == "eip155:84532" or network == "base-sepolia":
-        return BASE_SEPOLIA_CHAIN_ID, USDC_BASE_SEPOLIA
-    # Default to mainnet
-    return BASE_CHAIN_ID, USDC_BASE
+    """Chain ID and USDC contract for a network — see EVM_NETWORKS. Raises for an unknown one."""
+    net = evm_network(network)
+    return net["chain_id"], net["usdc"]
 
 
 def get_usdc_domain_name(network: str) -> str:
-    """
-    Get the EIP-712 domain name for USDC on a given network.
-
-    Mainnet USDC uses "USD Coin", testnet USDC uses "USDC".
-
-    Args:
-        network: Network identifier in EIP-155 format
-
-    Returns:
-        The EIP-712 domain name for signing
-    """
-    if network == "eip155:84532" or network == "base-sepolia":
-        return "USDC"
-    return "USD Coin"
+    """The EIP-712 domain name for USDC on a network — "USD Coin" on Base, "USDC" on Arc and Base Sepolia."""
+    return evm_network(network)["domain"]["name"]
 
 
 def create_nonce() -> str:
@@ -113,8 +153,8 @@ def create_payment_payload(
         resource_url: URL of the resource being accessed
         resource_description: Description of the resource
         max_timeout_seconds: Max timeout for the payment (default: 300)
-        extra: Extra info for USDC domain (name, version)
-        asset: USDC contract address (optional, derived from network if not provided)
+        extra: The 402's `extra`. Accepted for compatibility; the domain comes from EVM_NETWORKS.
+        asset: The 402's `asset`. Checked against the network's USDC; a mismatch raises ValueError.
 
     Returns:
         Base64-encoded signed payment payload
@@ -127,20 +167,17 @@ def create_payment_payload(
     # Generate random nonce
     nonce = create_nonce()
 
-    # Get chain config based on network
-    chain_id, default_usdc = get_chain_config(network)
-
-    # Use provided asset address or default for the network
-    usdc_address = asset or default_usdc
-
-    # EIP-712 domain for USDC (mainnet or testnet based on network)
-    default_domain_name = get_usdc_domain_name(network)
-    domain = {
-        "name": extra.get("name", default_domain_name) if extra else default_domain_name,
-        "version": extra.get("version", "2") if extra else "2",
-        "chainId": chain_id,
-        "verifyingContract": usdc_address,
-    }
+    # The domain is the SDK's own value for the 402's network — never the 402's
+    # `extra` (see EVM_NETWORKS). A 402 naming a network the table lacks, or an
+    # asset that is not that network's USDC, is refused rather than signed.
+    net = evm_network(network)
+    usdc_address = net["usdc"]
+    if asset and asset.lower() != usdc_address.lower():
+        raise ValueError(
+            f"x402 asset mismatch: the 402 asks for {asset} on {network}, "
+            f"but this SDK only pays USDC there ({usdc_address})"
+        )
+    domain = dict(net["domain"])
 
     # EIP-712 types for TransferWithAuthorization
     types = {
@@ -183,7 +220,7 @@ def create_payment_payload(
             "asset": usdc_address,
             "payTo": recipient,
             "maxTimeoutSeconds": max_timeout_seconds,
-            "extra": extra or {"name": default_domain_name, "version": "2"},
+            "extra": {"name": domain["name"], "version": domain["version"]},
         },
         "payload": {
             "signature": (
