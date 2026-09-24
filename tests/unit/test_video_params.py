@@ -155,3 +155,64 @@ def test_input_type_mismatch_is_left_to_the_gateway(client, captured):
     """
     client.generate("x", input_type="image")  # no image_url — gateway's call
     assert captured["body"]["input_type"] == "image"
+
+
+def test_mixed_references_and_controls_reach_body(client, captured):
+    client.generate(
+        "follow the motion",
+        model="bytedance/seedance-2.0",
+        reference_image_urls=["https://example.com/person.png"],
+        reference_videos=[{"url": "https://example.com/motion.mp4"}],
+        reference_audios=[{"url": "https://example.com/music.mp3"}],
+        bitrate_mode="high",
+        safety_identifier="test",
+        return_last_frame=True,
+        input_type="reference",
+    )
+    body = captured["body"]
+    assert body["reference_videos"] == [{"url": "https://example.com/motion.mp4"}]
+    assert body["reference_audios"] == [{"url": "https://example.com/music.mp3"}]
+    assert body["reference_image_urls"] == ["https://example.com/person.png"]
+    assert body["bitrate_mode"] == "high"
+    assert body["safety_identifier"] == "test"
+    assert body["input_type"] == "reference"
+
+
+def test_25_reference_limit_and_output_controls(client, captured):
+    images = ["https://example.com/person.png"] * 30
+    client.generate(
+        "test", model="bytedance/seedance-2.5", reference_image_urls=images, output_format="mov"
+    )
+    assert captured["body"]["reference_image_urls"] == images
+    assert captured["body"]["output_format"] == "mov"
+    with pytest.raises(ValueError, match="at most 30"):
+        client.generate(
+            "test", model="bytedance/seedance-2.5", reference_image_urls=images + images
+        )
+    client.generate("test", model="bytedance/seedance-1.5-pro", camera_fixed=False)
+    assert captured["body"]["camera_fixed"] is False
+
+
+def test_reference_media_cannot_be_frame_seeds(client):
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        client.generate(
+            "test",
+            image_url="https://example.com/frame.png",
+            reference_videos=[{"url": "https://example.com/motion.mp4"}],
+        )
+
+
+def test_last_frame_response_is_not_dropped():
+    result = VideoResponse(
+        created=1,
+        model="bytedance/seedance-2.0",
+        data=[
+            {
+                "url": "https://example.com/movie.mp4",
+                "last_frame_url": "https://example.com/last.png",
+                "last_frame_backed_up": True,
+            }
+        ],
+    )
+    assert result.data[0].last_frame_url == "https://example.com/last.png"
+    assert result.data[0].last_frame_backed_up is True

@@ -724,3 +724,28 @@ class TestAsyncMediaParamParity:
         with pytest.raises(ValueError, match="quality must be one of"):
             await client.image("a cat", quality="hd")
         assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_async_mixed_video_references():
+    import json
+
+    calls: list[httpx.Request] = []
+    client = _make_async_client(_paid_flow(calls, _VIDEO_OK))
+    await client.video(
+        "test",
+        model="bytedance/seedance-2.0",
+        reference_image_urls=["https://example.com/person.png"],
+        reference_videos=[{"url": "https://example.com/motion.mp4"}],
+        reference_audios=[{"url": "https://example.com/music.mp3"}],
+        bitrate_mode="high",
+        safety_identifier="test",
+        return_last_frame=True,
+    )
+    body = json.loads(calls[0].content)
+    assert body["reference_videos"] == [{"url": "https://example.com/motion.mp4"}]
+    assert body["reference_audios"] == [{"url": "https://example.com/music.mp3"}]
+    assert body["reference_image_urls"] == ["https://example.com/person.png"]
+    assert body["bitrate_mode"] == "high"
+    assert body["return_last_frame"] is True
+    await client.close()

@@ -2366,6 +2366,12 @@ class SolanaLLMClient:
         image_url: str | None = None,
         last_frame_url: str | None = None,
         reference_image_urls: list[str] | None = None,
+        reference_videos: list[dict[str, str]] | None = None,
+        reference_audios: list[dict[str, str]] | None = None,
+        bitrate_mode: str | None = None,
+        output_format: str | None = None,
+        camera_fixed: bool | None = None,
+        safety_identifier: str | None = None,
         real_face_asset_id: str | None = None,
         duration_seconds: int | None = None,
         aspect_ratio: str | None = None,
@@ -2399,6 +2405,12 @@ class SolanaLLMClient:
             image_url=image_url,
             last_frame_url=last_frame_url,
             reference_image_urls=reference_image_urls,
+            reference_videos=reference_videos,
+            reference_audios=reference_audios,
+            bitrate_mode=bitrate_mode,
+            output_format=output_format,
+            camera_fixed=camera_fixed,
+            safety_identifier=safety_identifier,
             real_face_asset_id=real_face_asset_id,
             duration_seconds=duration_seconds,
             aspect_ratio=aspect_ratio,
@@ -2738,6 +2750,12 @@ class SolanaLLMClient:
         image_url: str | None,
         last_frame_url: str | None,
         reference_image_urls: list[str] | None,
+        reference_videos: list[dict[str, str]] | None = None,
+        reference_audios: list[dict[str, str]] | None = None,
+        bitrate_mode: str | None = None,
+        output_format: str | None = None,
+        camera_fixed: bool | None = None,
+        safety_identifier: str | None = None,
         real_face_asset_id: str | None,
         duration_seconds: int | None,
         aspect_ratio: str | None,
@@ -2773,8 +2791,29 @@ class SolanaLLMClient:
                     "reference_image_urls is mutually exclusive with image_url, "
                     "last_frame_url, and real_face_asset_id."
                 )
-            if len(reference_image_urls) > 9:
-                raise ValueError("reference_image_urls accepts at most 9 images.")
+            image_limit = 30 if (model or "").removeprefix("bytedance/") == "seedance-2.5" else 9
+            if len(reference_image_urls) > image_limit:
+                raise ValueError(f"reference_image_urls accepts at most {image_limit} images.")
+        if (reference_videos or reference_audios) and (
+            image_url or last_frame_url or real_face_asset_id
+        ):
+            raise ValueError(
+                "reference media is mutually exclusive with frame-seed inputs; use reference_image_urls."
+            )
+        for clips in (reference_videos, reference_audios):
+            if clips is not None:
+                if not 1 <= len(clips) <= 3:
+                    raise ValueError("reference media accepts 1 to 3 clips per type.")
+                if any(
+                    not isinstance(clip, dict)
+                    or not isinstance(clip.get("url"), str)
+                    or not clip["url"].startswith(("https://", "http://"))
+                    or clip.get("role", "reference") != "reference"
+                    for clip in clips
+                ):
+                    raise ValueError(
+                        "reference clips require an http(s) URL and optional reference role."
+                    )
         if real_face_asset_id is not None and not real_face_asset_id.startswith("ta_"):
             raise ValueError(
                 "real_face_asset_id must start with 'ta_' "
@@ -2792,6 +2831,18 @@ class SolanaLLMClient:
             body["last_frame_url"] = last_frame_url
         if reference_image_urls:
             body["reference_image_urls"] = reference_image_urls
+        if reference_videos is not None:
+            body["reference_videos"] = reference_videos
+        if reference_audios is not None:
+            body["reference_audios"] = reference_audios
+        if bitrate_mode is not None:
+            body["bitrate_mode"] = bitrate_mode
+        if output_format is not None:
+            body["output_format"] = output_format
+        if camera_fixed is not None:
+            body["camera_fixed"] = camera_fixed
+        if safety_identifier is not None:
+            body["safety_identifier"] = safety_identifier
         if real_face_asset_id:
             body["real_face_asset_id"] = real_face_asset_id
         if duration_seconds is not None:
@@ -4568,6 +4619,12 @@ class AsyncSolanaLLMClient:
         image_url: str | None = None,
         last_frame_url: str | None = None,
         reference_image_urls: list[str] | None = None,
+        reference_videos: list[dict[str, str]] | None = None,
+        reference_audios: list[dict[str, str]] | None = None,
+        bitrate_mode: str | None = None,
+        output_format: str | None = None,
+        camera_fixed: bool | None = None,
+        safety_identifier: str | None = None,
         real_face_asset_id: str | None = None,
         duration_seconds: int | None = None,
         aspect_ratio: str | None = None,
@@ -4588,6 +4645,12 @@ class AsyncSolanaLLMClient:
             image_url=image_url,
             last_frame_url=last_frame_url,
             reference_image_urls=reference_image_urls,
+            reference_videos=reference_videos,
+            reference_audios=reference_audios,
+            bitrate_mode=bitrate_mode,
+            output_format=output_format,
+            camera_fixed=camera_fixed,
+            safety_identifier=safety_identifier,
             real_face_asset_id=real_face_asset_id,
             duration_seconds=duration_seconds,
             aspect_ratio=aspect_ratio,
