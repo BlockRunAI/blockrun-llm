@@ -188,18 +188,18 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": False,
             "supports_vision": True,
         },
-        # supportsTools: not probed — fails closed
-        "nvidia/nemotron-3-nano-30b": {
-            "context_window": 131_072,
-            "max_output_tokens": 16_384,
-            "supports_tools": False,
-            "supports_vision": False,
-        },
+        # override: The catalog tags this model "vision", but a correctly sized probe does not
+        # hold up (ClawRouter, 2026-08-31): a 64x64 solid-red PNG was named correctly 1 of 4
+        # times on Base, and on Solana the image was silently dropped and a text model answered
+        # "white". An HTTP 200 with a confident wrong answer gives the caller nothing to branch
+        # on, so image turns must not be routed here. It is ecoTiers.SIMPLE.fallback[0] since
+        # nemotron-3-nano-30b was delisted (2026-09-08); remove once a probe of this size comes
+        # back right on both chains.
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": {
             "context_window": 256_000,
             "max_output_tokens": 16_384,
             "supports_tools": False,
-            "supports_vision": True,
+            "supports_vision": False,
         },
         # supportsTools: not probed — fails closed
         "nvidia/nemotron-3-ultra-550b": {

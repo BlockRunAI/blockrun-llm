@@ -21,11 +21,12 @@ from blockrun_llm.router_core import DEFAULT_ROUTING_CONFIG
 from blockrun_llm.types import RoutingDecision
 
 # The free chat models that answer as themselves, not via a gateway redirect.
-# Verified with a two-pass model-echo probe on 2026-08-31; keep in step with
+# Verified with a two-pass model-echo probe on 2026-08-31 (nano-omni re-checked
+# 2026-09-29, after nemotron-3-nano-30b was delisted); keep in step with
 # router_adapter.FREE_TIERS.
 FREE_MODELS = [
     "nvidia/nemotron-3.5-lightning",
-    "nvidia/nemotron-3-nano-30b",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
     "nvidia/llama-3.2-11b-vision",
     "cohere/north-mini-code",
     "poolside/laguna-xs-2.1",
@@ -174,6 +175,24 @@ class TestFreeProfile:
         for tier in FREE_TIERS.values():
             for model in [tier["primary"], *tier["fallback"]]:
                 assert model in FREE_MODELS, model
+
+    def test_names_only_models_in_the_live_free_catalog(self):
+        # FREE_MODELS above is hand-kept, so checking the table against it alone
+        # passed while SIMPLE's primary was a delisted id. Pin the table to the
+        # $0 chat set /v1/models actually published (2026-09-29), and name the
+        # id that slipped through so it cannot come back.
+        live = {
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+            "nvidia/nemotron-3.5-lightning",
+            "nvidia/llama-3.2-11b-vision",
+            "nvidia/nemotron-3-ultra-550b",
+            "cohere/north-mini-code",
+            "poolside/laguna-xs-2.1",
+        }
+        used = {m for tier in FREE_TIERS.values() for m in [tier["primary"], *tier["fallback"]]}
+        assert used, "FREE_TIERS is empty"
+        assert used <= live, sorted(used - live)
+        assert "nvidia/nemotron-3-nano-30b" not in used  # delisted 2026-09-08
 
     def test_uses_the_rules_strategy_so_paid_evidence_models_cannot_leak_in(self):
         decision = route(

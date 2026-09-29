@@ -73,7 +73,16 @@ SOLANA_MINIMUM_PAYMENT_USD = 0.001
 #: ``step-3.7-flash``, ``nemotron-nano-9b-v2``, ``nemotron-nano-12b-v2-vl`` and
 #: ``mistral-nemotron`` (retired upstream 2026-08-30), plus ``nemotron-3-ultra-550b``
 #: and ``nemotron-3-nano-omni-30b-a3b-reasoning`` — the latter two still list at
-#: $0 in ``/v1/models`` but both answer as ``nemotron-3-nano-30b``.
+#: $0 in ``/v1/models`` but both answered as ``nemotron-3-nano-30b``.
+#:
+#: 2026-09-29: ``nemotron-3-nano-30b`` itself is gone. NVIDIA deprovisioned it for
+#: blockrun's account on 2026-09-08, it left ``/v1/models``, and the gateway now
+#: redirects it to nano-omni. Every slot it held goes to nano-omni: that is the
+#: model those slots were actually being served by, it is the same family and size
+#: (30B-A3B), and with nano-30b gone the reason it was excluded above no longer
+#: applies (a model-echo probe that day got nano-omni's own NIM deployment back).
+#: The router adapter was already dropping nano-30b at runtime, because it is not
+#: in the catalog, so SIMPLE had been opening on its first fallback.
 #:
 #: The table is no longer NVIDIA-only: ``cohere/north-mini-code`` and
 #: ``poolside/laguna-xs-2.1`` serve at $0 and carry the free coding load.
@@ -81,9 +90,10 @@ SOLANA_MINIMUM_PAYMENT_USD = 0.001
 #: the NVIDIA free tier's prompt-retention policy.
 FREE_TIERS: dict[str, TierConfig] = {
     "SIMPLE": {
-        # Fastest free model (~121 tok/s), and latency is the only axis that
-        # separates free rungs — they all cost $0.
-        "primary": "nvidia/nemotron-3-nano-30b",  # 131K ctx
+        # Was nemotron-3-nano-30b, the fastest free model, until its 2026-09-08
+        # delisting. Latency is the only axis that separates free rungs (they
+        # all cost $0); nano-omni answered in 1.4s on blockrun's direct probe.
+        "primary": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",  # 256K ctx
         "fallback": [
             "nvidia/nemotron-3.5-lightning",
             "nvidia/llama-3.2-11b-vision",
@@ -93,7 +103,7 @@ FREE_TIERS: dict[str, TierConfig] = {
     "MEDIUM": {
         "primary": "nvidia/nemotron-3.5-lightning",  # 1M ctx — free tier flagship
         "fallback": [
-            "nvidia/nemotron-3-nano-30b",
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
             "poolside/laguna-xs-2.1",
             "cohere/north-mini-code",
         ],
@@ -104,14 +114,14 @@ FREE_TIERS: dict[str, TierConfig] = {
         "primary": "nvidia/nemotron-3.5-lightning",
         "fallback": [
             "cohere/north-mini-code",  # 256K ctx
-            "nvidia/nemotron-3-nano-30b",
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
             "nvidia/llama-3.2-11b-vision",  # free vision
         ],
     },
     "REASONING": {
         "primary": "nvidia/nemotron-3.5-lightning",
         "fallback": [
-            "nvidia/nemotron-3-nano-30b",
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
             "cohere/north-mini-code",
             "poolside/laguna-xs-2.1",
         ],
