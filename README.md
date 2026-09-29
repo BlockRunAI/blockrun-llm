@@ -8,7 +8,7 @@
 > request settle itself over x402 — on **Solana or Base**. Every client takes
 > either credential in the same first argument.
 >
-> 🆓 **Includes 8 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M context), Nemotron Nano Omni (vision), Qwen3 Next + Coder, Llama 4 Maverick, Mistral Small 4, plus `gpt-oss-120b/20b` (hidden from `/v1/models` but direct calls still work). Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any `nvidia/*` model directly.
+> 🆓 **Includes <!-- br:models.free -->6<!-- /br:models.free --> free models** — Nemotron 3.5 Lightning (1M context), Nemotron 3 Ultra 550B, Nemotron 3 Nano Omni, Llama 3.2 11B Vision, Cohere North Mini Code and Poolside Laguna XS 2.1. Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any of them directly.
 
 [![PyPI](https://img.shields.io/pypi/v/blockrun-llm.svg)](https://pypi.org/project/blockrun-llm/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -62,7 +62,7 @@ reports which rail you ended up on.
 ### Try It Free (No Balance Required)
 
 Want to kick the tires before topping up or funding a wallet? Route to
-BlockRun's free NVIDIA tier — it settles $0 on both rails, so an unfunded wallet
+BlockRun's free tier — it settles $0 on both rails, so an unfunded wallet
 or a $0 credit account is enough:
 
 ```python
@@ -71,31 +71,30 @@ from blockrun_llm import LLMClient
 client = LLMClient()  # a credential is still needed; a balance is not
 
 # Option 1: call a free model directly
-response = client.chat("nvidia/step-3.7-flash", "Explain x402 in 1 sentence")
+response = client.chat("nvidia/nemotron-3.5-lightning", "Explain x402 in 1 sentence")
 
 # Option 2: let the smart router pick the best free model per request
 result = client.smart_chat("What is 2+2?", routing_profile="free")
-print(result.model)     # e.g. 'nvidia/step-3.7-flash' (cheapest capable for SIMPLE tier)
+print(result.model)     # e.g. 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning' (free SIMPLE tier)
 print(result.response)  # '4'
 ```
 
-**Available free models** (input + output both $0, all NVIDIA-hosted):
+**Available free models** (input + output both $0; the live list is `GET /v1/models` filtered on $0 pricing):
 
 | Model ID | Context | Best For |
 |----------|---------|----------|
-| `nvidia/step-3.7-flash` | 131K | Fast general-purpose chat + reasoning |
-| `nvidia/mistral-nemotron` | 131K | Fast free Mistral (Mistral × NVIDIA) |
-| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Only vision-capable free model — text + images + video (≤2 min) + audio (≤1 hr) |
-| `nvidia/nemotron-nano-9b-v2` | 131K | Compact fast chat |
-| `nvidia/nemotron-nano-12b-v2-vl` | 131K | Compact vision |
-| `nvidia/gpt-oss-120b` | 128K | OpenAI open-weight 120B — the free workhorse. Hidden from `/v1/models` (so SmartChat won't auto-pick it) but direct calls still work |
-| `nvidia/gpt-oss-20b` | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models` but direct calls still work |
+| `nvidia/nemotron-3.5-lightning` | 1M | The free default — thinking-mode reasoning, longest free context |
+| `nvidia/nemotron-3-ultra-550b` | 1M | Largest free model (550B / 55B active MoE) — strongest, but slower |
+| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Fast general chat + reasoning (30B-A3B) |
+| `nvidia/llama-3.2-11b-vision` | 128K | The free Meta Llama |
+| `cohere/north-mini-code` | 256K | Coding, sub-second responses |
+| `poolside/laguna-xs-2.1` | 131K | Coding, ~161 tok/s |
+
+> Two of these (`nemotron-3-nano-omni` and `llama-3.2-11b-vision`) are catalogued as vision-capable, but image input did not hold up on real probes — both return HTTP 200 with a wrong answer. Send images to a paid vision model.
 
 > Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.435/$0.87 — the 75% launch promo became the permanent list price after 2026-05-31) — `nvidia/deepseek-v4-pro` is hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash.
 
-> **Privacy note for `gpt-oss-120b/20b`**: NVIDIA's free build.nvidia.com tier reserves the right to use prompts/outputs for service improvement. The models are hidden from `/v1/models` so SmartChat won't auto-route to them, but direct calls still work — use them only when prompts contain no sensitive data.
-
-> **Retired**: NVIDIA has EOL'd (HTTP 410) most of its early free lineup — the free DeepSeek family (last: `nvidia/deepseek-v4-flash`, 2026-08-12), `llama-4-maverick`, the qwen3 SKUs, free Mistral small/large, and more. The gateway auto-redirects pinned callers to a healthy free model, so old model IDs still return 200.
+> **Retired**: NVIDIA has EOL'd most of its early free lineup — the free DeepSeek family (last: `nvidia/deepseek-v4-flash`, 2026-08-12), `step-3.7-flash`, `mistral-nemotron`, `nemotron-nano-9b-v2` / `-12b-v2-vl` (2026-08-30), `gpt-oss-120b/20b` (2026-09-03), `nemotron-3-nano-30b` (2026-09-08), `llama-4-maverick`, the qwen3 SKUs, free Mistral small/large, and more. The gateway auto-redirects pinned callers to a live model, so old model IDs still return 200 — from a different model.
 
 ## Solana Support
 
@@ -228,7 +227,7 @@ print(decision.reasoning)   # human-readable explanation of the pick
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | NVIDIA free tier — smart-routes across the <!-- br:models.free -->6<!-- /br:models.free --> $0 models (Step 3.7 Flash, Mistral Nemotron, Nemotron Nano Omni / 9B / 12B VL) | Zero-cost testing, dev, prod |
+| `free` | Free tier — smart-routes across the $0 models (Nemotron 3 Nano Omni, Nemotron 3.5 Lightning, Llama 3.2 11B Vision, Cohere North Mini Code, Poolside Laguna XS 2.1). Nemotron 3 Ultra 550B is free too, by direct call. | Zero-cost testing, dev, prod |
 | `eco` | Cheapest capable model per tier | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
 | `premium` | Top-tier models (Anthropic, OpenAI, Moonshot) | Quality-critical tasks |
@@ -366,8 +365,8 @@ print(link["url"])  # open https://pay.coinbase.com/... to buy USDC on Base
 # (b) Transfer existing Base USDC to your wallet address
 print(client.get_wallet_address())  # send USDC on Base to this 0x… address
 
-# (c) Skip funding entirely — the free NVIDIA models cost $0
-client.chat("nvidia/step-3.7-flash", "Hello!")  # routing_profile="free" also works
+# (c) Skip funding entirely — the free models cost $0
+client.chat("nvidia/nemotron-3.5-lightning", "Hello!")  # routing_profile="free" also works
 ```
 
 `$5` of USDC covers thousands of paid requests. Check your balance any time:
@@ -516,24 +515,22 @@ glm-5 and glm-5-turbo on 2026-06-06) — the whole family now bills per-token.
 
 ### NVIDIA (Free & Hosted)
 
-Free tier refreshed 2026-08-12. NVIDIA has retired (HTTP 410 end-of-life)
-the entire free DeepSeek family — `nvidia/deepseek-v4-flash` was the last to
-go — along with `llama-4-maverick`, `qwen3-coder-480b`, the free Mistral
-small/large SKUs, and others. Retired models stay callable by ID: the gateway
-auto-redirects them to a healthy free model, so pinned callers still get a
-200. `nvidia/gpt-oss-120b` and `nvidia/gpt-oss-20b` remain callable by direct
-ID but are hidden from `/v1/models` over the NVIDIA free tier's
-prompt-retention terms (so SmartChat won't auto-pick them). The live list is
-`GET /v1/models` filtered on the free flag.
+Free tier checked against `/v1/models` on 2026-09-29. NVIDIA has retired
+(HTTP 410 end-of-life, or deprovisioned) most of its earlier free lineup — the
+free DeepSeek family, `step-3.7-flash`, the `nemotron-nano` v2 SKUs,
+`gpt-oss-120b/20b` (2026-09-03) and `nemotron-3-nano-30b` (2026-09-08) among
+them. Retired models stay callable by ID: the gateway auto-redirects them to a
+live model, so pinned callers still get a 200. The free tier also includes two
+non-NVIDIA models, `cohere/north-mini-code` and `poolside/laguna-xs-2.1` (see
+[Try It Free](#try-it-free-no-balance-required)). The live list is
+`GET /v1/models` filtered on $0 pricing.
 
 | Model | Input Price | Output Price | Context | Notes |
 |-------|-------------|--------------|---------|-------|
-| `nvidia/step-3.7-flash` | **FREE** | **FREE** | 131K | Fast general-purpose chat + reasoning |
-| `nvidia/mistral-nemotron` | **FREE** | **FREE** | 131K | Fast free Mistral |
-| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | **FREE** | **FREE** | 256K | First vision-capable free model — RGB images, mp4 video |
-| `nvidia/nemotron-nano-9b-v2` | **FREE** | **FREE** | 131K | Compact fast chat |
-| `nvidia/gpt-oss-120b` | **FREE** | **FREE** | 128K | OpenAI open-weight 120B — 123 tok/s. Hidden from `/v1/models`; direct calls work |
-| `nvidia/gpt-oss-20b` | **FREE** | **FREE** | 128K | OpenAI open-weight 20B — 155 tok/s. Hidden from `/v1/models`; direct calls work |
+| `nvidia/nemotron-3.5-lightning` | **FREE** | **FREE** | 1M | Free default — thinking-mode reasoning |
+| `nvidia/nemotron-3-ultra-550b` | **FREE** | **FREE** | 1M | Largest free model (550B / 55B active MoE) |
+| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | **FREE** | **FREE** | 256K | Fast general chat + reasoning |
+| `nvidia/llama-3.2-11b-vision` | **FREE** | **FREE** | 128K | Meta Llama 3.2 11B |
 | `moonshot/kimi-k2.5` | $0.60/M | $3.00/M | 262K | Kimi K2.5 direct from Moonshot (replaces `nvidia/kimi-k2.5`) |
 | `moonshot/kimi-k2.6` | $0.95/M | $4.00/M | 256K | Moonshot flagship (vision + reasoning_content) |
 
@@ -1856,7 +1853,7 @@ When you make an API call, the SDK automatically handles x402 payment. It signs 
 Router Core is BlockRun's built-in routing engine — shared with the TypeScript SDK and the gateway, so the same request routes the same way everywhere. It scores your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, drops every model that can't actually handle it (context, output length, tools, vision), then picks the cheapest capable one and keeps the rest as a fallback chain. Routing happens locally in under 1ms and makes no extra model call. It can save up to <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
 
 ### How much does it cost?
-Pay only for what you use. Prices start at **FREE** (11 NVIDIA-hosted models). Paid models start at $0.10/M tokens. There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
+Pay only for what you use. Prices start at **FREE** (<!-- br:models.free -->6<!-- /br:models.free --> free models). Paid models start at $0.10/M tokens. There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
 
 ### Can I use it with Solana?
 Yes. Install with `pip install blockrun-llm[solana]` and use `SolanaLLMClient` instead of `LLMClient`. Same API, different payment chain.
