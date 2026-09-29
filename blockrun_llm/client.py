@@ -1005,7 +1005,7 @@ class LLMClient:
         request returns 402, the SDK signs an EIP-712 payment locally, then
         re-issues the request with ``stream=true`` and the
         ``PAYMENT-SIGNATURE`` header. Free models (e.g.
-        ``nvidia/deepseek-v4-flash``) skip the 402 and stream directly.
+        ``nvidia/nemotron-3.5-lightning``) skip the 402 and stream directly.
 
         Fallback semantics
         ------------------
@@ -1019,9 +1019,9 @@ class LLMClient:
         Example::
 
             for chunk in client.chat_completion_stream(
-                "nvidia/deepseek-v4-flash",
+                "nvidia/nemotron-3.5-lightning",
                 [{"role": "user", "content": "Hello"}],
-                fallback_models=["nvidia/llama-4-maverick"],
+                fallback_models=["nvidia/nemotron-3-nano-omni-30b-a3b-reasoning"],
             ):
                 delta = chunk.choices[0].delta
                 if delta.content:
