@@ -420,7 +420,8 @@ from then on. Solana is unchanged (exact only).
 lands only when that call settles, and until then the chain still shows the old
 USDC permit nonce — a second permit over the same nonce would revert on-chain.
 So concurrent or not-yet-settled calls that would need a permit pay `exact`
-(the SDK watches the on-chain nonce, and gives up on a permit at its deadline).
+(the SDK watches the on-chain nonce, and gives up on a permit at its deadline;
+concurrent calls in one client claim the permit slot before reading the chain).
 Calls where Permit2 can already pull the ceiling are unaffected.
 
 ```python

@@ -219,6 +219,7 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "COST_LOG_PATH", tmp_path / "cost_log.jsonl")
     monkeypatch.delenv(upto.PAYMENT_SCHEME_ENV, raising=False)
     upto._PERMITS_IN_FLIGHT.clear()
+    upto._PERMIT_PREFLIGHT.clear()
 
     def no_network(*_a: Any, **_kw: Any) -> Any:
         raise AssertionError("unmocked chain read")
@@ -227,6 +228,7 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(upto, "aread_upto_chain_state", no_network)
     yield
     upto._PERMITS_IN_FLIGHT.clear()
+    upto._PERMIT_PREFLIGHT.clear()
 
 
 class Chain:
@@ -711,6 +713,99 @@ class TestClientSelection:
         client.chat_completion("deepseek/deepseek-chat", MESSAGES)  # error → exact
         client.chat_completion("deepseek/deepseek-chat", MESSAGES)  # slot free → permit
         assert gw.schemes == ["exact", "upto"]
+
+
+class TestConcurrentPermits:
+    """Three concurrent calls in ONE client, chain at allowance 0 / nonce 6:
+    exactly one signs a permit, the other two pay exact."""
+
+    @staticmethod
+    def _permits(gw: Gateway) -> list[str]:
+        return [
+            s["extensions"]["eip2612GasSponsoring"]["info"]["nonce"]
+            for s in gw.signed
+            if s["accepted"]["scheme"] == "upto"
+            and "signature" in s["extensions"]["eip2612GasSponsoring"]["info"]
+        ]
+
+    def test_threads(self, monkeypatch):
+        import threading
+        import time as _time
+        from concurrent.futures import ThreadPoolExecutor
+
+        chain = Chain(allowance=0, nonce=6)
+        lock = threading.Lock()
+
+        def slow_state(option, owner):
+            _time.sleep(0.1)  # every call is inside its read at once
+            with lock:
+                return chain.state(option, owner)
+
+        monkeypatch.setattr(upto, "read_upto_chain_state", slow_state)
+        gw = Gateway(payment_required(sponsoring=True))
+        client = sync_client(gw)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            list(
+                pool.map(
+                    lambda _: client.chat_completion("deepseek/deepseek-chat", MESSAGES), range(3)
+                )
+            )
+        assert self._permits(gw) == ["6"]
+        assert sorted(gw.schemes) == ["exact", "exact", "upto"]
+        assert upto._PERMIT_PREFLIGHT == set()
+
+    def test_asyncio_gather(self, monkeypatch):
+        chain = Chain(allowance=0, nonce=6)
+
+        async def slow_astate(option, owner):
+            await asyncio.sleep(0.05)
+            return chain.state(option, owner)
+
+        monkeypatch.setattr(upto, "aread_upto_chain_state", slow_astate)
+        gw = Gateway(payment_required(sponsoring=True))
+
+        async def run():
+            client = async_client(gw)
+            await asyncio.gather(
+                *(client.chat_completion("deepseek/deepseek-chat", MESSAGES) for _ in range(3))
+            )
+
+        asyncio.run(run())
+        assert self._permits(gw) == ["6"]
+        assert sorted(gw.schemes) == ["exact", "exact", "upto"]
+        assert upto._PERMIT_PREFLIGHT == set()
+
+    def test_marker_holder_elsewhere_still_allows_upto_without_permit(self, monkeypatch):
+        Chain(allowance=10**9).install(monkeypatch)
+        assert upto._reserve_preflight("eip155:8453", TEST_ACCOUNT.address)
+        gw = Gateway(payment_required(sponsoring=True))
+        sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["upto"]
+        assert "signature" not in gw.signed[0]["extensions"]["eip2612GasSponsoring"]["info"]
+
+    def test_marker_holder_elsewhere_and_no_allowance_is_exact(self, monkeypatch):
+        chain = Chain(allowance=0, nonce=6).install(monkeypatch)
+        assert upto._reserve_preflight("eip155:8453", TEST_ACCOUNT.address)
+        gw = Gateway(payment_required(sponsoring=True))
+        sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["exact"]
+        assert chain.reads == 1
+
+    def test_marker_released_when_no_permit_or_signing_fails(self, monkeypatch):
+        Chain(allowance=10**9).install(monkeypatch)
+        gw = Gateway(payment_required(sponsoring=True))
+        sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert upto._PERMIT_PREFLIGHT == set()
+
+        Chain(allowance=0, nonce=6).install(monkeypatch)
+        monkeypatch.setattr(
+            upto,
+            "create_upto_payment_payload",
+            lambda *a, **k: (_ for _ in ()).throw(RuntimeError()),
+        )
+        sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert upto._PERMIT_PREFLIGHT == set()
+        assert upto._PERMITS_IN_FLIGHT == {}
 
 
 # ---------------------------------------------------------------------------

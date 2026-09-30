@@ -415,6 +415,33 @@ def _release_permit_slot(network: str, owner: str, signed_nonce: int) -> None:
             del _PERMITS_IN_FLIGHT[key]
 
 
+# Wallets+networks with a permit PREFLIGHT in progress: a call that might sign
+# a permit claims this marker before its chain read. Without it, concurrent
+# calls in one client all read the same USDC nonce before any of them recorded
+# a permit, and each signed one over it (seen live: 1 settled, 2 reverted). A
+# call that finds the marker taken never signs a permit: it pays upto only if
+# its own read shows Permit2's allowance already covers the ceiling, else
+# exact. The marker is released when the preflight ends; a signed permit lives
+# on in _PERMITS_IN_FLIGHT (the nonce record) instead.
+_PERMIT_PREFLIGHT: set[tuple[str, str]] = set()
+
+
+def _reserve_preflight(network: str, owner: str) -> bool:
+    """Atomically claim the permit-preflight marker. A threading.Lock with no
+    await inside, so it is atomic for threads and for coroutines alike."""
+    key = (network, owner.lower())
+    with _PERMITS_LOCK:
+        if key in _PERMIT_PREFLIGHT:
+            return False
+        _PERMIT_PREFLIGHT.add(key)
+        return True
+
+
+def _release_preflight(network: str, owner: str) -> None:
+    with _PERMITS_LOCK:
+        _PERMIT_PREFLIGHT.discard((network, owner.lower()))
+
+
 def plan_upto(option: UptoOption, state: UptoChainState) -> bool | None:
     """``False`` = upto with no permit, ``True`` = upto with a sponsored permit,
     ``None`` = fall back to exact."""
@@ -652,9 +679,13 @@ def _sign_planned(
     resource_url: str,
     resource_description: str,
     extensions: dict[str, Any] | None,
+    may_permit: bool = True,
 ) -> UptoPayment | None:
     needs_permit = plan_upto(option, state)
     if needs_permit is None:
+        return None
+    if needs_permit and not may_permit:
+        logger.debug("x402 upto: another call holds the permit preflight; using exact")
         return None
     if not needs_permit:
         # Permit2 can already pull the ceiling: no permit, whatever is in flight.
@@ -706,15 +737,23 @@ def try_upto_payment(
             logger.debug("x402 upto: ceiling $%.6f breaches a spend limit", option.ceiling_usd)
             return None
         reader = read_state or read_upto_chain_state
-        state = reader(option, account.address)
-        return _sign_planned(
-            account,
-            option,
-            state,
-            resource_url=resource_url,
-            resource_description=resource_description,
-            extensions=payment_required.get("extensions"),
-        )
+        # Claim the permit preflight BEFORE reading, whenever a permit might
+        # be signed (see _PERMIT_PREFLIGHT).
+        holds = option.gas_sponsoring and _reserve_preflight(option.network, account.address)
+        try:
+            state = reader(option, account.address)
+            return _sign_planned(
+                account,
+                option,
+                state,
+                resource_url=resource_url,
+                resource_description=resource_description,
+                extensions=payment_required.get("extensions"),
+                may_permit=holds,
+            )
+        finally:
+            if holds:
+                _release_preflight(option.network, account.address)
     except Exception as exc:
         logger.debug("x402 upto: falling back to exact (%s: %s)", type(exc).__name__, exc)
         return None
@@ -736,15 +775,23 @@ async def atry_upto_payment(
             logger.debug("x402 upto: ceiling $%.6f breaches a spend limit", option.ceiling_usd)
             return None
         reader = read_state or aread_upto_chain_state
-        state = await reader(option, account.address)
-        return _sign_planned(
-            account,
-            option,
-            state,
-            resource_url=resource_url,
-            resource_description=resource_description,
-            extensions=payment_required.get("extensions"),
-        )
+        # Claim the permit preflight BEFORE reading, whenever a permit might
+        # be signed (see _PERMIT_PREFLIGHT).
+        holds = option.gas_sponsoring and _reserve_preflight(option.network, account.address)
+        try:
+            state = await reader(option, account.address)
+            return _sign_planned(
+                account,
+                option,
+                state,
+                resource_url=resource_url,
+                resource_description=resource_description,
+                extensions=payment_required.get("extensions"),
+                may_permit=holds,
+            )
+        finally:
+            if holds:
+                _release_preflight(option.network, account.address)
     except Exception as exc:
         logger.debug("x402 upto: falling back to exact (%s: %s)", type(exc).__name__, exc)
         return None

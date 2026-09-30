@@ -30,7 +30,10 @@ All notable changes to blockrun-llm will be documented in this file.
   second permit over the same USDC nonce reverted on-chain in a live test of
   the TS SDK. The SDK records the nonce each permit signs over and, while the
   on-chain nonce has not moved and the permit's deadline has not passed, pays
-  exact for any call that would need another. Solana, the Anthropic client and
+  exact for any call that would need another. Concurrent calls in one client
+  (threads or asyncio) claim a per-wallet preflight marker before their chain
+  read, so only one of them can sign a permit; the others pay upto only if
+  Permit2's allowance already covers their ceiling, else exact. Solana, the Anthropic client and
   every non-chat endpoint are unchanged.
 
   Signing matches the official `@x402/evm` 2.28.0 client byte for byte: the
