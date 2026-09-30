@@ -274,18 +274,27 @@ def format_row(
     out_tokens: int,
     cost_usd: float,
     tx_hash: str | None,
+    cost_basis: str | None = None,
 ) -> str:
-    """Format one log row exactly like the example in the module docstring."""
+    """Format one log row exactly like the example in the module docstring.
+
+    An x402 upto call booked at its signed ceiling (``cost_basis ==
+    "upto_ceiling"``) gets a trailing ``(upto ceiling)`` marker: that dollar
+    figure is an upper bound, not the settled charge.
+    """
     if ts is None:
         ts = time.time()
     when = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
     tag = _endpoint_tag(endpoint)
     model_str = (model or "-")[:30].ljust(30)
     tx_str = f"{tx_hash[:10]}…" if tx_hash else "(no-tx)"
-    return (
+    row = (
         f"{when}  {tag:<5}  {model_str}  "
         f"in={in_tokens:>5}  out={out_tokens:<3}  ${cost_usd:.6f}  {tx_str}"
     )
+    if cost_basis == "upto_ceiling":
+        row += "  (upto ceiling)"
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +337,7 @@ class TransactionLogger:
         network: str | None = None,
         client_kind: str | None = None,
         settlement: dict[str, Any] | None = None,
+        cost_basis: str | None = None,
     ) -> Path | None:
         """Append one formatted row to ``./log/transactions.log``.
 
@@ -349,6 +359,7 @@ class TransactionLogger:
             out_tokens=out_tokens,
             cost_usd=float(cost_usd or 0.0),
             tx_hash=tx_hash,
+            cost_basis=cost_basis,
         )
 
         # Silence unused-arg warnings without changing the public API — the

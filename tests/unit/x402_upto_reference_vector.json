@@ -1,0 +1,89 @@
+{
+  "source": "@x402/evm 2.28.0 UptoEvmScheme (viem 2.56.3)",
+  "inputs": {
+    "privateKey": "hardhat #0",
+    "nowSeconds": 1790000000,
+    "randomBytes": "0x11 * 32",
+    "requirements": {
+      "scheme": "upto",
+      "network": "eip155:8453",
+      "amount": "123456",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+      "maxTimeoutSeconds": 300,
+      "extra": {
+        "name": "USD Coin",
+        "version": "2",
+        "facilitatorAddress": "0x97AcCe27D5069544480BDe0F04D9F47d7422a016"
+      }
+    },
+    "usdcNonce": "7",
+    "allowance": "0"
+  },
+  "constants": {
+    "PERMIT2_ADDRESS": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    "x402UptoPermit2ProxyAddress": "0x4020A4f3b7b90ccA423B9fabCc0CE57C6C240002"
+  },
+  "bare": {
+    "x402Version": 2,
+    "payload": {
+      "signature": "0x5ff801e766700c7f476d107973c648fc4299ce414ddc0be54a16f4d6aec07ce421e36e59d4d768f5056c0d2e5e7539353d24a87075de9d3e53899a8bf6671a5f1b",
+      "permit2Authorization": {
+        "from": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        "permitted": {
+          "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "amount": "123456"
+        },
+        "spender": "0x4020A4f3b7b90ccA423B9fabCc0CE57C6C240002",
+        "nonce": "7719472615821079694904732333912527190217998977709370935963838933860875309329",
+        "deadline": "1790000300",
+        "witness": {
+          "to": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+          "facilitator": "0x97AcCe27D5069544480BDe0F04D9F47d7422a016",
+          "validAfter": "0"
+        }
+      }
+    }
+  },
+  "sponsored": {
+    "x402Version": 2,
+    "payload": {
+      "signature": "0x5ff801e766700c7f476d107973c648fc4299ce414ddc0be54a16f4d6aec07ce421e36e59d4d768f5056c0d2e5e7539353d24a87075de9d3e53899a8bf6671a5f1b",
+      "permit2Authorization": {
+        "from": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        "permitted": {
+          "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "amount": "123456"
+        },
+        "spender": "0x4020A4f3b7b90ccA423B9fabCc0CE57C6C240002",
+        "nonce": "7719472615821079694904732333912527190217998977709370935963838933860875309329",
+        "deadline": "1790000300",
+        "witness": {
+          "to": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+          "facilitator": "0x97AcCe27D5069544480BDe0F04D9F47d7422a016",
+          "validAfter": "0"
+        }
+      }
+    },
+    "extensions": {
+      "eip2612GasSponsoring": {
+        "info": {
+          "from": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+          "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "spender": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+          "amount": "123456",
+          "nonce": "7",
+          "deadline": "1790000300",
+          "signature": "0x4064c682120c9f01f9491bc73f0f786742cda0e6382d8f040399ca317ca0282023aa153f6852f7879175539ae63cff5501b9c413b5158201a36e2e57b3e399be1c",
+          "version": "1"
+        }
+      }
+    }
+  },
+  "permit2Digest": "0x94ab2e45bed05e03c203e5ee7397f25bb42f2e962ab5b55c86a31206f9cfae9c",
+  "eip2612Digest": "0x46d46661b7f43243a2686ffe061b0154464c5c30fb8902b5c31cc3fc18b22a35",
+  "reads": [
+    "allowance",
+    "nonces"
+  ]
+}

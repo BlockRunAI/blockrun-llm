@@ -392,12 +392,57 @@ That single call does all of this under the hood:
 
 One call, no separate pay step.
 
+#### Pay the actual cost: x402 `upto` (Base)
+
+By default (`payment_scheme="auto"`) a chat call whose 402 also offers the x402
+`upto` scheme pays with a Permit2 signature for a **ceiling** instead of an
+`exact` EIP-3009 transfer for a fixed quote. The gateway then settles the
+**actual** cost after the call — never more than the ceiling — so discounts it
+only learns afterwards, such as prompt-cache hits, reach you. The gateway lists
+`exact` first; upto is taken only when all of these hold:
+
+- the 402 offers an EVM `upto` requirement with `extra.facilitatorAddress`, for
+  USDC on a network the SDK signs on (Base, Base Sepolia);
+- your wallet holds at least the ceiling in USDC;
+- Permit2 can already pull the ceiling from your wallet, **or** the gateway
+  declares the `eip2612GasSponsoring` extension. In that case the SDK also signs
+  a gasless EIP-2612 permit approving the canonical Permit2 contract
+  (`0x0000…78BA3`) for exactly the ceiling, and the facilitator submits it —
+  **no ETH needed**;
+- the ceiling fits your `max_cost_per_call` / `max_session_cost`.
+
+Otherwise — or on any RPC or signing error — the SDK signs `exact` exactly as
+before. If the gateway rejects an upto payment before serving anything, the
+request is retried once with `exact`, and that client pays exact on that network
+from then on. Solana is unchanged (exact only).
+
+**Per wallet, only one gas-sponsored upto payment can be in flight.** Its permit
+lands only when that call settles, and until then the chain still shows the old
+USDC permit nonce — a second permit over the same nonce would revert on-chain.
+So concurrent or not-yet-settled calls that would need a permit pay `exact`
+(the SDK watches the on-chain nonce, and gives up on a permit at its deadline).
+Calls where Permit2 can already pull the ceiling are unaffected.
+
+```python
+LLMClient(payment_scheme="exact")   # opt out; or BLOCKRUN_PAYMENT_SCHEME=exact
+```
+
+The signed ceiling is an upper bound, not a charge. `ChatResponse.payment_scheme`
+says which scheme paid; when the gateway's `PAYMENT-RESPONSE` reports the settled
+amount, `cost_usd` is that amount; when it does not (always, for streams, whose
+header arrives before settlement), `cost_usd` is the ceiling and
+`cost_is_ceiling` is `True`. `get_spending()["ceiling_usd"]` is the part of
+`total_usd` booked at a ceiling, cost-log rows carry `cost_basis`
+(`upto_settled` / `upto_ceiling`), and `transactions.log` marks ceiling rows.
+Spend limits count ceilings in full, so they err on the safe side.
+
 ### What it costs, and how to verify it
 
 - **Pay-as-you-go, per call.** You pay only the gateway price of each request
   (see [Available Models](#available-models)). The free NVIDIA models are `$0`.
 - **Track spend.** `client.get_spending()` returns this session's
-  `{total_usd, calls}`. On the API-key rail the gateway does not tell the client
+  `{total_usd, calls, ceiling_usd}` (`ceiling_usd`: see
+  [upto](#pay-the-actual-cost-x402-upto-base)). On the API-key rail the gateway does not tell the client
   what a call cost, so treat that total as a floor and
   [user.blockrun.ai/dashboard](https://user.blockrun.ai/dashboard) as the
   authority. Every paid call also appends a line to
@@ -1586,6 +1631,7 @@ optional.
 | `SOLANA_RPC_URL` / `SOLANA_RPC_HEADERS` / `SOLANA_RPC_API_KEY` | RPC for blockhash + mint info while signing | BlockRun's free proxy |
 | `BLOCKRUN_CHAT_TIMEOUT` | Chat HTTP timeout, in seconds | `600` |
 | `BLOCKRUN_MAX_COST_PER_CALL` / `BLOCKRUN_MAX_SESSION_COST` | Opt-in spend limits (wallet rail) | unlimited |
+| `BLOCKRUN_PAYMENT_SCHEME` | `auto` (prefer x402 `upto` when the gateway offers it and it is safe) or `exact` | `auto` |
 
 `BLOCKRUN_API_KEY_URL` is deliberately not `BLOCKRUN_API_URL`: that one names an
 x402 gateway, and an API-key client must never follow it and send your key to a

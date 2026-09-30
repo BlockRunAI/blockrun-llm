@@ -149,9 +149,15 @@ def save_to_cache(
     wallet: str | None = None,
     network: str | None = None,
     client_kind: str | None = None,
+    cost_basis: str | None = None,
 ) -> None:
     """
     Save a paid API response locally.
+
+    ``cost_basis`` labels a cost that is not a plain exact charge: an x402 upto
+    call records ``"upto_settled"`` (the gateway reported the settled amount)
+    or ``"upto_ceiling"`` (``cost_usd`` is the signed ceiling — an upper bound,
+    not a confirmed charge). ``None`` (exact) writes the same rows as before.
 
     1. Hash-keyed cache file (for TTL-based dedup)
     2. Human-readable data file (browsable archive of every paid call)
@@ -167,6 +173,8 @@ def save_to_cache(
         "response": response,
         "cost_usd": cost_usd,
     }
+    if cost_basis is not None:
+        entry["cost_basis"] = cost_basis
 
     try:
         _cache_path(key).write_text(json.dumps(entry, default=str))
@@ -174,7 +182,7 @@ def save_to_cache(
         pass
 
     # Save human-readable copy to ~/.blockrun/data/
-    _save_readable(endpoint, body, response, cost_usd)
+    _save_readable(endpoint, body, response, cost_usd, cost_basis=cost_basis)
 
     # Append to the cost log (never overwritten). Pull model from the body
     # if the caller didn't pass one explicitly.
@@ -185,6 +193,7 @@ def save_to_cache(
         wallet=wallet,
         network=network,
         client_kind=client_kind,
+        cost_basis=cost_basis,
     )
 
 
@@ -193,6 +202,8 @@ def _save_readable(
     body: dict[str, Any],
     response: dict[str, Any],
     cost_usd: float,
+    *,
+    cost_basis: str | None = None,
 ) -> None:
     """Save a human-readable JSON file to ~/.blockrun/data/."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -204,6 +215,8 @@ def _save_readable(
         "request": body,
         "response": response,
     }
+    if cost_basis is not None:
+        entry["cost_basis"] = cost_basis
     try:
         (DATA_DIR / filename).write_text(json.dumps(entry, indent=2, default=str))
     except OSError:
@@ -218,12 +231,15 @@ def _append_cost_log(
     wallet: str | None = None,
     network: str | None = None,
     client_kind: str | None = None,
+    cost_basis: str | None = None,
 ) -> None:
     """Append one JSONL row to ``~/.blockrun/cost_log.jsonl``.
 
     The full schema is::
 
-        {ts, endpoint, cost_usd, model, wallet, network, client_kind}
+        {ts, endpoint, cost_usd, model, wallet, network, client_kind, cost_basis}
+
+    ``cost_basis`` is present only for x402 upto calls (see ``save_to_cache``).
 
     Older rows that only carry ``{ts, endpoint, cost_usd}`` are still readable
     — missing fields surface as ``None`` in summary / export views.
@@ -247,6 +263,8 @@ def _append_cost_log(
                 entry["network"] = network
             if client_kind is not None:
                 entry["client_kind"] = client_kind
+            if cost_basis is not None:
+                entry["cost_basis"] = cost_basis
             f.write(json.dumps(entry) + "\n")
     except OSError:
         pass
