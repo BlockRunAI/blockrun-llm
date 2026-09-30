@@ -2270,18 +2270,20 @@ class SolanaLLMClient:
 
         raise APIError(
             (
-                f"{label} did not complete within {budget:.0f}s "
-                f"(last status: {last_status}). Payment was settled at submit; "
-                "the job stays claimable for ~48h — re-poll poll_url with a "
-                "fresh signature from the same wallet to fetch the result."
-            )
-            if settled_at_submit
-            else (
-                f"{label} did not complete within {budget:.0f}s "
-                f"(last status: {last_status}). Settlement only happens on "
-                "completion, so no payment was taken. The job stays claimable "
-                "for ~48h — re-poll poll_url with a fresh signature from the "
-                "same wallet to fetch (and settle) the finished result."
+                (
+                    f"{label} did not complete within {budget:.0f}s "
+                    f"(last status: {last_status}). Payment was settled at submit; "
+                    "the job stays claimable for ~48h — re-poll poll_url with a "
+                    "fresh signature from the same wallet to fetch the result."
+                )
+                if settled_at_submit
+                else (
+                    f"{label} did not complete within {budget:.0f}s "
+                    f"(last status: {last_status}). Settlement only happens on "
+                    "completion, so no payment was taken. The job stays claimable "
+                    "for ~48h — re-poll poll_url with a fresh signature from the "
+                    "same wallet to fetch (and settle) the finished result."
+                )
             ),
             504,
             {"id": job_id, "last_status": last_status, "poll_url": poll_url},
@@ -5307,18 +5309,20 @@ class AsyncSolanaLLMClient:
 
         raise APIError(
             (
-                f"{label} did not complete within {budget:.0f}s "
-                f"(last status: {last_status}). Payment was settled at submit; "
-                "the job stays claimable for ~48h — re-poll poll_url with a "
-                "fresh signature from the same wallet to fetch the result."
-            )
-            if settled_at_submit
-            else (
-                f"{label} did not complete within {budget:.0f}s "
-                f"(last status: {last_status}). Settlement only happens on "
-                "completion, so no payment was taken. The job stays claimable "
-                "for ~48h — re-poll poll_url with a fresh signature from the "
-                "same wallet to fetch (and settle) the finished result."
+                (
+                    f"{label} did not complete within {budget:.0f}s "
+                    f"(last status: {last_status}). Payment was settled at submit; "
+                    "the job stays claimable for ~48h — re-poll poll_url with a "
+                    "fresh signature from the same wallet to fetch the result."
+                )
+                if settled_at_submit
+                else (
+                    f"{label} did not complete within {budget:.0f}s "
+                    f"(last status: {last_status}). Settlement only happens on "
+                    "completion, so no payment was taken. The job stays claimable "
+                    "for ~48h — re-poll poll_url with a fresh signature from the "
+                    "same wallet to fetch (and settle) the finished result."
+                )
             ),
             504,
             {"id": job_id, "last_status": last_status, "poll_url": poll_url},
