@@ -2,6 +2,30 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.17.1 — 2026-09-30
+
+### Fixed
+- **Solana images settle at POST, and the SDK now accounts for it.** A slow
+  model (gpt-image-2, dall-e-3, 4K nano-banana-pro) answers 202 + `poll_url`.
+  On Solana the gateway settles that payment at submit — a signed transaction
+  dies with its ~60-90s blockhash, so it cannot wait for the render — and the
+  poll only delivers. `SolanaLLMClient.image()` / `image_edit()` (sync and
+  async) assumed Base semantics:
+  - **Spend was booked on completion**, so a job that failed or timed out after
+    the 202 was charged on-chain but missing from session spend. It is now
+    booked at submit, once.
+  - **Errors said "no payment was taken"** on a timeout. They now say the
+    payment was settled at submit, and a failed job says so too.
+  - **Polls replayed the POST signature.** The gateway verifies each poll's
+    signature to bind the payer, so once the blockhash aged out a slow render
+    402'd after it had been paid for. Image polls now re-sign on the same
+    cadence as video (never charged again — the poll does not settle).
+
+  Solana **video** is unchanged: it settles on the completed poll, and a failed
+  video job is not charged.
+- Free tier: the delisted `nemotron-3-nano-30b` is replaced and the live free
+  lineup documented (#73).
+
 ## 1.17.0 — 2026-09-16
 
 ### Added

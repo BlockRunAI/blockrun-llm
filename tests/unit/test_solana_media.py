@@ -724,3 +724,78 @@ class TestAsyncMediaParamParity:
         with pytest.raises(ValueError, match="quality must be one of"):
             await client.image("a cat", quality="hd")
         assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Solana image routes settle at POST (unlike video). The 202 has already been
+# charged, so spend is booked at submit, a failed/timed-out job must not claim
+# "no payment was taken", and polls must re-sign — the gateway verifies each
+# poll's signature to bind the payer, and a slow render outlives the blockhash.
+# ---------------------------------------------------------------------------
+
+
+def _image_handler(signed_polls: list[dict[str, Any]]):
+    """probe → 402; signed POST → 202; each signed GET poll returns the next
+    ``{"code", "json"}``; an unsigned GET is the re-challenge (402)."""
+    pr = {"content-type": "application/json", "payment-required": "stub"}
+    state = {"i": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        has_sig = "PAYMENT-SIGNATURE" in request.headers
+        if request.method == "POST":
+            if not has_sig:
+                return httpx.Response(402, headers=pr, json={"error": "Payment Required"})
+            return httpx.Response(
+                202,
+                json={
+                    "id": "IMG",
+                    "poll_url": "/api/v1/images/generations/IMG",
+                    "status": "queued",
+                },
+            )
+        if not has_sig:
+            return httpx.Response(402, headers=pr, json={"error": "Payment Required"})
+        step = signed_polls[min(state["i"], len(signed_polls) - 1)]
+        state["i"] += 1
+        return httpx.Response(
+            step["code"], json=step["json"], headers=pr if step["code"] == 402 else {}
+        )
+
+    return handler
+
+
+_STALE = {"code": 402, "json": {"error": "Payment verification failed"}}
+
+
+class TestSolanaImageSettlesAtPost:
+    @pytest.fixture(autouse=True)
+    def _fast_polls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(SolanaLLMClient, "IMAGE_POLL_INTERVAL_SECONDS", 0.001)
+
+    def test_failed_job_is_booked_and_says_charged(self) -> None:
+        failed = {"code": 200, "json": {"status": "failed", "error": "content policy"}}
+        client = _make_client(_image_handler([_STALE, failed]))
+        with pytest.raises(APIError, match="settled at submit"):
+            client.image("a cat", model="openai/gpt-image-2")
+        assert client._session_calls == 1
+        assert client._session_total_usd == pytest.approx(1.0)
+
+    def test_stale_poll_resigns_and_completes_without_double_booking(self) -> None:
+        done = {
+            "code": 200,
+            "json": {"status": "completed", "created": 1, "data": [{"url": "https://cdn/i.png"}]},
+        }
+        client = _make_client(_image_handler([_STALE, done]))
+        resp = client.image("a cat", model="openai/gpt-image-2")
+        assert resp.data[0].url == "https://cdn/i.png"
+        assert client._session_calls == 1
+
+    async def test_async_failed_job_is_booked(self) -> None:
+        failed = {"code": 200, "json": {"status": "failed", "error": "content policy"}}
+        client = _make_async_client(_image_handler([_STALE, failed]))
+        try:
+            with pytest.raises(APIError, match="settled at submit"):
+                await client.image("a cat", model="openai/gpt-image-2")
+            assert client._session_calls == 1
+        finally:
+            await client._client.aclose()

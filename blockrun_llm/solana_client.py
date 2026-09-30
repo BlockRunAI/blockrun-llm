@@ -549,10 +549,12 @@ class SolanaLLMClient:
 
     # Image generation slow-path polling. Models like ``openai/gpt-image-2``
     # or ``openai/dall-e-3`` routinely exceed the gateway's 30s inline window
-    # and come back as 202 + ``poll_url`` instead of the finished image. The
-    # SDK replays the same PAYMENT-SIGNATURE on every poll; settlement only
-    # happens on the first completed poll, so a poll-loop timeout = zero
-    # spend. Budget is conservative — most upstreams finish in 1-3 min.
+    # and come back as 202 + ``poll_url`` instead of the finished image. Unlike
+    # video, Solana image routes settle at POST (the signed transaction expires
+    # with its blockhash long before a slow render ends), so the poll only
+    # delivers: a timeout or upstream failure after the 202 has already been
+    # charged. Polls re-sign on the media cadence, since the gateway verifies
+    # each poll's signature to bind the payer. Most upstreams finish in 1-3 min.
     IMAGE_POLL_INTERVAL_SECONDS = 5.0
     IMAGE_POLL_BUDGET_SECONDS = 300.0
 
@@ -1972,12 +1974,14 @@ class SolanaLLMClient:
         poll_interval_seconds: float | None = None,
         max_resigns: int = 0,
         label: str = "Image",
+        settled_at_submit: bool = False,
     ) -> dict[str, Any]:
         """Sign + submit + poll wrapper for async media generation.
 
-        Shared by :meth:`image` (5-min budget, no mid-poll re-signing needed)
-        and :meth:`video` (15-min budget, ``max_resigns`` re-signs to survive
-        the 600s x402 authorization window). ``poll_budget_seconds`` /
+        Shared by :meth:`image` (5-min budget, ``settled_at_submit`` — Solana
+        image routes settle at POST) and :meth:`video` (15-min budget, settles
+        on the completed poll). Both re-sign mid-poll so a signature never
+        outlives its blockhash. ``poll_budget_seconds`` /
         ``poll_interval_seconds`` default to the image constants; ``label``
         only tunes error text.
 
@@ -2112,6 +2116,14 @@ class SolanaLLMClient:
                 {"response": submit_data},
             )
         poll_url = self._absolute_url(poll_url_rel)
+        if settled_at_submit:
+            # Solana image routes settle at POST (a signed transaction dies with
+            # its ~60-90s blockhash, so the gateway cannot wait for a long
+            # render). The charge has already happened: book it now, or a job
+            # that later fails or times out drops out of session accounting.
+            self._session_calls += 1
+            self._session_total_usd += cost_usd
+            self._last_call_cost = cost_usd
         poll_headers = {
             "User-Agent": _get_user_agent(),
             "PAYMENT-SIGNATURE": encoded_payment,
@@ -2213,7 +2225,8 @@ class SolanaLLMClient:
 
             if last_status == "failed":
                 raise APIError(
-                    f"{label} failed upstream: {poll_data.get('error', 'unknown')}",
+                    f"{label} failed upstream: {poll_data.get('error', 'unknown')}"
+                    + (" (payment was settled at submit)" if settled_at_submit else ""),
                     poll_resp.status_code,
                     sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
                     retry_after=retry_after_of(poll_resp),
@@ -2229,9 +2242,10 @@ class SolanaLLMClient:
                 )
                 if tx_hash and isinstance(poll_data, dict) and not poll_data.get("txHash"):
                     poll_data["txHash"] = tx_hash
-                self._session_calls += 1
-                self._session_total_usd += cost_usd
-                self._last_call_cost = cost_usd
+                if not settled_at_submit:
+                    self._session_calls += 1
+                    self._session_total_usd += cost_usd
+                    self._last_call_cost = cost_usd
                 self._capture_settlement(poll_resp)
                 save_to_cache(endpoint, body, poll_data, cost_usd=cost_usd, **self._billing_meta())
                 self._log_transaction(endpoint, body, poll_data, cost_usd)
@@ -2256,11 +2270,20 @@ class SolanaLLMClient:
 
         raise APIError(
             (
-                f"{label} did not complete within {budget:.0f}s "
-                f"(last status: {last_status}). Settlement only happens on "
-                "completion, so no payment was taken. The job stays claimable "
-                "for ~48h — re-poll poll_url with a fresh signature from the "
-                "same wallet to fetch (and settle) the finished result."
+                (
+                    f"{label} did not complete within {budget:.0f}s "
+                    f"(last status: {last_status}). Payment was settled at submit; "
+                    "the job stays claimable for ~48h — re-poll poll_url with a "
+                    "fresh signature from the same wallet to fetch the result."
+                )
+                if settled_at_submit
+                else (
+                    f"{label} did not complete within {budget:.0f}s "
+                    f"(last status: {last_status}). Settlement only happens on "
+                    "completion, so no payment was taken. The job stays claimable "
+                    "for ~48h — re-poll poll_url with a fresh signature from the "
+                    "same wallet to fetch (and settle) the finished result."
+                )
             ),
             504,
             {"id": job_id, "last_status": last_status, "poll_url": poll_url},
@@ -2285,10 +2308,11 @@ class SolanaLLMClient:
         ``xai/grok-imagine-image-pro``, ``black-forest/flux-1.1-pro``.
 
         Slow models (gpt-image-2, dall-e-3) trigger the gateway's async
-        202 + poll flow; the client polls transparently until completion
-        and only settles on the final completed poll. If the poll budget
-        (``IMAGE_POLL_BUDGET_SECONDS``, 5 min) is exhausted, an
-        :class:`APIError` 504 is raised and **no payment is taken**.
+        202 + poll flow; the client polls transparently until completion.
+        On Solana the payment settles at submit, so if the poll budget
+        (``IMAGE_POLL_BUDGET_SECONDS``, 5 min) is exhausted the
+        :class:`APIError` 504 comes **after** the charge — the job stays
+        claimable for ~48h at its ``poll_url``.
 
         Args:
             quality: ``low`` / ``medium`` / ``high`` / ``auto`` — latency vs
@@ -2309,7 +2333,13 @@ class SolanaLLMClient:
         validate_image_quality(quality)
         if quality is not None:
             body["quality"] = quality
-        data = self._request_image_with_payment("/v1/images/generations", body, timeout=timeout)
+        data = self._request_image_with_payment(
+            "/v1/images/generations",
+            body,
+            timeout=timeout,
+            max_resigns=self.MEDIA_POLL_MAX_RESIGNS,
+            settled_at_submit=True,
+        )
         return ImageResponse(**data)
 
     def image_edit(
@@ -2351,7 +2381,13 @@ class SolanaLLMClient:
         if quality is not None:
             body["quality"] = quality
 
-        data = self._request_image_with_payment("/v1/images/image2image", body, timeout=timeout)
+        data = self._request_image_with_payment(
+            "/v1/images/image2image",
+            body,
+            timeout=timeout,
+            max_resigns=self.MEDIA_POLL_MAX_RESIGNS,
+            settled_at_submit=True,
+        )
         return ImageResponse(**data)
 
     # ------------------------------------------------------------------
@@ -4485,7 +4521,11 @@ class AsyncSolanaLLMClient:
         if quality is not None:
             body["quality"] = quality
         data = await self._request_image_with_payment(
-            "/v1/images/generations", body, timeout=timeout
+            "/v1/images/generations",
+            body,
+            timeout=timeout,
+            max_resigns=SolanaLLMClient.MEDIA_POLL_MAX_RESIGNS,
+            settled_at_submit=True,
         )
         return ImageResponse(**data)
 
@@ -4527,7 +4567,11 @@ class AsyncSolanaLLMClient:
             body["quality"] = quality
 
         data = await self._request_image_with_payment(
-            "/v1/images/image2image", body, timeout=timeout
+            "/v1/images/image2image",
+            body,
+            timeout=timeout,
+            max_resigns=SolanaLLMClient.MEDIA_POLL_MAX_RESIGNS,
+            settled_at_submit=True,
         )
         return ImageResponse(**data)
 
@@ -5008,6 +5052,7 @@ class AsyncSolanaLLMClient:
         poll_interval_seconds: float | None = None,
         max_resigns: int = 0,
         label: str = "Image",
+        settled_at_submit: bool = False,
     ) -> dict[str, Any]:
         """Async sign + submit + poll wrapper for async media generation — the
         async mirror of the sync :class:`SolanaLLMClient` helper. Shared by
@@ -5122,6 +5167,14 @@ class AsyncSolanaLLMClient:
         if not poll_url_rel:
             raise APIError("Slow-path 202 missing poll_url", 202, {"response": submit_data})
         poll_url = self._absolute_url(poll_url_rel)
+        if settled_at_submit:
+            # Solana image routes settle at POST (a signed transaction dies with
+            # its ~60-90s blockhash, so the gateway cannot wait for a long
+            # render). The charge has already happened: book it now, or a job
+            # that later fails or times out drops out of session accounting.
+            self._session_calls += 1
+            self._session_total_usd += cost_usd
+            self._last_call_cost = cost_usd
         poll_headers = {
             "User-Agent": _get_user_agent(),
             "PAYMENT-SIGNATURE": encoded_payment,
@@ -5215,7 +5268,8 @@ class AsyncSolanaLLMClient:
 
             if last_status == "failed":
                 raise APIError(
-                    f"{label} failed upstream: {poll_data.get('error', 'unknown')}",
+                    f"{label} failed upstream: {poll_data.get('error', 'unknown')}"
+                    + (" (payment was settled at submit)" if settled_at_submit else ""),
                     poll_resp.status_code,
                     sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
                     retry_after=retry_after_of(poll_resp),
@@ -5229,9 +5283,10 @@ class AsyncSolanaLLMClient:
                 )
                 if tx_hash and isinstance(poll_data, dict) and not poll_data.get("txHash"):
                     poll_data["txHash"] = tx_hash
-                self._session_calls += 1
-                self._session_total_usd += cost_usd
-                self._last_call_cost = cost_usd
+                if not settled_at_submit:
+                    self._session_calls += 1
+                    self._session_total_usd += cost_usd
+                    self._last_call_cost = cost_usd
                 self._capture_settlement(poll_resp)
                 save_to_cache(endpoint, body, poll_data, cost_usd=cost_usd, **self._billing_meta())
                 self._log_transaction(endpoint, body, poll_data, cost_usd)
@@ -5254,11 +5309,20 @@ class AsyncSolanaLLMClient:
 
         raise APIError(
             (
-                f"{label} did not complete within {budget:.0f}s "
-                f"(last status: {last_status}). Settlement only happens on "
-                "completion, so no payment was taken. The job stays claimable "
-                "for ~48h — re-poll poll_url with a fresh signature from the "
-                "same wallet to fetch (and settle) the finished result."
+                (
+                    f"{label} did not complete within {budget:.0f}s "
+                    f"(last status: {last_status}). Payment was settled at submit; "
+                    "the job stays claimable for ~48h — re-poll poll_url with a "
+                    "fresh signature from the same wallet to fetch the result."
+                )
+                if settled_at_submit
+                else (
+                    f"{label} did not complete within {budget:.0f}s "
+                    f"(last status: {last_status}). Settlement only happens on "
+                    "completion, so no payment was taken. The job stays claimable "
+                    "for ~48h — re-poll poll_url with a fresh signature from the "
+                    "same wallet to fetch (and settle) the finished result."
+                )
             ),
             504,
             {"id": job_id, "last_status": last_status, "poll_url": poll_url},
