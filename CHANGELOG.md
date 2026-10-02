@@ -2,6 +2,29 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## Unreleased
+
+### Fixed
+- **A 502/503 on the account rail is no longer replayed, so it can no longer
+  bill twice.** With an API key there is no unsigned probe: the first request
+  carries the key and is the billed one. The raw paid helpers still retried it
+  once on a 502/503 (and the stream probe up to three times on any 5xx), so a
+  call the gateway had already accepted could be charged again.
+  - Affected: `search`, `exa` / `exa_search` / `exa_contents` /
+    `exa_find_similar` / `exa_answer`, `pm` / `pm_query`, `defi`, `dex`,
+    `modal`, `rpc` / `rpc_batch`, `price` / `price_history` / `list_symbols`,
+    `portrait_enroll`, `realface_enroll`, `chat` / `chat_completion` and
+    `chat_completion_stream` on `SolanaLLMClient`, plus the same surfaces
+    (`search`, Exa, `pm`, `defi`, `dex`, `modal`, `image_edit`, chat and
+    streaming) on the Base `LLMClient`. Sync and async.
+  - Any 5xx on the account rail now raises `APIError` at once, keeping its
+    status code and `Retry-After`, with a message saying the request may
+    already have been accepted and billed and that retrying may bill it
+    again. The Solana `image()` / `video()` / audio submit, which already
+    skipped the replay, now says the same.
+  - The wallet rail is unchanged: its first request is an unsigned probe that
+    costs nothing, so a 502/503 there is still retried once.
+
 ## 1.18.0 — 2026-10-02
 
 ### Added

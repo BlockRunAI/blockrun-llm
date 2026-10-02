@@ -55,6 +55,7 @@ from .apikey import (
     auth_headers,
     missing_credential_error,
     payment_mode,
+    raise_for_api_key_5xx,
     raise_for_api_key_402,
     resolve_api_key,
     wallet_only,
@@ -1139,6 +1140,10 @@ class LLMClient:
                     raise_for_api_key_402(resp1, self.api_key)
                     payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
                     break  # advance to phase 2
+                # Account rail: this request carried the key and was the billed one,
+                # so a 5xx is never replayed (it could bill twice). Only the wallet
+                # rail's unsigned probe reaches the retry below.
+                raise_for_api_key_5xx(resp1, self.api_key)
                 if resp1.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
                     import time
 
@@ -1406,7 +1411,11 @@ class LLMClient:
         # First attempt (will likely return 402)
         response = self._client.post(url, json=body, headers=req_headers)
 
-        # Auto-retry on transient server errors
+        # Account rail: this request carried the key and was the billed one,
+        # so a 5xx is never replayed (it could bill twice). Only the wallet
+        # rail's unsigned probe reaches the retry below.
+        raise_for_api_key_5xx(response, self.api_key)
+        # Auto-retry on transient server errors (wallet rail only, per above)
         if response.status_code in (502, 503):
             import time
 
@@ -1609,7 +1618,11 @@ class LLMClient:
 
         response = self._client.post(url, json=body, headers=req_headers)
 
-        # Auto-retry on transient server errors
+        # Account rail: this request carried the key and was the billed one,
+        # so a 5xx is never replayed (it could bill twice). Only the wallet
+        # rail's unsigned probe reaches the retry below.
+        raise_for_api_key_5xx(response, self.api_key)
+        # Auto-retry on transient server errors (wallet rail only, per above)
         if response.status_code in (502, 503):
             import time
 
@@ -1766,6 +1779,10 @@ class LLMClient:
 
         response = self._client.get(url, params=params, headers=req_headers)
 
+        # Account rail: this request carried the key and was the billed one,
+        # so a 5xx is never replayed (it could bill twice). Only the wallet
+        # rail's unsigned probe reaches the retry below.
+        raise_for_api_key_5xx(response, self.api_key)
         if response.status_code in (502, 503):
             import time
 
@@ -3144,6 +3161,10 @@ class AsyncLLMClient:
                     raise_for_api_key_402(resp1, self.api_key)
                     payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
                     break
+                # Account rail: this request carried the key and was the billed one,
+                # so a 5xx is never replayed (it could bill twice). Only the wallet
+                # rail's unsigned probe reaches the retry below.
+                raise_for_api_key_5xx(resp1, self.api_key)
                 if resp1.status_code in statuses_5xx and attempt < len(backoffs):
                     import asyncio
 
@@ -3316,7 +3337,11 @@ class AsyncLLMClient:
 
         response = await self._client.post(url, json=body, headers=req_headers)
 
-        # Auto-retry on transient server errors
+        # Account rail: this request carried the key and was the billed one,
+        # so a 5xx is never replayed (it could bill twice). Only the wallet
+        # rail's unsigned probe reaches the retry below.
+        raise_for_api_key_5xx(response, self.api_key)
+        # Auto-retry on transient server errors (wallet rail only, per above)
         if response.status_code in (502, 503):
             import asyncio
 
@@ -3499,7 +3524,11 @@ class AsyncLLMClient:
 
         response = await self._client.post(url, json=body, headers=req_headers)
 
-        # Auto-retry on transient server errors
+        # Account rail: this request carried the key and was the billed one,
+        # so a 5xx is never replayed (it could bill twice). Only the wallet
+        # rail's unsigned probe reaches the retry below.
+        raise_for_api_key_5xx(response, self.api_key)
+        # Auto-retry on transient server errors (wallet rail only, per above)
         if response.status_code in (502, 503):
             import asyncio
 
@@ -3639,6 +3668,10 @@ class AsyncLLMClient:
 
         response = await self._client.get(url, params=params, headers=req_headers)
 
+        # Account rail: this request carried the key and was the billed one,
+        # so a 5xx is never replayed (it could bill twice). Only the wallet
+        # rail's unsigned probe reaches the retry below.
+        raise_for_api_key_5xx(response, self.api_key)
         if response.status_code in (502, 503):
             import asyncio
 

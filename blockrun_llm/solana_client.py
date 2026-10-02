@@ -34,6 +34,7 @@ from .apikey import (
     auth_headers,
     missing_credential_error,
     payment_mode,
+    raise_for_api_key_5xx,
     raise_for_api_key_402,
     resolve_api_key,
     wallet_only,
@@ -1307,6 +1308,10 @@ class SolanaLLMClient:
                     raise_for_api_key_402(resp1, self.api_key)
                     payment_headers, cost_usd = self._sign_payment_from_response(resp1)
                     break
+                # Account rail: this request carried the key and was the billed one,
+                # so a 5xx is never replayed (it could bill twice). Only the wallet
+                # rail's unsigned probe reaches the retry below.
+                raise_for_api_key_5xx(resp1, self.api_key)
                 if resp1.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
                     import time
 
@@ -1531,7 +1536,11 @@ class SolanaLLMClient:
 
         response = self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
-        # Auto-retry on transient server errors
+        # Account rail: this request carried the key and was the billed one,
+        # so a 5xx is never replayed (it could bill twice). Only the wallet
+        # rail's unsigned probe reaches the retry below.
+        raise_for_api_key_5xx(response, self.api_key)
+        # Auto-retry on transient server errors (wallet rail only, per above)
         if response.status_code in (502, 503):
             import time
 
@@ -1685,7 +1694,11 @@ class SolanaLLMClient:
 
         response = self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
 
-        # Auto-retry on transient server errors
+        # Account rail: this request carried the key and was the billed one,
+        # so a 5xx is never replayed (it could bill twice). Only the wallet
+        # rail's unsigned probe reaches the retry below.
+        raise_for_api_key_5xx(response, self.api_key)
+        # Auto-retry on transient server errors (wallet rail only, per above)
         if response.status_code in (502, 503):
             import time
 
@@ -1841,6 +1854,10 @@ class SolanaLLMClient:
 
         response = self._client.get(url, params=params, headers=headers, timeout=eff_timeout)
 
+        # Account rail: this request carried the key and was the billed one,
+        # so a 5xx is never replayed (it could bill twice). Only the wallet
+        # rail's unsigned probe reaches the retry below.
+        raise_for_api_key_5xx(response, self.api_key)
         if response.status_code in (502, 503):
             import time
 
@@ -2032,7 +2049,9 @@ class SolanaLLMClient:
         probe = self._client.post(url, json=body, headers=probe_headers, timeout=eff_timeout)
         # Not on the account rail: there the first POST is the billed submit
         # (the key IS the payment), and a 502 can arrive after the charge, so
-        # replaying it could bill the job twice. Mirrors the Base VideoClient.
+        # replaying it could bill the job twice; it raises instead, saying so.
+        # Mirrors the Base VideoClient.
+        raise_for_api_key_5xx(probe, self.api_key)
         if probe.status_code in (502, 503) and not self.api_key:
             _time.sleep(1)
             probe = self._client.post(url, json=body, headers=probe_headers, timeout=eff_timeout)
@@ -4061,6 +4080,10 @@ class AsyncSolanaLLMClient:
                     raise_for_api_key_402(resp1, self.api_key)
                     payment_headers, cost_usd = await self._sign_payment_from_response(resp1)
                     break
+                # Account rail: this request carried the key and was the billed one,
+                # so a 5xx is never replayed (it could bill twice). Only the wallet
+                # rail's unsigned probe reaches the retry below.
+                raise_for_api_key_5xx(resp1, self.api_key)
                 if resp1.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
                     import asyncio
 
@@ -4253,6 +4276,10 @@ class AsyncSolanaLLMClient:
         eff_timeout = timeout if timeout is not None else self._timeout
 
         response = await self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
+        # Account rail: this request carried the key and was the billed one,
+        # so a 5xx is never replayed (it could bill twice). Only the wallet
+        # rail's unsigned probe reaches the retry below.
+        raise_for_api_key_5xx(response, self.api_key)
         if response.status_code in (502, 503):
             import asyncio
 
@@ -4384,6 +4411,10 @@ class AsyncSolanaLLMClient:
         eff_timeout = timeout if timeout is not None else self._timeout
 
         response = await self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
+        # Account rail: this request carried the key and was the billed one,
+        # so a 5xx is never replayed (it could bill twice). Only the wallet
+        # rail's unsigned probe reaches the retry below.
+        raise_for_api_key_5xx(response, self.api_key)
         if response.status_code in (502, 503):
             await asyncio.sleep(1)
             response = await self._client.post(url, json=body, headers=headers, timeout=eff_timeout)
@@ -4481,6 +4512,10 @@ class AsyncSolanaLLMClient:
         eff_timeout = timeout if timeout is not None else self._timeout
 
         response = await self._client.get(url, params=params, headers=headers, timeout=eff_timeout)
+        # Account rail: this request carried the key and was the billed one,
+        # so a 5xx is never replayed (it could bill twice). Only the wallet
+        # rail's unsigned probe reaches the retry below.
+        raise_for_api_key_5xx(response, self.api_key)
         if response.status_code in (502, 503):
             await asyncio.sleep(1)
             response = await self._client.get(
@@ -5213,7 +5248,9 @@ class AsyncSolanaLLMClient:
         probe = await self._client.post(url, json=body, headers=probe_headers, timeout=eff_timeout)
         # Not on the account rail: there the first POST is the billed submit
         # (the key IS the payment), and a 502 can arrive after the charge, so
-        # replaying it could bill the job twice. Mirrors the Base VideoClient.
+        # replaying it could bill the job twice; it raises instead, saying so.
+        # Mirrors the Base VideoClient.
+        raise_for_api_key_5xx(probe, self.api_key)
         if probe.status_code in (502, 503) and not self.api_key:
             await asyncio.sleep(1)
             probe = await self._client.post(
