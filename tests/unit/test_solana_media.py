@@ -1178,3 +1178,162 @@ class TestSolanaAccountRailImageAndVideo:
         with pytest.raises(APIError, match="different polling origin"):
             client.video("x", model="bytedance/seedance-2.0")
         assert polls == []
+
+
+# ---------------------------------------------------------------------------
+# Account rail, non-media endpoints. search, Exa, pm, chat and the stream probe
+# still go through the raw helpers, whose first request carries the key and is
+# the billed one. A 502/503 there used to be replayed once, which on this rail
+# is a second charge. It must raise instead, saying the call may be billed.
+# ---------------------------------------------------------------------------
+
+_SEARCH_OK = {"query": "q", "summary": "s"}
+_CHAT_OK = {
+    "id": "x",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "openai/gpt-4o",
+    "choices": [
+        {"index": 0, "message": {"role": "assistant", "content": "4"}, "finish_reason": "stop"}
+    ],
+}
+
+
+def _counting_handler(requests: list[httpx.Request], status: int):
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(status, json={"error": "upstream"})
+
+    return handler
+
+
+_SOLANA_ACCOUNT_CALLS = {
+    "search": lambda c: c.search("q"),
+    "exa_search": lambda c: c.exa_search("q"),
+    "exa": lambda c: c.exa("contents", {"urls": ["https://example.com"]}),
+    "pm_get": lambda c: c.pm("polymarket/markets"),
+    "pm_query": lambda c: c.pm_query("polymarket/markets", {"limit": 1}),
+    "chat": lambda c: c.chat("openai/gpt-4o", "2+2?"),
+    "chat_stream": lambda c: list(
+        c.chat_completion_stream("openai/gpt-4o", [{"role": "user", "content": "hi"}])
+    ),
+}
+
+
+async def _drain(agen: Any) -> list[Any]:
+    return [chunk async for chunk in agen]
+
+
+_ASYNC_SOLANA_ACCOUNT_CALLS = {
+    "search": lambda c: c.search("q"),
+    "exa_search": lambda c: c.exa_search("q"),
+    "exa": lambda c: c.exa("contents", {"urls": ["https://example.com"]}),
+    "pm_get": lambda c: c.pm("polymarket/markets"),
+    "pm_query": lambda c: c.pm_query("polymarket/markets", {"limit": 1}),
+    "chat": lambda c: c.chat("openai/gpt-4o", "2+2?"),
+    "chat_stream": lambda c: _drain(
+        c.chat_completion_stream("openai/gpt-4o", [{"role": "user", "content": "hi"}])
+    ),
+}
+
+
+class TestSolanaAccountRailNoReplay:
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # If a replay sneaks back in, fail on the count, not on a slow sleep.
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    @pytest.mark.parametrize("status", [502, 503])
+    @pytest.mark.parametrize("call", sorted(_SOLANA_ACCOUNT_CALLS))
+    def test_billed_first_request_is_never_replayed(self, call: str, status: int) -> None:
+        requests: list[httpx.Request] = []
+        client = _account_client(_counting_handler(requests, status))
+        with pytest.raises(APIError) as exc:
+            _SOLANA_ACCOUNT_CALLS[call](client)
+        assert len(requests) == 1
+        assert exc.value.status_code == status
+        assert "may already have been accepted and billed" in str(exc.value)
+        assert "retrying may bill it again" in str(exc.value)
+        assert all("PAYMENT-SIGNATURE" not in r.headers for r in requests)
+
+    @pytest.mark.parametrize("status", [502, 503])
+    @pytest.mark.parametrize("call", sorted(_ASYNC_SOLANA_ACCOUNT_CALLS))
+    async def test_async_billed_first_request_is_never_replayed(
+        self, call: str, status: int
+    ) -> None:
+        requests: list[httpx.Request] = []
+        client = _async_account_client(_counting_handler(requests, status))
+        try:
+            with pytest.raises(APIError) as exc:
+                await _ASYNC_SOLANA_ACCOUNT_CALLS[call](client)
+            assert len(requests) == 1
+            assert exc.value.status_code == status
+            assert "may already have been accepted and billed" in str(exc.value)
+        finally:
+            await client._client.aclose()
+
+    def test_image_probe_5xx_says_it_may_be_billed(self) -> None:
+        requests: list[httpx.Request] = []
+        client = _account_client(_counting_handler(requests, 502))
+        with pytest.raises(APIError, match="may already have been accepted and billed"):
+            client.image("a cat", model="openai/gpt-image-2")
+        assert len(requests) == 1
+
+    def test_account_success_still_one_request(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=_SEARCH_OK)
+
+        client = _account_client(handler)
+        assert client.search("q").summary == "s"
+        assert len(requests) == 1
+
+
+def _wallet_probe_retry_handler(unsigned: list[httpx.Request], signed: list[httpx.Request]):
+    """First unsigned probe 502s, the replayed probe gets the 402, the signed
+    request succeeds: the wallet rail's free probe retry, which must survive."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "PAYMENT-SIGNATURE" in request.headers:
+            signed.append(request)
+            return httpx.Response(200, json=_SEARCH_OK)
+        unsigned.append(request)
+        if len(unsigned) == 1:
+            return httpx.Response(502, json={"error": "upstream"})
+        return httpx.Response(
+            402,
+            headers={"content-type": "application/json", "payment-required": "stub"},
+            json={"error": "Payment Required"},
+        )
+
+    return handler
+
+
+class TestSolanaWalletProbeRetryKept:
+    def test_unsigned_probe_is_still_retried_on_502(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+        unsigned: list[httpx.Request] = []
+        signed: list[httpx.Request] = []
+        client = _make_client(_wallet_probe_retry_handler(unsigned, signed))
+        assert client.search("q").summary == "s"
+        assert len(unsigned) == 2
+        assert len(signed) == 1
+
+    async def test_async_unsigned_probe_is_still_retried_on_502(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def _no_sleep(_s: float) -> None:
+            return None
+
+        monkeypatch.setattr("blockrun_llm.solana_client.asyncio.sleep", _no_sleep)
+        unsigned: list[httpx.Request] = []
+        signed: list[httpx.Request] = []
+        client = _make_async_client(_wallet_probe_retry_handler(unsigned, signed))
+        try:
+            assert (await client.search("q")).summary == "s"
+            assert len(unsigned) == 2
+            assert len(signed) == 1
+        finally:
+            await client._client.aclose()

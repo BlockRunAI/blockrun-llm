@@ -26,7 +26,8 @@ import os
 from typing import Any
 from urllib.parse import urlsplit
 
-from .types import APIError, PaymentError
+from .types import APIError, PaymentError, retry_after_of
+from .validation import sanitize_error_response
 
 #: Prefix every BlockRun API key carries. It is what lets one credential
 #: parameter accept either kind: a hex private key can never start with ``brk_``.
@@ -245,6 +246,43 @@ def raise_for_api_key_402(response: Any, api_key: str | None) -> None:
     raise api_key_payment_error(body)
 
 
+def api_key_unconfirmed_error(response: Any) -> APIError:
+    """Explain a 5xx that arrived on the account rail, where it is not retried.
+
+    On the x402 rail the first POST is an unsigned probe: it costs nothing, so a
+    502/503 there can be replayed. On this rail there is no probe. The first POST
+    carries the key and IS the billed request, and a 5xx can arrive after the
+    gateway accepted it and drew down credit (an upstream failing mid-call, a
+    proxy timing out a request that is still running). Replaying it is a second
+    charge for one call, so the error says that instead of doing it.
+    """
+    try:
+        error_body = response.json()
+    except Exception:
+        error_body = {"error": "Request failed"}
+    return APIError(
+        f"API error: {response.status_code} from api.blockrun.ai. The request may "
+        "already have been accepted and billed to this account, so it was not "
+        "retried automatically; retrying may bill it again. Check usage at "
+        "https://user.blockrun.ai/dashboard before retrying.",
+        response.status_code,
+        sanitize_error_response(error_body),
+        retry_after=retry_after_of(response),
+    )
+
+
+def raise_for_api_key_5xx(response: Any, api_key: str | None) -> None:
+    """Refuse to replay an account-rail request that answered 5xx.
+
+    Every request site that auto-retries a 502/503 calls this first, so the
+    retry survives only where it is free: the wallet rail's unsigned probe.
+    A no-op on the x402 rail and for any non-5xx status.
+    """
+    if not api_key or response.status_code < 500:
+        return
+    raise api_key_unconfirmed_error(response)
+
+
 __all__ = [
     "API_KEY_PREFIX",
     "DEFAULT_API_KEY_URL",
@@ -255,11 +293,13 @@ __all__ = [
     "APIError",
     "api_key_base_url",
     "api_key_payment_error",
+    "api_key_unconfirmed_error",
     "auth_headers",
     "configure_credential",
     "is_api_key",
     "missing_credential_error",
     "payment_mode",
+    "raise_for_api_key_5xx",
     "raise_for_api_key_402",
     "resolve_api_key",
     "resolve_poll_url",

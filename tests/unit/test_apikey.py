@@ -10,7 +10,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from blockrun_llm import LLMClient
+from blockrun_llm import AsyncLLMClient, LLMClient
 from blockrun_llm.apikey import (
     DEFAULT_API_KEY_URL,
     ENV_API_KEY,
@@ -20,11 +20,12 @@ from blockrun_llm.apikey import (
     api_key_base_url,
     auth_headers,
     is_api_key,
+    raise_for_api_key_5xx,
     resolve_api_key,
     resolve_poll_url,
 )
 from blockrun_llm.image import ImageClient
-from blockrun_llm.types import PaymentError
+from blockrun_llm.types import APIError, PaymentError
 
 API_KEY = "brk_live_TESTKEYTESTKEYTESTKEY"
 WALLET_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
@@ -314,3 +315,123 @@ def test_rotating_env_only_affects_new_clients(monkeypatch):
         monkeypatch.delenv(ENV_API_KEY)
         with LLMClient(private_key=WALLET_KEY) as wallet:
             assert "authorization" not in wallet._client.headers
+
+
+# ---------------------------------------------------------------------------
+# No 5xx replay on the account rail. The first request carries the key and is
+# the billed one, so the wallet rail's "retry the probe once on 502/503" is a
+# second charge here. Every Base helper that has that retry must refuse it.
+# ---------------------------------------------------------------------------
+
+
+def _counting(requests: list, status: int):
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(status, json={"error": "upstream"})
+
+    return handler
+
+
+_BASE_ACCOUNT_CALLS = {
+    "search": lambda c: c.search("q"),
+    "exa_search": lambda c: c.exa_search("q"),
+    "pm_get": lambda c: c.pm("polymarket/markets"),
+    "pm_query": lambda c: c.pm_query("polymarket/markets", {"limit": 1}),
+    "chat": lambda c: c.chat("openai/gpt-4o", "2+2?"),
+    "chat_stream": lambda c: list(
+        c.chat_completion_stream("openai/gpt-4o", [{"role": "user", "content": "hi"}])
+    ),
+}
+
+
+async def _adrain(agen) -> list:
+    return [chunk async for chunk in agen]
+
+
+_ASYNC_BASE_ACCOUNT_CALLS = {
+    "search": lambda c: c.search("q"),
+    "pm_get": lambda c: c.pm("polymarket/markets"),
+    "pm_query": lambda c: c.pm_query("polymarket/markets", {"limit": 1}),
+    "chat": lambda c: c.chat("openai/gpt-4o", "2+2?"),
+    "chat_stream": lambda c: _adrain(
+        c.chat_completion_stream("openai/gpt-4o", [{"role": "user", "content": "hi"}])
+    ),
+}
+
+
+class TestNoAccountRail5xxReplay:
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self, monkeypatch):
+        async def _anoop(_s):
+            return None
+
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+        monkeypatch.setattr("asyncio.sleep", _anoop)
+
+    @pytest.mark.parametrize("status", [502, 503])
+    @pytest.mark.parametrize("call", sorted(_BASE_ACCOUNT_CALLS))
+    def test_billed_first_request_is_never_replayed(self, call, status):
+        requests: list = []
+        client = LLMClient(private_key=API_KEY)
+        client._client = httpx.Client(
+            transport=httpx.MockTransport(_counting(requests, status)),
+            headers=auth_headers(API_KEY),
+        )
+        with pytest.raises(APIError) as exc:
+            _BASE_ACCOUNT_CALLS[call](client)
+        assert len(requests) == 1
+        assert exc.value.status_code == status
+        assert "may already have been accepted and billed" in str(exc.value)
+        assert "retrying may bill it again" in str(exc.value)
+
+    @pytest.mark.parametrize("status", [502, 503])
+    @pytest.mark.parametrize("call", sorted(_ASYNC_BASE_ACCOUNT_CALLS))
+    async def test_async_billed_first_request_is_never_replayed(self, call, status):
+        requests: list = []
+        client = AsyncLLMClient(private_key=API_KEY)
+        await client._client.aclose()
+        client._client = httpx.AsyncClient(
+            transport=httpx.MockTransport(_counting(requests, status)),
+            headers=auth_headers(API_KEY),
+        )
+        try:
+            with pytest.raises(APIError) as exc:
+                await _ASYNC_BASE_ACCOUNT_CALLS[call](client)
+            assert len(requests) == 1
+            assert exc.value.status_code == status
+            assert "may already have been accepted and billed" in str(exc.value)
+        finally:
+            await client._client.aclose()
+
+    def test_wallet_rail_probe_is_still_retried(self):
+        """The unsigned probe costs nothing, so the wallet rail keeps its retry."""
+        requests: list = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if len(requests) == 1:
+                return httpx.Response(502, json={"error": "upstream"})
+            return httpx.Response(200, json={"query": "q", "summary": "s"})
+
+        client = LLMClient(private_key=WALLET_KEY)
+        client._client = httpx.Client(transport=httpx.MockTransport(handler))
+        assert client.search("q").summary == "s"
+        assert len(requests) == 2
+
+
+class TestRaiseForApiKey5xx:
+    @pytest.mark.parametrize("status", [200, 202, 402, 429])
+    def test_non_5xx_is_a_no_op(self, status):
+        raise_for_api_key_5xx(httpx.Response(status), API_KEY)
+
+    def test_wallet_rail_is_a_no_op(self):
+        raise_for_api_key_5xx(httpx.Response(502), None)
+
+    @pytest.mark.parametrize("status", [500, 502, 503, 504])
+    def test_account_rail_5xx_raises_with_status_and_retry_after(self, status):
+        resp = httpx.Response(status, json={"error": "upstream"}, headers={"retry-after": "7"})
+        with pytest.raises(APIError) as exc:
+            raise_for_api_key_5xx(resp, API_KEY)
+        assert exc.value.status_code == status
+        assert exc.value.retry_after == "7"
+        assert "user.blockrun.ai/dashboard" in str(exc.value)
