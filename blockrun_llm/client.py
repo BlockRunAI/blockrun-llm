@@ -43,6 +43,7 @@ import json as _json
 import os
 import re
 import sys
+import time
 from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from typing import Any, Callable, NamedTuple, NoReturn
 
@@ -357,6 +358,13 @@ def _enforce_spend_limits(client: Any, cost_usd: float, model: str | None = None
 # ---------------------------------------------------------------------------
 
 
+# How long a gateway's rejection of an upto payment keeps this client on exact
+# for that wallet and network. Long enough not to hammer a gateway that has
+# switched upto off, short enough that one transient "verification failed"
+# does not cost the discount for the rest of a long-running process.
+UPTO_REJECTION_TTL_SECONDS = 600.0
+
+
 class _ChatPayment(NamedTuple):
     """A signed chat payment: the paid retry's headers, and what to book for it."""
 
@@ -400,6 +408,19 @@ def _is_payment_rejection(response: httpx.Response) -> bool:
     )
 
 
+def _may_fall_back_to_exact(
+    payment: _ChatPayment, response: httpx.Response, *, replayed: bool
+) -> bool:
+    """May this rejection of an upto payment be answered with an exact one?
+
+    Only when the refused send was the FIRST send of that upto signature. Upto
+    settles after the call is served, so if a 5xx made us replay the same
+    header, the replay's rejection can mean the first send was served and
+    settled (Permit2 nonce used). Paying exact then would charge twice.
+    """
+    return payment.exact_fallback is not None and not replayed and _is_payment_rejection(response)
+
+
 def _exact_after_upto_rejection(client: Any, payment: _ChatPayment) -> _ChatPayment:
     """The gateway rejected an upto payment: remember that for this wallet and
     network (for the life of the client), and sign the 402's exact requirement.
@@ -409,10 +430,10 @@ def _exact_after_upto_rejection(client: Any, payment: _ChatPayment) -> _ChatPaym
     """
     assert payment.exact_fallback is not None
     if client.account is not None and payment.network:
-        client._upto_rejected.add((client.account.address.lower(), payment.network))
+        client._upto_rejected[(client.account.address.lower(), payment.network)] = time.monotonic()
     sys.stderr.write(
-        f"[blockrun_llm] upto payment rejected on {payment.network}; "
-        "retrying once with exact, and using exact for the rest of this client's life\n"
+        f"[blockrun_llm] upto payment rejected on {payment.network}; retrying once "
+        f"with exact, and using exact on that network for {UPTO_REJECTION_TTL_SECONDS:.0f}s\n"
     )
     return payment.exact_fallback()
 
@@ -474,8 +495,11 @@ def _upto_offer(
     option = find_upto_option(payment_required)
     if option is None:
         return None
-    if (client.account.address.lower(), option.network) in getattr(client, "_upto_rejected", ()):
-        return None  # this gateway already refused upto from this wallet
+    rejected_at = getattr(client, "_upto_rejected", {}).get(
+        (client.account.address.lower(), option.network)
+    )
+    if rejected_at is not None and time.monotonic() - rejected_at < UPTO_REJECTION_TTL_SECONDS:
+        return None  # this gateway recently refused upto from this wallet
     resource = details.get("resource") or {}
     try:
         resource_url = validate_resource_url(
@@ -520,15 +544,34 @@ def _exact_chat_payment(
     details: dict[str, Any],
 ) -> _ChatPayment:
     """Sign the exact (EIP-3009) requirement — the path every release has used."""
+    if details.get("scheme") == "upto":
+        # extract_payment_details falls back to accepts[0] when no exact entry
+        # exists. Signing an upto requirement as EIP-3009 would authorize the
+        # whole upto CEILING as a fixed transfer, so refuse instead.
+        raise PaymentError(
+            "This 402 offers only the x402 'upto' scheme, and upto could not be used "
+            "here (payment_scheme='exact', no Permit2 allowance and no gas "
+            "sponsoring, insufficient balance, or a ceiling over a spend limit). "
+            "Nothing was signed."
+        )
+    try:
+        signed_usd = int(str(details.get("amount", 0))) / 1e6
+    except ValueError:
+        signed_usd = 0.0
     # A gateway offering upto quotes its `price` at the upto CEILING, which is
-    # not what exact signs; book and cap exact on its own amount then.
+    # not what exact signs; book exact on its own amount then.
     cost_usd = (
         float(price_info.get("amount", 0))
         if price_info and not offers_upto(payment_required)
-        else float(details.get("amount", 0)) / 1e6
+        else signed_usd
     )
-    # Before signing: a refused quote is never sent, so nothing settles.
-    _enforce_spend_limits(client, cost_usd, body.get("model") if isinstance(body, dict) else None)
+    # Before signing, and on what is SIGNED: the body's `price` is the base
+    # price without the transaction fee, so capping on it would let a call
+    # through that signs slightly more than the limit. A refused quote is
+    # never sent, so nothing settles.
+    _enforce_spend_limits(
+        client, max(cost_usd, signed_usd), body.get("model") if isinstance(body, dict) else None
+    )
 
     # SECURITY: Signing happens locally - only the signature is sent to server
     resource = details.get("resource") or {}
@@ -660,8 +703,11 @@ class LLMClient:
                            (prompt-cache discounts included) — but only when the wallet
                            already has a Permit2 allowance or the gateway sponsors the
                            approval gaslessly; otherwise, or on any error, it signs
-                           ``exact`` as before. ``"exact"`` never signs upto. ``None``
-                           honors the ``BLOCKRUN_PAYMENT_SCHEME`` env var.
+                           ``exact`` as before. The actual cost can be MORE than the
+                           exact quote, which prices output at a tenth of
+                           ``max_tokens``; it is never more than the ceiling (the full
+                           ``max_tokens``). ``"exact"`` never signs upto and pays the
+                           fixed quote. ``None`` honors ``BLOCKRUN_PAYMENT_SCHEME``.
 
         Raises:
             ValueError: If no wallet is configured. For agent use, call setup_agent_wallet() first.
@@ -742,9 +788,9 @@ class LLMClient:
         # x402 scheme preference (see x402_upto). Resolved eagerly so a typo in
         # the argument or BLOCKRUN_PAYMENT_SCHEME fails at construction.
         self._payment_scheme = resolve_payment_scheme(payment_scheme)
-        # (wallet, network) pairs whose gateway rejected an upto payment: those
-        # go straight to exact for the life of this client.
-        self._upto_rejected: set[tuple[str, str]] = set()
+        # (wallet, network) -> monotonic time the gateway last rejected an upto
+        # payment: that pair goes straight to exact for UPTO_REJECTION_TTL_SECONDS.
+        self._upto_rejected: dict[tuple[str, str], float] = {}
         self._session_calls: int = 0
         self._last_call_cost: float = 0.0
 
@@ -1463,9 +1509,11 @@ class LLMClient:
                     basis: str | None = None
                     if cost_usd > 0:
                         # A stream's PAYMENT-RESPONSE arrives before the upto
-                        # settle, so an upto stream books its ceiling, labeled.
+                        # settle, so an upto stream books its ceiling, labeled,
+                        # whatever amount that header carries.
+                        settlement = self._capture_settlement(resp2)
                         cost_usd, basis = self._book_paid_call(
-                            payment, self._capture_settlement(resp2)
+                            payment, None if payment.scheme == "upto" else settlement
                         )
                     yield from self._iter_and_archive(
                         resp2,
@@ -1478,7 +1526,7 @@ class LLMClient:
                     return
                 resp2.read()
                 if _is_payment_rejection(resp2):
-                    if payment.exact_fallback is not None:
+                    if _may_fall_back_to_exact(payment, resp2, replayed=attempt > 0):
                         upto_refusal = resp2  # nothing streamed yet: retry exact
                         break
                     self._raise_payment_rejection(rejected if rejected is not None else resp2)
@@ -1637,15 +1685,21 @@ class LLMClient:
         body: dict[str, Any],
         headers: dict[str, str],
         timeout: float | None,
-    ) -> httpx.Response:
-        """The paid POST, with one automatic retry on 502/503."""
+    ) -> tuple[httpx.Response, bool]:
+        """The paid POST, with one automatic retry on 502/503.
+
+        Returns ``(response, replayed)``. ``replayed`` means the same signed
+        payment went out twice, so a rejection of the second send may only be
+        the first one having settled (nonce used): see _may_fall_back_to_exact.
+        """
         response = self._client.post(url, json=body, headers=headers, timeout=timeout)
         if response.status_code in (502, 503):
             import time
 
             time.sleep(1)
             response = self._client.post(url, json=body, headers=headers, timeout=timeout)
-        return response
+            return response, True
+        return response, False
 
     def _sign_payment_from_response(
         self,
@@ -1771,14 +1825,14 @@ class LLMClient:
         is_search_request = "search_parameters" in body or body.get("search") is True
         request_timeout = self.search_timeout if is_search_request else self.timeout
 
-        retry_response = self._post_paid(url, body, payment.headers, request_timeout)
-        if payment.exact_fallback is not None and _is_payment_rejection(retry_response):
+        retry_response, replayed = self._post_paid(url, body, payment.headers, request_timeout)
+        if _may_fall_back_to_exact(payment, retry_response, replayed=replayed):
             # The gateway refused the upto payment before serving anything:
             # one retry with the same 402's exact requirement. If exact is
             # refused too, the original refusal is what surfaces.
             rejected = retry_response
             payment = _exact_after_upto_rejection(self, payment)
-            retry_response = self._post_paid(url, body, payment.headers, request_timeout)
+            retry_response, _ = self._post_paid(url, body, payment.headers, request_timeout)
             if _is_payment_rejection(retry_response):
                 retry_response = rejected
 
@@ -2914,8 +2968,11 @@ class AsyncLLMClient:
                            (prompt-cache discounts included) — but only when the wallet
                            already has a Permit2 allowance or the gateway sponsors the
                            approval gaslessly; otherwise, or on any error, it signs
-                           ``exact`` as before. ``"exact"`` never signs upto. ``None``
-                           honors the ``BLOCKRUN_PAYMENT_SCHEME`` env var.
+                           ``exact`` as before. The actual cost can be MORE than the
+                           exact quote, which prices output at a tenth of
+                           ``max_tokens``; it is never more than the ceiling (the full
+                           ``max_tokens``). ``"exact"`` never signs upto and pays the
+                           fixed quote. ``None`` honors ``BLOCKRUN_PAYMENT_SCHEME``.
 
         Raises:
             ValueError: If no wallet is configured
@@ -2990,9 +3047,9 @@ class AsyncLLMClient:
         # x402 scheme preference (see x402_upto). Resolved eagerly so a typo in
         # the argument or BLOCKRUN_PAYMENT_SCHEME fails at construction.
         self._payment_scheme = resolve_payment_scheme(payment_scheme)
-        # (wallet, network) pairs whose gateway rejected an upto payment: those
-        # go straight to exact for the life of this client.
-        self._upto_rejected: set[tuple[str, str]] = set()
+        # (wallet, network) -> monotonic time the gateway last rejected an upto
+        # payment: that pair goes straight to exact for UPTO_REJECTION_TTL_SECONDS.
+        self._upto_rejected: dict[tuple[str, str], float] = {}
 
         log_dir = _resolve_log_dir(transaction_log)
         self._tx_logger: TransactionLogger | None = (
@@ -3461,7 +3518,12 @@ class AsyncLLMClient:
                     # chat_completion convention).
                     basis: str | None = None
                     if cost_usd > 0:
-                        cost_usd, basis = _booked_cost(payment, self._capture_settlement(resp2))
+                        # Same as the sync stream: an upto ceiling, never the
+                        # pre-settle header's amount.
+                        settlement = self._capture_settlement(resp2)
+                        cost_usd, basis = _booked_cost(
+                            payment, None if payment.scheme == "upto" else settlement
+                        )
                         self._last_call_cost = cost_usd
                     async for chunk in self._aiter_and_archive(
                         resp2,
@@ -3475,7 +3537,7 @@ class AsyncLLMClient:
                     return
                 await resp2.aread()
                 if _is_payment_rejection(resp2):
-                    if payment.exact_fallback is not None:
+                    if _may_fall_back_to_exact(payment, resp2, replayed=attempt > 0):
                         upto_refusal = resp2  # nothing streamed yet: retry exact
                         break
                     self._raise_payment_rejection(rejected if rejected is not None else resp2)
@@ -3620,15 +3682,16 @@ class AsyncLLMClient:
         body: dict[str, Any],
         headers: dict[str, str],
         timeout: float | None,
-    ) -> httpx.Response:
-        """The paid POST, with one automatic retry on 502/503."""
+    ) -> tuple[httpx.Response, bool]:
+        """Async :meth:`LLMClient._post_paid`: ``(response, replayed)``."""
         response = await self._client.post(url, json=body, headers=headers, timeout=timeout)
         if response.status_code in (502, 503):
             import asyncio
 
             await asyncio.sleep(1)
             response = await self._client.post(url, json=body, headers=headers, timeout=timeout)
-        return response
+            return response, True
+        return response, False
 
     async def _asign_chat_payment(
         self, body: dict[str, Any], response: httpx.Response
@@ -3708,13 +3771,15 @@ class AsyncLLMClient:
         is_search_request = "search_parameters" in body or body.get("search") is True
         request_timeout = self.search_timeout if is_search_request else self.timeout
 
-        retry_response = await self._apost_paid(url, body, payment.headers, request_timeout)
-        if payment.exact_fallback is not None and _is_payment_rejection(retry_response):
+        retry_response, replayed = await self._apost_paid(
+            url, body, payment.headers, request_timeout
+        )
+        if _may_fall_back_to_exact(payment, retry_response, replayed=replayed):
             # Upto refused before anything was served: one exact retry; if exact
             # is refused too, the original refusal surfaces (see the sync path).
             rejected = retry_response
             payment = _exact_after_upto_rejection(self, payment)
-            retry_response = await self._apost_paid(url, body, payment.headers, request_timeout)
+            retry_response, _ = await self._apost_paid(url, body, payment.headers, request_timeout)
             if _is_payment_rejection(retry_response):
                 retry_response = rejected
 

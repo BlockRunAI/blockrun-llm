@@ -827,7 +827,7 @@ class TestRejection:
             "calls": 1,
             "ceiling_usd": 0.0,
         }
-        # Remembered for the life of the client: straight to exact, no chain read.
+        # Remembered (for UPTO_REJECTION_TTL_SECONDS): straight to exact, no chain read.
         reads = chain.reads
         client.chat_completion("deepseek/deepseek-chat", MESSAGES)
         assert gw.schemes == ["upto", "exact", "exact"]
@@ -861,6 +861,49 @@ class TestRejection:
         assert gw.schemes == ["upto", "exact"]  # no third attempt
         assert client.get_spending()["calls"] == 0
 
+    def test_rejection_expires_after_the_ttl(self, monkeypatch):
+        import blockrun_llm.client as client_mod
+
+        Chain().install(monkeypatch)
+        clock = {"t": 1000.0}
+        monkeypatch.setattr(client_mod.time, "monotonic", lambda: clock["t"])
+        gw = Gateway(payment_required(), paid=[verify_failed(), ok()])
+        client = sync_client(gw)
+        client.chat_completion("deepseek/deepseek-chat", MESSAGES)
+        client.chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["upto", "exact", "exact"]
+        clock["t"] += client_mod.UPTO_REJECTION_TTL_SECONDS + 1
+        client.chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["upto", "exact", "exact", "upto"]
+
+    def test_rejection_after_a_5xx_replay_never_pays_exact(self, monkeypatch):
+        # The first send may have been served and settled behind the 502; the
+        # replay's "verification failed" is then the used Permit2 nonce. Paying
+        # exact on top would charge twice.
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+        Chain().install(monkeypatch)
+        gw = Gateway(payment_required(), paid=[httpx.Response(502), verify_failed(), ok()])
+        client = sync_client(gw)
+        with pytest.raises(PaymentError):
+            client.chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["upto", "upto"]
+        assert client._upto_rejected == {}
+
+    def test_async_rejection_after_a_5xx_replay_never_pays_exact(self, monkeypatch):
+        async def no_sleep(_s):
+            return None
+
+        monkeypatch.setattr("asyncio.sleep", no_sleep)
+        Chain().install(monkeypatch)
+        gw = Gateway(payment_required(), paid=[httpx.Response(503), verify_failed(), ok()])
+
+        async def run():
+            await async_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+
+        with pytest.raises(PaymentError):
+            asyncio.run(run())
+        assert gw.schemes == ["upto", "upto"]
+
     def test_exact_payment_rejected_is_never_retried(self, monkeypatch):
         Chain(allowance=0).install(monkeypatch)
         gw = Gateway(payment_required(), paid=[verify_failed(), ok()])
@@ -881,7 +924,7 @@ class TestRejection:
         response = client.chat_completion("deepseek/deepseek-chat", MESSAGES)
         assert gw.schemes == ["upto"]
         assert response.payment_scheme == "upto"
-        assert client._upto_rejected == set()
+        assert client._upto_rejected == {}
 
     def test_non_payment_error_after_upto_is_not_retried(self, monkeypatch):
         Chain().install(monkeypatch)
@@ -1045,6 +1088,33 @@ class TestStreaming:
             list(sync_client(gw).chat_completion_stream("deepseek/deepseek-chat", MESSAGES))
         assert gw.schemes == ["upto", "exact"]
 
+    def test_stream_rejection_after_a_5xx_replay_never_pays_exact(self, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda _s: None)
+        Chain().install(monkeypatch)
+        gw = Gateway(payment_required(), paid=[httpx.Response(502), verify_failed(), sse_ok()])
+        with pytest.raises(PaymentError):
+            list(sync_client(gw).chat_completion_stream("deepseek/deepseek-chat", MESSAGES))
+        assert gw.schemes == ["upto", "upto"]
+
+    def test_stream_books_the_ceiling_even_when_the_header_names_an_amount(self, monkeypatch):
+        # A stream's PAYMENT-RESPONSE is sent before the upto settle, so an
+        # amount on it is not the settled one.
+        Chain().install(monkeypatch)
+        early = httpx.Response(
+            200,
+            content=_sse(),
+            headers={
+                "content-type": "text/event-stream",
+                "PAYMENT-RESPONSE": settlement_header("700"),
+            },
+        )
+        gw = Gateway(payment_required(), paid=[early])
+        client = sync_client(gw)
+        chunks = list(client.chat_completion_stream("deepseek/deepseek-chat", MESSAGES))
+        assert chunks[0].cost_is_ceiling is True
+        assert chunks[0].cost_usd == pytest.approx(0.05)
+        assert client.get_spending()["ceiling_usd"] == pytest.approx(0.05)
+
     def test_async_stream_upto_rejected_then_exact(self, monkeypatch):
         Chain().install(monkeypatch)
         gw = Gateway(payment_required(), paid=[verify_failed(), sse_ok()])
@@ -1187,3 +1257,52 @@ class TestChainReads:
         assert arc is not None and arc.rpcs == ()
         with pytest.raises(upto.UptoUnavailable):
             REAL_READ(arc, TEST_ACCOUNT.address)
+
+
+# ---------------------------------------------------------------------------
+# An upto-only 402 that upto cannot serve is refused, never signed as EIP-3009
+# ---------------------------------------------------------------------------
+
+
+class TestUptoOnly402:
+    def _upto_only(self) -> dict[str, Any]:
+        pr = payment_required()
+        pr["accepts"] = [upto_entry()]
+        return pr
+
+    def test_exact_preference_refuses_instead_of_signing_the_ceiling(self, monkeypatch):
+        Chain().install(monkeypatch)
+        gw = Gateway(self._upto_only())
+        with pytest.raises(PaymentError, match="only the x402 'upto' scheme"):
+            sync_client(gw, payment_scheme="exact").chat_completion(
+                "deepseek/deepseek-chat", MESSAGES
+            )
+        assert gw.signed == []
+
+    def test_unusable_upto_refuses_instead_of_signing_the_ceiling(self, monkeypatch):
+        Chain(allowance=0).install(monkeypatch)  # no allowance, no sponsoring
+        gw = Gateway(self._upto_only())
+        with pytest.raises(PaymentError, match="Nothing was signed"):
+            sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.signed == []
+
+    def test_usable_upto_only_402_still_pays_upto(self, monkeypatch):
+        Chain().install(monkeypatch)
+        gw = Gateway(self._upto_only())
+        sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["upto"]
+
+
+class TestExactSpendCapOnSignedAmount:
+    def test_cap_uses_the_signed_amount_not_the_lower_body_price(self, monkeypatch):
+        # Body price is the base price ($0.0009); the header amount signed is
+        # $0.001 (base + tx fee). A $0.00095 cap must refuse.
+        from blockrun_llm.types import SpendLimitError
+
+        Chain().install(monkeypatch)
+        gw = Gateway(payment_required(with_upto=False), header=False, price_usd="0.0009")
+        with pytest.raises(SpendLimitError):
+            sync_client(gw, max_cost_per_call=0.00095).chat_completion(
+                "deepseek/deepseek-chat", MESSAGES
+            )
+        assert gw.signed == []
