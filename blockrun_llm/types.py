@@ -628,6 +628,8 @@ class VideoClip(BaseModel):
     duration_seconds: Optional[int] = None
     request_id: Optional[str] = None  # Upstream provider's request id (xAI)
     backed_up: Optional[bool] = None
+    last_frame_url: Optional[str] = None
+    last_frame_backed_up: Optional[bool] = None
 
 
 class VideoResponse(BaseModel):

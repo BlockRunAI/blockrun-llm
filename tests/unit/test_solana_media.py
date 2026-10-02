@@ -662,6 +662,12 @@ class TestSharedVideoBodyBuilder:
             image_url=None,
             last_frame_url=None,
             reference_image_urls=None,
+            reference_videos=None,
+            reference_audios=None,
+            bitrate_mode=None,
+            output_format=None,
+            camera_fixed=None,
+            safety_identifier=None,
             real_face_asset_id=None,
             duration_seconds=None,
             aspect_ratio=None,
@@ -671,6 +677,7 @@ class TestSharedVideoBodyBuilder:
             watermark=None,
             return_last_frame=None,
             input_type="text",
+            api_key_mode=False,
         )
         assert body["input_type"] == "text"
 
@@ -799,3 +806,375 @@ class TestSolanaImageSettlesAtPost:
             assert client._session_calls == 1
         finally:
             await client._client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Account rail (brk_ key). The first POST carries the key, so it IS the billed
+# submit: a 202 there is the accepted job, which must be polled — not handed
+# back as the result (that crashed VideoResponse after the charge). Reference
+# media is account-rail only, so this is the path every reference job takes.
+# ---------------------------------------------------------------------------
+
+_ACCOUNT_KEY = "brk_live_solana_video_fixture"
+_SEEDANCE_DONE = {
+    "status": "completed",
+    "created": 1,
+    "model": "bytedance/seedance-2.0",
+    "data": [{"url": "https://cdn/v.mp4", "last_frame_url": "https://cdn/last.png"}],
+}
+
+
+def _account_handler(posts: list[httpx.Request], polls: list[httpx.Request], *, first: int = 202):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(request)
+            if first != 202:
+                return httpx.Response(first, json={"error": "upstream"})
+            return httpx.Response(
+                202,
+                json={"id": "V1", "poll_url": "/api/v1/videos/generations/V1", "status": "queued"},
+            )
+        polls.append(request)
+        if len(polls) == 1:
+            return httpx.Response(202, json={"status": "in_progress"})
+        return httpx.Response(200, json=_SEEDANCE_DONE)
+
+    return handler
+
+
+def _account_client(handler: Any) -> SolanaLLMClient:
+    client = SolanaLLMClient(private_key=_ACCOUNT_KEY)
+    client._client = httpx.Client(
+        transport=httpx.MockTransport(handler), headers={"Authorization": f"Bearer {_ACCOUNT_KEY}"}
+    )
+    return client
+
+
+def _async_account_client(handler: Any) -> AsyncSolanaLLMClient:
+    client = AsyncSolanaLLMClient(private_key=_ACCOUNT_KEY)
+    client._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), headers={"Authorization": f"Bearer {_ACCOUNT_KEY}"}
+    )
+    return client
+
+
+_REFS = {
+    "model": "bytedance/seedance-2.0",
+    "reference_image_urls": ["https://example.com/person.png"],
+    "reference_videos": [{"url": "https://example.com/motion.mp4"}],
+    "reference_audios": [{"url": "https://example.com/music.mp3"}],
+    "bitrate_mode": "high",
+    "safety_identifier": "test",
+    "return_last_frame": True,
+}
+
+
+class TestSolanaAccountRailVideo:
+    @pytest.fixture(autouse=True)
+    def _fast_polls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(SolanaLLMClient, "VIDEO_POLL_INTERVAL_SECONDS", 0.001)
+
+    def test_accepted_job_is_polled_to_completion_with_one_post(self) -> None:
+        import json
+
+        posts: list[httpx.Request] = []
+        polls: list[httpx.Request] = []
+        client = _account_client(_account_handler(posts, polls))
+        resp = client.video("follow the motion", **_REFS)
+        assert resp.data[0].url == "https://cdn/v.mp4"
+        assert resp.data[0].last_frame_url == "https://cdn/last.png"
+        assert len(posts) == 1
+        assert len(polls) == 2
+        assert all("PAYMENT-SIGNATURE" not in r.headers for r in posts + polls)
+        body = json.loads(posts[0].content)
+        assert body["reference_videos"] == [{"url": "https://example.com/motion.mp4"}]
+        assert body["reference_audios"] == [{"url": "https://example.com/music.mp3"}]
+        assert body["bitrate_mode"] == "high"
+
+    @pytest.mark.parametrize("status", [502, 503])
+    def test_billed_submit_is_never_replayed_on_5xx(self, status: int) -> None:
+        posts: list[httpx.Request] = []
+        client = _account_client(_account_handler(posts, [], first=status))
+        with pytest.raises(APIError):
+            client.video("x", model="bytedance/seedance-2.0")
+        assert len(posts) == 1
+
+    def test_timeout_says_credit_is_reserved_until_completion(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(SolanaLLMClient, "VIDEO_POLL_BUDGET_SECONDS", 0.0)
+        client = _account_client(_account_handler([], []))
+        with pytest.raises(APIError, match="reserved when the job was accepted") as exc:
+            client.video("x", model="bytedance/seedance-2.0")
+        assert exc.value.response["id"] == "V1"
+
+    def test_failed_job_says_the_credit_hold_is_released(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST":
+                return httpx.Response(
+                    202,
+                    json={"id": "V1", "poll_url": "/api/v1/videos/generations/V1"},
+                )
+            return httpx.Response(200, json={"status": "failed", "error": "upstream refused"})
+
+        client = _account_client(handler)
+        with pytest.raises(APIError) as exc:
+            client.video("x", model="bytedance/seedance-2.0")
+        assert "released, not charged" in str(exc.value)
+        assert "settled at submit" not in str(exc.value)
+
+    async def test_async_accepted_job_is_polled_to_completion(self) -> None:
+        posts: list[httpx.Request] = []
+        polls: list[httpx.Request] = []
+        client = _async_account_client(_account_handler(posts, polls))
+        try:
+            resp = await client.video("follow the motion", **_REFS)
+            assert resp.data[0].url == "https://cdn/v.mp4"
+            assert len(posts) == 1
+            assert all("PAYMENT-SIGNATURE" not in r.headers for r in posts + polls)
+        finally:
+            await client._client.aclose()
+
+
+class TestSolanaWalletVideoGuards:
+    def test_reference_media_refused_before_any_request(self) -> None:
+        calls: list[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _VIDEO_OK))
+        with pytest.raises(ValueError, match="account rail"):
+            client.video("x", **_REFS)
+        assert calls == []
+
+    async def test_async_reference_media_refused_before_any_request(self) -> None:
+        calls: list[httpx.Request] = []
+        client = _make_async_client(_paid_flow(calls, _VIDEO_OK))
+        try:
+            with pytest.raises(ValueError, match="account rail"):
+                await client.video("x", **_REFS)
+            assert calls == []
+        finally:
+            await client._client.aclose()
+
+    def test_seedance_25_last_frame_refused_on_solana_wallet(self) -> None:
+        calls: list[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _VIDEO_OK))
+        with pytest.raises(ValueError, match="not served by the Solana gateway"):
+            client.video(
+                "x",
+                model="bytedance/seedance-2.5",
+                image_url="https://example.com/a.png",
+                last_frame_url="https://example.com/b.png",
+            )
+        assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Account rail audio (music / speech / sound effects). Same contract as video
+# above: the keyed first POST is the billed submit, so it is never replayed on
+# a 5xx, and a 202 is the accepted job — polled unsigned, never returned as the
+# result (that crashed MusicResponse after the charge).
+# ---------------------------------------------------------------------------
+
+_MUSIC_DONE = {
+    "id": "M1",
+    "status": "completed",
+    "created": 1,
+    "model": "minimax/music-2.5+",
+    "data": [{"url": "https://cdn/x.mp3"}],
+}
+
+
+def _audio_account_handler(
+    posts: list[httpx.Request],
+    polls: list[httpx.Request],
+    *,
+    first: int = 202,
+    done: dict[str, Any] | None = None,
+    poll_url: str = "/api/v1/audio/generations/M1",
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(request)
+            if first == 200:
+                return httpx.Response(200, json=done)
+            if first != 202:
+                return httpx.Response(first, json={"error": "upstream"})
+            return httpx.Response(202, json={"id": "M1", "poll_url": poll_url, "status": "queued"})
+        polls.append(request)
+        if len(polls) == 1:
+            return httpx.Response(202, json={"status": "in_progress"})
+        return httpx.Response(200, json=done or _MUSIC_DONE)
+
+    return handler
+
+
+_AUDIO_CALLS = [
+    ("music", ("lo-fi beats",), "/v1/audio/generations"),
+    ("speech", ("hello world",), "/v1/audio/speech"),
+    ("sound_effect", ("thunder clap",), "/v1/audio/sound-effects"),
+]
+
+
+class TestSolanaAccountRailAudio:
+    @pytest.fixture(autouse=True)
+    def _fast_polls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(SolanaLLMClient, "AUDIO_POLL_INTERVAL_SECONDS", 0.001)
+
+    def test_music_202_is_polled_to_completion_with_one_post(self) -> None:
+        posts: list[httpx.Request] = []
+        polls: list[httpx.Request] = []
+        client = _account_client(_audio_account_handler(posts, polls))
+        resp = client.music("lo-fi beats")
+        assert isinstance(resp, MusicResponse)
+        assert resp.data[0].url == "https://cdn/x.mp3"
+        assert len(posts) == 1
+        assert len(polls) == 2
+        # api.blockrun.ai serves the gateway's /api/v1/... poll route at /v1/...
+        assert polls[0].url.path == "/v1/audio/generations/M1"
+        assert all("PAYMENT-SIGNATURE" not in r.headers for r in posts + polls)
+        assert polls[0].headers["authorization"] == f"Bearer {_ACCOUNT_KEY}"
+
+    def test_speech_202_is_polled_to_completion(self) -> None:
+        posts: list[httpx.Request] = []
+        polls: list[httpx.Request] = []
+        client = _account_client(
+            _audio_account_handler(posts, polls, done={**_SPEECH_OK, "status": "completed"})
+        )
+        resp = client.speech("hello world")
+        assert isinstance(resp, SpeechResponse)
+        assert resp.data[0].url == "https://cdn/x.wav"
+        assert len(posts) == 1
+
+    def test_inline_200_is_returned_as_is(self) -> None:
+        posts: list[httpx.Request] = []
+        client = _account_client(_audio_account_handler(posts, [], first=200, done=_SPEECH_OK))
+        assert client.speech("hello world").data[0].url == "https://cdn/x.wav"
+        assert len(posts) == 1
+
+    @pytest.mark.parametrize("method, args, path", _AUDIO_CALLS)
+    @pytest.mark.parametrize("status", [502, 503])
+    def test_billed_submit_is_never_replayed_on_5xx(
+        self, method: str, args: tuple, path: str, status: int
+    ) -> None:
+        posts: list[httpx.Request] = []
+        client = _account_client(_audio_account_handler(posts, [], first=status))
+        with pytest.raises(APIError):
+            getattr(client, method)(*args)
+        assert len(posts) == 1
+        assert posts[0].url.path == path
+
+    def test_timeout_carries_the_poll_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(SolanaLLMClient, "AUDIO_POLL_BUDGET_SECONDS", 0.0)
+        client = _account_client(_audio_account_handler([], []))
+        with pytest.raises(APIError, match="did not complete") as exc:
+            client.music("x")
+        assert exc.value.response["id"] == "M1"
+        assert exc.value.response["poll_url"].endswith("/v1/audio/generations/M1")
+
+    def test_foreign_poll_origin_is_refused_without_a_request(self) -> None:
+        posts: list[httpx.Request] = []
+        polls: list[httpx.Request] = []
+        client = _account_client(
+            _audio_account_handler(posts, polls, poll_url="https://evil.example/x")
+        )
+        with pytest.raises(APIError, match="different polling origin") as exc:
+            client.music("x")
+        assert polls == []
+        assert exc.value.response == {"id": "M1", "poll_url": "https://evil.example/x"}
+
+    def test_wallet_rail_still_replays_the_unsigned_probe(self) -> None:
+        # Wallet rail unchanged: the unsigned probe is not billed, so a 5xx on
+        # it is still retried once before the 402 is answered.
+        probes: list[httpx.Request] = []
+        calls: list[httpx.Request] = []
+        paid = _paid_flow(calls, _MUSIC_OK)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if "PAYMENT-SIGNATURE" not in request.headers:
+                probes.append(request)
+                if len(probes) == 1:
+                    return httpx.Response(502, json={"error": "upstream"})
+            return paid(request)
+
+        with mock.patch("time.sleep"):
+            resp = _make_client(handler).music("lo-fi beats")
+        assert resp.data[0].url == "https://cdn/x.mp3"
+        assert len(probes) == 2
+        assert len(calls) == 1
+
+    @pytest.mark.parametrize("method, args, path", _AUDIO_CALLS)
+    async def test_async_billed_submit_is_never_replayed_on_5xx(
+        self, method: str, args: tuple, path: str
+    ) -> None:
+        posts: list[httpx.Request] = []
+        client = _async_account_client(_audio_account_handler(posts, [], first=502))
+        try:
+            with pytest.raises(APIError):
+                await getattr(client, method)(*args)
+            assert len(posts) == 1
+        finally:
+            await client._client.aclose()
+
+    async def test_async_music_202_is_polled_to_completion(self) -> None:
+        posts: list[httpx.Request] = []
+        polls: list[httpx.Request] = []
+        client = _async_account_client(_audio_account_handler(posts, polls))
+        try:
+            resp = await client.music("lo-fi beats")
+            assert isinstance(resp, MusicResponse)
+            assert len(posts) == 1
+            assert len(polls) == 2
+            assert all("PAYMENT-SIGNATURE" not in r.headers for r in posts + polls)
+        finally:
+            await client._client.aclose()
+
+    async def test_async_speech_202_is_polled_to_completion(self) -> None:
+        posts: list[httpx.Request] = []
+        polls: list[httpx.Request] = []
+        client = _async_account_client(
+            _audio_account_handler(posts, polls, done={**_SPEECH_OK, "status": "completed"})
+        )
+        try:
+            resp = await client.speech("hello world")
+            assert isinstance(resp, SpeechResponse)
+            assert len(posts) == 1
+        finally:
+            await client._client.aclose()
+
+
+class TestSolanaAccountRailImageAndVideo:
+    @pytest.fixture(autouse=True)
+    def _fast_polls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(SolanaLLMClient, "IMAGE_POLL_INTERVAL_SECONDS", 0.001)
+        monkeypatch.setattr(SolanaLLMClient, "VIDEO_POLL_INTERVAL_SECONDS", 0.001)
+
+    def test_image_202_is_polled_to_completion_with_one_post(self) -> None:
+        posts: list[httpx.Request] = []
+        polls: list[httpx.Request] = []
+        done = {"status": "completed", "created": 1, "data": [{"url": "https://cdn/i.png"}]}
+        client = _account_client(_audio_account_handler(posts, polls, done=done))
+        resp = client.image("a cat", model="openai/gpt-image-2")
+        assert resp.data[0].url == "https://cdn/i.png"
+        assert len(posts) == 1
+        assert len(polls) == 2
+        assert all("PAYMENT-SIGNATURE" not in r.headers for r in posts + polls)
+
+    @pytest.mark.parametrize("status", [502, 503])
+    async def test_async_video_billed_submit_is_never_replayed_on_5xx(self, status: int) -> None:
+        posts: list[httpx.Request] = []
+        client = _async_account_client(_account_handler(posts, [], first=status))
+        try:
+            with pytest.raises(APIError):
+                await client.video("x", model="bytedance/seedance-2.0")
+            assert len(posts) == 1
+        finally:
+            await client._client.aclose()
+
+    def test_video_foreign_poll_origin_is_refused_without_a_request(self) -> None:
+        posts: list[httpx.Request] = []
+        polls: list[httpx.Request] = []
+        client = _account_client(
+            _audio_account_handler(posts, polls, poll_url="https://evil.example/x")
+        )
+        with pytest.raises(APIError, match="different polling origin"):
+            client.video("x", model="bytedance/seedance-2.0")
+        assert polls == []
