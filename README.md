@@ -422,8 +422,14 @@ By default (`payment_scheme="auto"`) a chat call whose 402 also offers the x402
 `upto` scheme pays with a Permit2 signature for a **ceiling** instead of an
 `exact` EIP-3009 transfer for a fixed quote. The gateway then settles the
 **actual** cost after the call — never more than the ceiling — so discounts it
-only learns afterwards, such as prompt-cache hits, reach you. The gateway lists
-`exact` first; upto is taken only when all of these hold:
+only learns afterwards, such as prompt-cache hits, reach you.
+
+Upto is not always cheaper. The `exact` quote prices output at a tenth of your
+`max_tokens`; under upto you pay for the output you actually got. A short or
+cache-hit answer costs less than exact, a long one costs more (up to the
+ceiling, which prices the full `max_tokens`). If you need the fixed quote, pass
+`payment_scheme="exact"`. The gateway lists `exact` first; upto is taken only
+when all of these hold:
 
 - the 402 offers an EVM `upto` requirement with `extra.facilitatorAddress`, for
   USDC on a network the SDK signs on (Base, Base Sepolia);
@@ -438,7 +444,10 @@ only learns afterwards, such as prompt-cache hits, reach you. The gateway lists
 Otherwise — or on any RPC or signing error — the SDK signs `exact` exactly as
 before. If the gateway rejects an upto payment before serving anything, the
 request is retried once with `exact`, and that client pays exact on that network
-from then on. Solana is unchanged (exact only).
+for the next 10 minutes. It is never retried with exact after a 502/503 replay
+of the same upto payment, because the first send may already have settled.
+A 402 that offers only upto, when upto cannot be used, raises instead of being
+signed as exact. Solana is unchanged (exact only).
 
 **Per wallet, only one gas-sponsored upto payment can be in flight.** Its permit
 lands only when that call settles, and until then the chain still shows the old
@@ -446,7 +455,10 @@ USDC permit nonce — a second permit over the same nonce would revert on-chain.
 So concurrent or not-yet-settled calls that would need a permit pay `exact`
 (the SDK watches the on-chain nonce, and gives up on a permit at its deadline;
 concurrent calls in one client claim the permit slot before reading the chain).
-Calls where Permit2 can already pull the ceiling are unaffected.
+Calls where Permit2 can already pull the ceiling are unaffected. These guards
+are per process: several processes paying from one wallet can still collide
+(a call fails; nobody is overcharged), so run one paying process per wallet or
+use `exact` there.
 
 ```python
 LLMClient(payment_scheme="exact")   # opt out; or BLOCKRUN_PAYMENT_SCHEME=exact
@@ -1693,7 +1705,7 @@ optional.
 | `SOLANA_RPC_URL` / `SOLANA_RPC_HEADERS` / `SOLANA_RPC_API_KEY` | RPC for blockhash + mint info while signing | BlockRun's free proxy |
 | `BLOCKRUN_CHAT_TIMEOUT` | Chat HTTP timeout, in seconds | `600` |
 | `BLOCKRUN_MAX_COST_PER_CALL` / `BLOCKRUN_MAX_SESSION_COST` | Opt-in spend limits (wallet rail) | unlimited |
-| `BLOCKRUN_PAYMENT_SCHEME` | `auto` (prefer x402 `upto` when the gateway offers it and it is safe) or `exact` | `auto` |
+| `BLOCKRUN_PAYMENT_SCHEME` | `auto` (prefer x402 `upto`, which settles the actual cost, when the gateway offers it and the wallet can use it) or `exact` (always the fixed quote) | `auto` |
 
 `BLOCKRUN_API_KEY_URL` is deliberately not `BLOCKRUN_API_URL`: that one names an
 x402 gateway, and an API-key client must never follow it and send your key to a

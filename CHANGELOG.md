@@ -13,7 +13,11 @@ All notable changes to blockrun-llm will be documented in this file.
   (non-stream and stream) now sign a Permit2 `PermitWitnessTransferFrom` for the
   ceiling and the gateway settles the actual amount.
 
-  Taken only when it cannot be worse than `exact`: the offer carries
+  Upto settles the actual cost, which is not always below the exact quote:
+  exact prices output at a tenth of `max_tokens`, so a long answer settles for
+  more under upto (never more than the ceiling, the full `max_tokens`), and a
+  short or cache-hit one for less. `payment_scheme="exact"` keeps the fixed
+  quote. Upto is taken when the offer carries
   `extra.facilitatorAddress` for USDC on a network in `EVM_NETWORKS`; the wallet
   holds the ceiling; and Permit2 may already pull it, or the 402 declares
   `eip2612GasSponsoring` — then a gasless EIP-2612 permit approving Permit2 for
@@ -24,7 +28,13 @@ All notable changes to blockrun-llm will be documented in this file.
   each. Anything else — no RPC, a signing error, a ceiling over a spend limit —
   signs `exact` as before (debug log only). A payment the gateway rejects
   before serving anything is retried once with `exact`, and that client stays
-  on exact for that network.
+  on exact for that network for 10 minutes. A rejection that follows a 502/503
+  replay of the same upto payment is never retried with exact (the first send
+  may have settled; paying exact too would charge twice). A 402 offering only
+  upto, when upto cannot be used, raises rather than signing the ceiling as an
+  exact transfer. Exact spend limits cap on the signed amount (the header's,
+  which includes the transaction fee), not the body's base price. Streams book
+  the ceiling whatever their pre-settlement `PAYMENT-RESPONSE` says.
 
   Per wallet and network only one gas-sponsored upto payment is in flight: a
   second permit over the same USDC nonce reverted on-chain in a live test of

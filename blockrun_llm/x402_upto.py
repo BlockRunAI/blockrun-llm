@@ -8,8 +8,14 @@ signs a Permit2 ``PermitWitnessTransferFrom`` for a CEILING, and the gateway
 settles the ACTUAL amount (never more than the ceiling) once the call is done.
 
 A gateway that offers upto lists it after ``exact`` in ``accepts``. This module
-decides whether to take it, and signs it. The rule is that choosing upto must
-never be worse than today's ``exact``:
+decides whether to take it, and signs it.
+
+Upto is NOT always cheaper than exact. BlockRun's exact quote prices output at a
+fraction of ``max_tokens`` (``OUTPUT_QUOTE_FACTOR``, 0.1 today), so a response
+that runs long settles for more under upto than exact would have charged; a
+short or cache-hit response settles for less. Upto is bounded by its ceiling
+(the full ``max_tokens``), never by the exact quote. Pass
+``payment_scheme="exact"`` to keep paying the fixed quote. Upto is taken when:
 
 * It is taken only when the 402 offers an EVM upto option carrying
   ``extra.facilitatorAddress`` for a network in :data:`EVM_NETWORKS`, and
@@ -22,6 +28,13 @@ never be worse than today's ``exact``:
 Anything else — no RPC answer, a signing error, a ceiling over a spend limit, a
 sponsored permit already in flight for this wallet — falls back to ``exact``
 silently (debug log only). Solana is untouched: it only ever pays ``exact``.
+
+The in-flight guards below (one sponsored permit per wallet and network, and
+the preflight marker) are per PROCESS. Several processes paying from one wallet
+can each sign a permit over the same USDC nonce, and all but one revert; nor is
+the wallet's balance checked against the SUM of concurrent ceilings. Either
+case fails a call rather than overcharging; run one paying process per wallet,
+or pass ``payment_scheme="exact"``, to avoid it.
 
 Semantics match the official ``@x402/evm`` 2.28.0 client (``UptoEvmScheme``,
 ``createUptoPermit2Payload``, ``trySignEip2612PermitExtension``); the unit tests
