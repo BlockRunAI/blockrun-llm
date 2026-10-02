@@ -2,7 +2,7 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
-## Unreleased
+## 1.18.1 — 2026-10-02
 
 ### Fixed
 - **A 502/503 on the account rail is no longer replayed, so it can no longer
