@@ -662,6 +662,12 @@ class TestSharedVideoBodyBuilder:
             image_url=None,
             last_frame_url=None,
             reference_image_urls=None,
+            reference_videos=None,
+            reference_audios=None,
+            bitrate_mode=None,
+            output_format=None,
+            camera_fixed=None,
+            safety_identifier=None,
             real_face_asset_id=None,
             duration_seconds=None,
             aspect_ratio=None,
@@ -671,6 +677,7 @@ class TestSharedVideoBodyBuilder:
             watermark=None,
             return_last_frame=None,
             input_type="text",
+            api_key_mode=False,
         )
         assert body["input_type"] == "text"
 
@@ -801,26 +808,143 @@ class TestSolanaImageSettlesAtPost:
             await client._client.aclose()
 
 
-@pytest.mark.asyncio
-async def test_async_mixed_video_references():
-    import json
+# ---------------------------------------------------------------------------
+# Account rail (brk_ key). The first POST carries the key, so it IS the billed
+# submit: a 202 there is the accepted job, which must be polled — not handed
+# back as the result (that crashed VideoResponse after the charge). Reference
+# media is account-rail only, so this is the path every reference job takes.
+# ---------------------------------------------------------------------------
 
-    calls: list[httpx.Request] = []
-    client = _make_async_client(_paid_flow(calls, _VIDEO_OK))
-    await client.video(
-        "test",
-        model="bytedance/seedance-2.0",
-        reference_image_urls=["https://example.com/person.png"],
-        reference_videos=[{"url": "https://example.com/motion.mp4"}],
-        reference_audios=[{"url": "https://example.com/music.mp3"}],
-        bitrate_mode="high",
-        safety_identifier="test",
-        return_last_frame=True,
+_ACCOUNT_KEY = "brk_live_solana_video_fixture"
+_SEEDANCE_DONE = {
+    "status": "completed",
+    "created": 1,
+    "model": "bytedance/seedance-2.0",
+    "data": [{"url": "https://cdn/v.mp4", "last_frame_url": "https://cdn/last.png"}],
+}
+
+
+def _account_handler(posts: list[httpx.Request], polls: list[httpx.Request], *, first: int = 202):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(request)
+            if first != 202:
+                return httpx.Response(first, json={"error": "upstream"})
+            return httpx.Response(
+                202,
+                json={"id": "V1", "poll_url": "/api/v1/videos/generations/V1", "status": "queued"},
+            )
+        polls.append(request)
+        if len(polls) == 1:
+            return httpx.Response(202, json={"status": "in_progress"})
+        return httpx.Response(200, json=_SEEDANCE_DONE)
+
+    return handler
+
+
+def _account_client(handler: Any) -> SolanaLLMClient:
+    client = SolanaLLMClient(private_key=_ACCOUNT_KEY)
+    client._client = httpx.Client(
+        transport=httpx.MockTransport(handler), headers={"Authorization": f"Bearer {_ACCOUNT_KEY}"}
     )
-    body = json.loads(calls[0].content)
-    assert body["reference_videos"] == [{"url": "https://example.com/motion.mp4"}]
-    assert body["reference_audios"] == [{"url": "https://example.com/music.mp3"}]
-    assert body["reference_image_urls"] == ["https://example.com/person.png"]
-    assert body["bitrate_mode"] == "high"
-    assert body["return_last_frame"] is True
-    await client.close()
+    return client
+
+
+def _async_account_client(handler: Any) -> AsyncSolanaLLMClient:
+    client = AsyncSolanaLLMClient(private_key=_ACCOUNT_KEY)
+    client._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), headers={"Authorization": f"Bearer {_ACCOUNT_KEY}"}
+    )
+    return client
+
+
+_REFS = {
+    "model": "bytedance/seedance-2.0",
+    "reference_image_urls": ["https://example.com/person.png"],
+    "reference_videos": [{"url": "https://example.com/motion.mp4"}],
+    "reference_audios": [{"url": "https://example.com/music.mp3"}],
+    "bitrate_mode": "high",
+    "safety_identifier": "test",
+    "return_last_frame": True,
+}
+
+
+class TestSolanaAccountRailVideo:
+    @pytest.fixture(autouse=True)
+    def _fast_polls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(SolanaLLMClient, "VIDEO_POLL_INTERVAL_SECONDS", 0.001)
+
+    def test_accepted_job_is_polled_to_completion_with_one_post(self) -> None:
+        import json
+
+        posts: list[httpx.Request] = []
+        polls: list[httpx.Request] = []
+        client = _account_client(_account_handler(posts, polls))
+        resp = client.video("follow the motion", **_REFS)
+        assert resp.data[0].url == "https://cdn/v.mp4"
+        assert resp.data[0].last_frame_url == "https://cdn/last.png"
+        assert len(posts) == 1
+        assert len(polls) == 2
+        assert all("PAYMENT-SIGNATURE" not in r.headers for r in posts + polls)
+        body = json.loads(posts[0].content)
+        assert body["reference_videos"] == [{"url": "https://example.com/motion.mp4"}]
+        assert body["reference_audios"] == [{"url": "https://example.com/music.mp3"}]
+        assert body["bitrate_mode"] == "high"
+
+    @pytest.mark.parametrize("status", [502, 503])
+    def test_billed_submit_is_never_replayed_on_5xx(self, status: int) -> None:
+        posts: list[httpx.Request] = []
+        client = _account_client(_account_handler(posts, [], first=status))
+        with pytest.raises(APIError):
+            client.video("x", model="bytedance/seedance-2.0")
+        assert len(posts) == 1
+
+    def test_timeout_says_the_account_was_billed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(SolanaLLMClient, "VIDEO_POLL_BUDGET_SECONDS", 0.0)
+        client = _account_client(_account_handler([], []))
+        with pytest.raises(APIError, match="billed when the job was accepted") as exc:
+            client.video("x", model="bytedance/seedance-2.0")
+        assert exc.value.response["id"] == "V1"
+
+    async def test_async_accepted_job_is_polled_to_completion(self) -> None:
+        posts: list[httpx.Request] = []
+        polls: list[httpx.Request] = []
+        client = _async_account_client(_account_handler(posts, polls))
+        try:
+            resp = await client.video("follow the motion", **_REFS)
+            assert resp.data[0].url == "https://cdn/v.mp4"
+            assert len(posts) == 1
+            assert all("PAYMENT-SIGNATURE" not in r.headers for r in posts + polls)
+        finally:
+            await client._client.aclose()
+
+
+class TestSolanaWalletVideoGuards:
+    def test_reference_media_refused_before_any_request(self) -> None:
+        calls: list[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _VIDEO_OK))
+        with pytest.raises(ValueError, match="account rail"):
+            client.video("x", **_REFS)
+        assert calls == []
+
+    async def test_async_reference_media_refused_before_any_request(self) -> None:
+        calls: list[httpx.Request] = []
+        client = _make_async_client(_paid_flow(calls, _VIDEO_OK))
+        try:
+            with pytest.raises(ValueError, match="account rail"):
+                await client.video("x", **_REFS)
+            assert calls == []
+        finally:
+            await client._client.aclose()
+
+    def test_seedance_25_last_frame_refused_on_solana_wallet(self) -> None:
+        calls: list[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _VIDEO_OK))
+        with pytest.raises(ValueError, match="not served by the Solana gateway"):
+            client.video(
+                "x",
+                model="bytedance/seedance-2.5",
+                image_url="https://example.com/a.png",
+                last_frame_url="https://example.com/b.png",
+            )
+        assert calls == []

@@ -101,6 +101,7 @@ from .validation import (
     validate_image_quality,
     validate_max_tokens,
     validate_video_input_type,
+    validate_video_request,
 )
 
 try:
@@ -2021,7 +2022,10 @@ class SolanaLLMClient:
 
         # Step 1: probe — expect 402 unless the model is free or cached upstream.
         probe = self._client.post(url, json=body, headers=probe_headers, timeout=eff_timeout)
-        if probe.status_code in (502, 503):
+        # Not on the account rail: there the first POST is the billed submit
+        # (the key IS the payment), and a 502 can arrive after the charge, so
+        # replaying it could bill the job twice. Mirrors the Base VideoClient.
+        if probe.status_code in (502, 503) and not self.api_key:
             _time.sleep(1)
             probe = self._client.post(url, json=body, headers=probe_headers, timeout=eff_timeout)
 
@@ -2030,7 +2034,14 @@ class SolanaLLMClient:
         # and, without the optional SDK installed, no decoder either.
         raise_for_api_key_402(probe, self.api_key)
 
-        if probe.status_code != 402:
+        # Account rail: the probe carried the API key, so a 202 here is the
+        # accepted (and already billed) job, not a free/cached answer. Handing
+        # its {id, poll_url, status} stub back as the result crashed the caller
+        # (VideoResponse validation) after the charge, with no job id surfaced.
+        # Poll it like the wallet rail does, minus the signature.
+        account_job = bool(self.api_key) and probe.status_code == 202
+
+        if probe.status_code != 402 and not account_job:
             if not probe.is_success:
                 try:
                     error_body = probe.json()
@@ -2045,61 +2056,73 @@ class SolanaLLMClient:
             # Free / cached upstream — return whatever the gateway gave us.
             return probe.json()
 
-        # Step 2: sign x402 SVM payload.
-        payment_header_str = self._extract_payment_header(probe)
-        if not payment_header_str:
-            raise PaymentError("402 response but no payment requirements found")
+        if account_job:
+            submit_resp = probe
+            payment_required = None
+            encoded_payment = None
+            # The SDK cannot see the account rail's settled cost, so nothing is
+            # booked locally (same as every other account-rail call).
+            cost_usd = 0.0
+            orig_amount = orig_pay_to = None
+            max_resigns = 0
+        else:
+            # Step 2: sign x402 SVM payload.
+            payment_header_str = self._extract_payment_header(probe)
+            if not payment_header_str:
+                raise PaymentError("402 response but no payment requirements found")
 
-        payment_required = decode_payment_required_header(payment_header_str)
-        payment_payload_obj = self._sign_payment(payment_required)
-        encoded_payment = encode_payment_signature_header(payment_payload_obj)
-        cost_usd = float(payment_payload_obj.accepted.amount) / 1e6
-        # Terms this job is authorized to pay — any mid-poll re-sign must match.
-        orig_amount = payment_payload_obj.accepted.amount
-        orig_pay_to = payment_payload_obj.accepted.pay_to
+            payment_required = decode_payment_required_header(payment_header_str)
+            payment_payload_obj = self._sign_payment(payment_required)
+            encoded_payment = encode_payment_signature_header(payment_payload_obj)
+            cost_usd = float(payment_payload_obj.accepted.amount) / 1e6
+            # Terms this job is authorized to pay — any mid-poll re-sign must match.
+            orig_amount = payment_payload_obj.accepted.amount
+            orig_pay_to = payment_payload_obj.accepted.pay_to
 
-        paid_headers = {
-            "Content-Type": "application/json",
-            "User-Agent": _get_user_agent(),
-            "PAYMENT-SIGNATURE": encoded_payment,
-        }
+            paid_headers = {
+                "Content-Type": "application/json",
+                "User-Agent": _get_user_agent(),
+                "PAYMENT-SIGNATURE": encoded_payment,
+            }
 
-        # Step 3: submit with signature.
-        submit_resp = self._client.post(url, json=body, headers=paid_headers, timeout=eff_timeout)
-        if submit_resp.status_code in (502, 503):
-            _time.sleep(1)
+            # Step 3: submit with signature.
             submit_resp = self._client.post(
                 url, json=body, headers=paid_headers, timeout=eff_timeout
             )
+            if submit_resp.status_code in (502, 503):
+                _time.sleep(1)
+                submit_resp = self._client.post(
+                    url, json=body, headers=paid_headers, timeout=eff_timeout
+                )
 
-        if submit_resp.status_code == 402:
-            # Account rail: a 402 is the account being out of credit, not a
-            # challenge to sign. Nothing here can sign, so say so plainly.
-            raise_for_api_key_402(submit_resp, self.api_key)
-            raise build_payment_rejected_error(submit_resp)
+            if submit_resp.status_code == 402:
+                # Account rail: a 402 is the account being out of credit, not a
+                # challenge to sign. Nothing here can sign, so say so plainly.
+                raise_for_api_key_402(submit_resp, self.api_key)
+                raise build_payment_rejected_error(submit_resp)
 
-        if submit_resp.status_code == 200:
-            # Fast path — image was produced inline.
-            self._session_calls += 1
-            self._session_total_usd += cost_usd
-            self._last_call_cost = cost_usd
-            self._capture_settlement(submit_resp)
-            data = submit_resp.json()
-            save_to_cache(endpoint, body, data, cost_usd=cost_usd, **self._billing_meta())
-            self._log_transaction(endpoint, body, data, cost_usd)
-            return data
+            if submit_resp.status_code == 200:
+                # Fast path — image was produced inline.
+                self._session_calls += 1
+                self._session_total_usd += cost_usd
+                self._last_call_cost = cost_usd
+                self._capture_settlement(submit_resp)
+                data = submit_resp.json()
+                save_to_cache(endpoint, body, data, cost_usd=cost_usd, **self._billing_meta())
+                self._log_transaction(endpoint, body, data, cost_usd)
+                return data
 
-        if submit_resp.status_code != 202:
-            try:
-                error_body = submit_resp.json()
-            except Exception:
-                error_body = {"error": "Request failed"}
-            raise APIError(
-                f"Image request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
-                submit_resp.status_code,
-                sanitize_error_response(error_body),
-                retry_after=retry_after_of(submit_resp),
-            )
+            if submit_resp.status_code != 202:
+                try:
+                    error_body = submit_resp.json()
+                except Exception:
+                    error_body = {"error": "Request failed"}
+                raise APIError(
+                    f"Image request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
+                    submit_resp.status_code,
+                    sanitize_error_response(error_body),
+                    retry_after=retry_after_of(submit_resp),
+                )
 
         # Step 4: slow path — poll until completed (or budget exhausted).
         try:
@@ -2116,7 +2139,10 @@ class SolanaLLMClient:
                 {"response": submit_data},
             )
         poll_url = self._absolute_url(poll_url_rel)
-        if settled_at_submit:
+        # The account rail bills at accept, so for messages it behaves like a
+        # route that settles at submit, whatever the wallet rail would do.
+        charged_at_submit = settled_at_submit or account_job
+        if settled_at_submit and not account_job:
             # Solana image routes settle at POST (a signed transaction dies with
             # its ~60-90s blockhash, so the gateway cannot wait for a long
             # render). The charge has already happened: book it now, or a job
@@ -2124,10 +2150,9 @@ class SolanaLLMClient:
             self._session_calls += 1
             self._session_total_usd += cost_usd
             self._last_call_cost = cost_usd
-        poll_headers = {
-            "User-Agent": _get_user_agent(),
-            "PAYMENT-SIGNATURE": encoded_payment,
-        }
+        poll_headers = {"User-Agent": _get_user_agent()}
+        if encoded_payment is not None:
+            poll_headers["PAYMENT-SIGNATURE"] = encoded_payment
 
         budget = (
             poll_budget_seconds
@@ -2226,7 +2251,7 @@ class SolanaLLMClient:
             if last_status == "failed":
                 raise APIError(
                     f"{label} failed upstream: {poll_data.get('error', 'unknown')}"
-                    + (" (payment was settled at submit)" if settled_at_submit else ""),
+                    + (" (payment was settled at submit)" if charged_at_submit else ""),
                     poll_resp.status_code,
                     sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
                     retry_after=retry_after_of(poll_resp),
@@ -2242,7 +2267,7 @@ class SolanaLLMClient:
                 )
                 if tx_hash and isinstance(poll_data, dict) and not poll_data.get("txHash"):
                     poll_data["txHash"] = tx_hash
-                if not settled_at_submit:
+                if not charged_at_submit:
                     self._session_calls += 1
                     self._session_total_usd += cost_usd
                     self._last_call_cost = cost_usd
@@ -2272,17 +2297,26 @@ class SolanaLLMClient:
             (
                 (
                     f"{label} did not complete within {budget:.0f}s "
-                    f"(last status: {last_status}). Payment was settled at submit; "
-                    "the job stays claimable for ~48h — re-poll poll_url with a "
-                    "fresh signature from the same wallet to fetch the result."
+                    f"(last status: {last_status}). The account was billed when the "
+                    "job was accepted; it stays claimable for ~48h — re-poll "
+                    "poll_url with the same API key to fetch the result."
                 )
-                if settled_at_submit
+                if account_job
                 else (
-                    f"{label} did not complete within {budget:.0f}s "
-                    f"(last status: {last_status}). Settlement only happens on "
-                    "completion, so no payment was taken. The job stays claimable "
-                    "for ~48h — re-poll poll_url with a fresh signature from the "
-                    "same wallet to fetch (and settle) the finished result."
+                    (
+                        f"{label} did not complete within {budget:.0f}s "
+                        f"(last status: {last_status}). Payment was settled at submit; "
+                        "the job stays claimable for ~48h — re-poll poll_url with a "
+                        "fresh signature from the same wallet to fetch the result."
+                    )
+                    if settled_at_submit
+                    else (
+                        f"{label} did not complete within {budget:.0f}s "
+                        f"(last status: {last_status}). Settlement only happens on "
+                        "completion, so no payment was taken. The job stays claimable "
+                        "for ~48h — re-poll poll_url with a fresh signature from the "
+                        "same wallet to fetch (and settle) the finished result."
+                    )
                 )
             ),
             504,
@@ -2428,6 +2462,14 @@ class SolanaLLMClient:
         **no payment** and leaves the job claimable ~48h. Default model is
         ``xai/grok-imagine-video``.
 
+        Every kwarg is documented on ``VideoClient.generate``. Rail notes:
+        reference media (``reference_image_urls`` / ``reference_videos`` /
+        ``reference_audios``) needs the account rail (a ``brk_`` key) — the
+        Solana wallet gateway refuses it — and seedance-2.5
+        first-and-last-frame is not served on the Solana wallet gateway yet.
+        Both are refused locally, before any request. On the account rail the
+        job is billed when accepted, not on completion.
+
         Args:
             input_type: Optional assertion of the seed mode — ``text`` /
                 ``image`` / ``first_last_frame`` / ``reference``. The gateway
@@ -2456,6 +2498,7 @@ class SolanaLLMClient:
             watermark=watermark,
             return_last_frame=return_last_frame,
             input_type=input_type,
+            api_key_mode=bool(self.api_key),
         )
 
         data = self._request_image_with_payment(
@@ -2786,12 +2829,12 @@ class SolanaLLMClient:
         image_url: str | None,
         last_frame_url: str | None,
         reference_image_urls: list[str] | None,
-        reference_videos: list[dict[str, str]] | None = None,
-        reference_audios: list[dict[str, str]] | None = None,
-        bitrate_mode: str | None = None,
-        output_format: str | None = None,
-        camera_fixed: bool | None = None,
-        safety_identifier: str | None = None,
+        reference_videos: list[dict[str, str]] | None,
+        reference_audios: list[dict[str, str]] | None,
+        bitrate_mode: str | None,
+        output_format: str | None,
+        camera_fixed: bool | None,
+        safety_identifier: str | None,
         real_face_asset_id: str | None,
         duration_seconds: int | None,
         aspect_ratio: str | None,
@@ -2801,64 +2844,33 @@ class SolanaLLMClient:
         watermark: bool | None,
         return_last_frame: bool | None,
         input_type: str | None,
+        api_key_mode: bool,
     ) -> dict[str, Any]:
         """Validate video kwargs and build the request body. Shared by the sync
         and async ``video()`` so their validation and payload never drift.
 
         Every param is required (pass None to omit) precisely so a caller can't
         silently drop one — the drift this builder exists to prevent."""
-        if image_url and real_face_asset_id:
-            raise ValueError(
-                "image_url and real_face_asset_id are mutually exclusive; pass at most one."
-            )
-        if last_frame_url and not image_url:
-            raise ValueError(
-                "last_frame_url requires image_url: image_url seeds the FIRST frame and "
-                "last_frame_url the FINAL frame — send both."
-            )
-        if last_frame_url and real_face_asset_id:
-            raise ValueError(
-                "last_frame_url and real_face_asset_id are mutually exclusive; "
-                "first-and-last-frame uses image_url + last_frame_url."
-            )
-        if reference_image_urls:
-            if image_url or last_frame_url or real_face_asset_id:
-                raise ValueError(
-                    "reference_image_urls is mutually exclusive with image_url, "
-                    "last_frame_url, and real_face_asset_id."
-                )
-            image_limit = 30 if (model or "").removeprefix("bytedance/") == "seedance-2.5" else 9
-            if len(reference_image_urls) > image_limit:
-                raise ValueError(f"reference_image_urls accepts at most {image_limit} images.")
-        if (reference_videos or reference_audios) and (
-            image_url or last_frame_url or real_face_asset_id
-        ):
-            raise ValueError(
-                "reference media is mutually exclusive with frame-seed inputs; use reference_image_urls."
-            )
-        for clips in (reference_videos, reference_audios):
-            if clips is not None:
-                if not 1 <= len(clips) <= 3:
-                    raise ValueError("reference media accepts 1 to 3 clips per type.")
-                if any(
-                    not isinstance(clip, dict)
-                    or not isinstance(clip.get("url"), str)
-                    or not clip["url"].startswith(("https://", "http://"))
-                    or clip.get("role", "reference") != "reference"
-                    for clip in clips
-                ):
-                    raise ValueError(
-                        "reference clips require an http(s) URL and optional reference role."
-                    )
-        if real_face_asset_id is not None and not real_face_asset_id.startswith("ta_"):
-            raise ValueError(
-                "real_face_asset_id must start with 'ta_' "
-                "(a Virtual Portrait or RealFace asset id, e.g. 'ta_abc123xyz')"
-            )
+        resolved_model = model or SolanaLLMClient.VIDEO_DEFAULT_MODEL
+        validate_video_request(
+            resolved_model,
+            api_key_mode=api_key_mode,
+            solana_wallet=not api_key_mode,
+            image_url=image_url,
+            last_frame_url=last_frame_url,
+            reference_image_urls=reference_image_urls,
+            reference_videos=reference_videos,
+            reference_audios=reference_audios,
+            real_face_asset_id=real_face_asset_id,
+            bitrate_mode=bitrate_mode,
+            output_format=output_format,
+            camera_fixed=camera_fixed,
+            safety_identifier=safety_identifier,
+        )
         validate_video_input_type(input_type)
 
         body: dict[str, Any] = {
-            "model": model or SolanaLLMClient.VIDEO_DEFAULT_MODEL,
+            "model": resolved_model,
             "prompt": prompt,
         }
         if image_url:
@@ -2867,9 +2879,9 @@ class SolanaLLMClient:
             body["last_frame_url"] = last_frame_url
         if reference_image_urls:
             body["reference_image_urls"] = reference_image_urls
-        if reference_videos is not None:
+        if reference_videos:
             body["reference_videos"] = reference_videos
-        if reference_audios is not None:
+        if reference_audios:
             body["reference_audios"] = reference_audios
         if bitrate_mode is not None:
             body["bitrate_mode"] = bitrate_mode
@@ -4704,6 +4716,7 @@ class AsyncSolanaLLMClient:
             watermark=watermark,
             return_last_frame=return_last_frame,
             input_type=input_type,
+            api_key_mode=bool(self.api_key),
         )
 
         data = await self._request_image_with_payment(
@@ -5136,7 +5149,10 @@ class AsyncSolanaLLMClient:
 
         # Step 1: probe — expect 402 unless the model is free or cached upstream.
         probe = await self._client.post(url, json=body, headers=probe_headers, timeout=eff_timeout)
-        if probe.status_code in (502, 503):
+        # Not on the account rail: there the first POST is the billed submit
+        # (the key IS the payment), and a 502 can arrive after the charge, so
+        # replaying it could bill the job twice. Mirrors the Base VideoClient.
+        if probe.status_code in (502, 503) and not self.api_key:
             await asyncio.sleep(1)
             probe = await self._client.post(
                 url, json=body, headers=probe_headers, timeout=eff_timeout
@@ -5147,7 +5163,14 @@ class AsyncSolanaLLMClient:
         # and, without the optional SDK installed, no decoder either.
         raise_for_api_key_402(probe, self.api_key)
 
-        if probe.status_code != 402:
+        # Account rail: the probe carried the API key, so a 202 here is the
+        # accepted (and already billed) job, not a free/cached answer. Handing
+        # its {id, poll_url, status} stub back as the result crashed the caller
+        # (VideoResponse validation) after the charge, with no job id surfaced.
+        # Poll it like the wallet rail does, minus the signature.
+        account_job = bool(self.api_key) and probe.status_code == 202
+
+        if probe.status_code != 402 and not account_job:
             if not probe.is_success:
                 try:
                     error_body = probe.json()
@@ -5161,63 +5184,73 @@ class AsyncSolanaLLMClient:
                 )
             return probe.json()
 
-        # Step 2: sign x402 SVM payload (reuse the encoded signature on polls).
-        # Inlined rather than _sign_payment_from_response so the original payment
-        # terms are captured for the mid-poll re-sign guard below.
-        probe_payment_header = SolanaLLMClient._extract_payment_header(probe)
-        if not probe_payment_header:
-            raise PaymentError("402 response but no payment requirements found")
-        payment_required = decode_payment_required_header(probe_payment_header)
-        payment_payload_obj = await self._sign_payment(payment_required)
-        encoded_payment = encode_payment_signature_header(payment_payload_obj)
-        cost_usd = float(payment_payload_obj.accepted.amount) / 1e6
-        # Terms this job is authorized to pay — any mid-poll re-sign must match.
-        orig_amount = payment_payload_obj.accepted.amount
-        orig_pay_to = payment_payload_obj.accepted.pay_to
-        payment_headers = {
-            "Content-Type": "application/json",
-            "User-Agent": _get_user_agent(),
-            "PAYMENT-SIGNATURE": encoded_payment,
-        }
+        if account_job:
+            submit_resp = probe
+            payment_required = None
+            encoded_payment = None
+            # The SDK cannot see the account rail's settled cost, so nothing is
+            # booked locally (same as every other account-rail call).
+            cost_usd = 0.0
+            orig_amount = orig_pay_to = None
+            max_resigns = 0
+        else:
+            # Step 2: sign x402 SVM payload (reuse the encoded signature on polls).
+            # Inlined rather than _sign_payment_from_response so the original payment
+            # terms are captured for the mid-poll re-sign guard below.
+            probe_payment_header = SolanaLLMClient._extract_payment_header(probe)
+            if not probe_payment_header:
+                raise PaymentError("402 response but no payment requirements found")
+            payment_required = decode_payment_required_header(probe_payment_header)
+            payment_payload_obj = await self._sign_payment(payment_required)
+            encoded_payment = encode_payment_signature_header(payment_payload_obj)
+            cost_usd = float(payment_payload_obj.accepted.amount) / 1e6
+            # Terms this job is authorized to pay — any mid-poll re-sign must match.
+            orig_amount = payment_payload_obj.accepted.amount
+            orig_pay_to = payment_payload_obj.accepted.pay_to
+            payment_headers = {
+                "Content-Type": "application/json",
+                "User-Agent": _get_user_agent(),
+                "PAYMENT-SIGNATURE": encoded_payment,
+            }
 
-        # Step 3: submit with signature.
-        submit_resp = await self._client.post(
-            url, json=body, headers=payment_headers, timeout=eff_timeout
-        )
-        if submit_resp.status_code in (502, 503):
-            await asyncio.sleep(1)
+            # Step 3: submit with signature.
             submit_resp = await self._client.post(
                 url, json=body, headers=payment_headers, timeout=eff_timeout
             )
+            if submit_resp.status_code in (502, 503):
+                await asyncio.sleep(1)
+                submit_resp = await self._client.post(
+                    url, json=body, headers=payment_headers, timeout=eff_timeout
+                )
 
-        if submit_resp.status_code == 402:
-            # Account rail: a 402 is the account being out of credit, not a
-            # challenge to sign. Nothing here can sign, so say so plainly.
-            raise_for_api_key_402(submit_resp, self.api_key)
-            raise build_payment_rejected_error(submit_resp)
+            if submit_resp.status_code == 402:
+                # Account rail: a 402 is the account being out of credit, not a
+                # challenge to sign. Nothing here can sign, so say so plainly.
+                raise_for_api_key_402(submit_resp, self.api_key)
+                raise build_payment_rejected_error(submit_resp)
 
-        if submit_resp.status_code == 200:
-            # Fast path — image produced inline.
-            self._session_calls += 1
-            self._session_total_usd += cost_usd
-            self._last_call_cost = cost_usd
-            self._capture_settlement(submit_resp)
-            data = submit_resp.json()
-            save_to_cache(endpoint, body, data, cost_usd=cost_usd, **self._billing_meta())
-            self._log_transaction(endpoint, body, data, cost_usd)
-            return data
+            if submit_resp.status_code == 200:
+                # Fast path — image produced inline.
+                self._session_calls += 1
+                self._session_total_usd += cost_usd
+                self._last_call_cost = cost_usd
+                self._capture_settlement(submit_resp)
+                data = submit_resp.json()
+                save_to_cache(endpoint, body, data, cost_usd=cost_usd, **self._billing_meta())
+                self._log_transaction(endpoint, body, data, cost_usd)
+                return data
 
-        if submit_resp.status_code != 202:
-            try:
-                error_body = submit_resp.json()
-            except Exception:
-                error_body = {"error": "Request failed"}
-            raise APIError(
-                f"Image request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
-                submit_resp.status_code,
-                sanitize_error_response(error_body),
-                retry_after=retry_after_of(submit_resp),
-            )
+            if submit_resp.status_code != 202:
+                try:
+                    error_body = submit_resp.json()
+                except Exception:
+                    error_body = {"error": "Request failed"}
+                raise APIError(
+                    f"Image request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
+                    submit_resp.status_code,
+                    sanitize_error_response(error_body),
+                    retry_after=retry_after_of(submit_resp),
+                )
 
         # Step 4: slow path — poll until completed (or budget exhausted).
         try:
@@ -5230,7 +5263,10 @@ class AsyncSolanaLLMClient:
         if not poll_url_rel:
             raise APIError("Slow-path 202 missing poll_url", 202, {"response": submit_data})
         poll_url = self._absolute_url(poll_url_rel)
-        if settled_at_submit:
+        # The account rail bills at accept, so for messages it behaves like a
+        # route that settles at submit, whatever the wallet rail would do.
+        charged_at_submit = settled_at_submit or account_job
+        if settled_at_submit and not account_job:
             # Solana image routes settle at POST (a signed transaction dies with
             # its ~60-90s blockhash, so the gateway cannot wait for a long
             # render). The charge has already happened: book it now, or a job
@@ -5238,10 +5274,9 @@ class AsyncSolanaLLMClient:
             self._session_calls += 1
             self._session_total_usd += cost_usd
             self._last_call_cost = cost_usd
-        poll_headers = {
-            "User-Agent": _get_user_agent(),
-            "PAYMENT-SIGNATURE": encoded_payment,
-        }
+        poll_headers = {"User-Agent": _get_user_agent()}
+        if encoded_payment is not None:
+            poll_headers["PAYMENT-SIGNATURE"] = encoded_payment
 
         budget = (
             poll_budget_seconds
@@ -5332,7 +5367,7 @@ class AsyncSolanaLLMClient:
             if last_status == "failed":
                 raise APIError(
                     f"{label} failed upstream: {poll_data.get('error', 'unknown')}"
-                    + (" (payment was settled at submit)" if settled_at_submit else ""),
+                    + (" (payment was settled at submit)" if charged_at_submit else ""),
                     poll_resp.status_code,
                     sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
                     retry_after=retry_after_of(poll_resp),
@@ -5346,7 +5381,7 @@ class AsyncSolanaLLMClient:
                 )
                 if tx_hash and isinstance(poll_data, dict) and not poll_data.get("txHash"):
                     poll_data["txHash"] = tx_hash
-                if not settled_at_submit:
+                if not charged_at_submit:
                     self._session_calls += 1
                     self._session_total_usd += cost_usd
                     self._last_call_cost = cost_usd
@@ -5374,17 +5409,26 @@ class AsyncSolanaLLMClient:
             (
                 (
                     f"{label} did not complete within {budget:.0f}s "
-                    f"(last status: {last_status}). Payment was settled at submit; "
-                    "the job stays claimable for ~48h — re-poll poll_url with a "
-                    "fresh signature from the same wallet to fetch the result."
+                    f"(last status: {last_status}). The account was billed when the "
+                    "job was accepted; it stays claimable for ~48h — re-poll "
+                    "poll_url with the same API key to fetch the result."
                 )
-                if settled_at_submit
+                if account_job
                 else (
-                    f"{label} did not complete within {budget:.0f}s "
-                    f"(last status: {last_status}). Settlement only happens on "
-                    "completion, so no payment was taken. The job stays claimable "
-                    "for ~48h — re-poll poll_url with a fresh signature from the "
-                    "same wallet to fetch (and settle) the finished result."
+                    (
+                        f"{label} did not complete within {budget:.0f}s "
+                        f"(last status: {last_status}). Payment was settled at submit; "
+                        "the job stays claimable for ~48h — re-poll poll_url with a "
+                        "fresh signature from the same wallet to fetch the result."
+                    )
+                    if settled_at_submit
+                    else (
+                        f"{label} did not complete within {budget:.0f}s "
+                        f"(last status: {last_status}). Settlement only happens on "
+                        "completion, so no payment was taken. The job stays claimable "
+                        "for ~48h — re-poll poll_url with a fresh signature from the "
+                        "same wallet to fetch (and settle) the finished result."
+                    )
                 )
             ),
             504,

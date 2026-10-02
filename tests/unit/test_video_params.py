@@ -17,7 +17,13 @@ def client():
 
 
 @pytest.fixture
-def captured(client, monkeypatch):
+def account():
+    # Reference media is an account-rail capability: both wallet gateways
+    # refuse every reference_* field before quoting (blockrun#728).
+    return VideoClient(private_key="brk_live_video_params_fixture")
+
+
+def _capture(client, monkeypatch):
     captured = {}
 
     def fake_submit(body, budget_seconds):
@@ -27,6 +33,16 @@ def captured(client, monkeypatch):
 
     monkeypatch.setattr(client, "_submit_and_poll", fake_submit)
     return captured
+
+
+@pytest.fixture
+def captured(client, monkeypatch):
+    return _capture(client, monkeypatch)
+
+
+@pytest.fixture
+def account_captured(account, monkeypatch):
+    return _capture(account, monkeypatch)
 
 
 def test_first_last_frame_body(client, captured):
@@ -40,15 +56,25 @@ def test_first_last_frame_body(client, captured):
     assert captured["body"]["last_frame_url"] == "https://example.com/bloom.jpg"
 
 
-def test_reference_images_body(client, captured):
+def test_reference_images_body(account, account_captured):
     urls = ["https://example.com/1.jpg", "https://example.com/2.jpg"]
-    client.generate(
+    account.generate(
         "the character from image 1 in the city from image 2",
         model="bytedance/seedance-2.0",
         reference_image_urls=urls,
     )
-    assert captured["body"]["reference_image_urls"] == urls
-    assert "image_url" not in captured["body"]
+    assert account_captured["body"]["reference_image_urls"] == urls
+    assert "image_url" not in account_captured["body"]
+
+
+def test_reference_media_refused_on_the_wallet_rail(client, captured):
+    for refs in (
+        {"reference_image_urls": ["https://example.com/r.jpg"]},
+        {"reference_videos": [{"url": "https://example.com/m.mp4"}]},
+    ):
+        with pytest.raises(ValueError, match="account rail"):
+            client.generate("x", model="bytedance/seedance-2.0", **refs)
+    assert captured == {}
 
 
 def test_token360_passthroughs(client, captured):
@@ -82,25 +108,28 @@ def test_last_frame_excludes_real_face(client):
         )
 
 
-def test_reference_images_exclude_other_image_inputs(client):
+def test_reference_images_exclude_other_image_inputs(account):
     with pytest.raises(ValueError, match="mutually exclusive"):
-        client.generate(
+        account.generate(
             "x",
+            model="bytedance/seedance-2.0",
             image_url="https://example.com/seed.jpg",
             reference_image_urls=["https://example.com/r.jpg"],
         )
     with pytest.raises(ValueError, match="mutually exclusive"):
-        client.generate(
+        account.generate(
             "x",
+            model="bytedance/seedance-2.0",
             real_face_asset_id="ta_abc123",
             reference_image_urls=["https://example.com/r.jpg"],
         )
 
 
-def test_reference_images_max_nine(client):
+def test_reference_images_max_nine(account):
     with pytest.raises(ValueError, match="at most 9"):
-        client.generate(
+        account.generate(
             "x",
+            model="bytedance/seedance-2.0",
             reference_image_urls=[f"https://example.com/{i}.jpg" for i in range(10)],
         )
 
@@ -157,8 +186,8 @@ def test_input_type_mismatch_is_left_to_the_gateway(client, captured):
     assert captured["body"]["input_type"] == "image"
 
 
-def test_mixed_references_and_controls_reach_body(client, captured):
-    client.generate(
+def test_mixed_references_and_controls_reach_body(account, account_captured):
+    account.generate(
         "follow the motion",
         model="bytedance/seedance-2.0",
         reference_image_urls=["https://example.com/person.png"],
@@ -169,7 +198,7 @@ def test_mixed_references_and_controls_reach_body(client, captured):
         return_last_frame=True,
         input_type="reference",
     )
-    body = captured["body"]
+    body = account_captured["body"]
     assert body["reference_videos"] == [{"url": "https://example.com/motion.mp4"}]
     assert body["reference_audios"] == [{"url": "https://example.com/music.mp3"}]
     assert body["reference_image_urls"] == ["https://example.com/person.png"]
@@ -178,28 +207,98 @@ def test_mixed_references_and_controls_reach_body(client, captured):
     assert body["input_type"] == "reference"
 
 
-def test_25_reference_limit_and_output_controls(client, captured):
+def test_25_reference_limit_and_output_controls(account, account_captured):
     images = ["https://example.com/person.png"] * 30
-    client.generate(
+    account.generate(
         "test", model="bytedance/seedance-2.5", reference_image_urls=images, output_format="mov"
     )
-    assert captured["body"]["reference_image_urls"] == images
-    assert captured["body"]["output_format"] == "mov"
+    assert account_captured["body"]["reference_image_urls"] == images
+    assert account_captured["body"]["output_format"] == "mov"
     with pytest.raises(ValueError, match="at most 30"):
-        client.generate(
+        account.generate(
             "test", model="bytedance/seedance-2.5", reference_image_urls=images + images
         )
-    client.generate("test", model="bytedance/seedance-1.5-pro", camera_fixed=False)
-    assert captured["body"]["camera_fixed"] is False
+    account.generate("test", model="bytedance/seedance-1.5-pro", camera_fixed=False)
+    assert account_captured["body"]["camera_fixed"] is False
 
 
-def test_reference_media_cannot_be_frame_seeds(client):
+def test_reference_media_cannot_be_frame_seeds(account):
     with pytest.raises(ValueError, match="mutually exclusive"):
-        client.generate(
+        account.generate(
             "test",
+            model="bytedance/seedance-2.0",
             image_url="https://example.com/frame.png",
             reference_videos=[{"url": "https://example.com/motion.mp4"}],
         )
+
+
+# Per-model guards — mirror the MCP's capability table (blockrun-mcp
+# src/tools/video.ts). On the account rail there is no quote step, so these
+# refusals are the only thing standing between a bad request and a charge.
+_CLIP = [{"url": "https://example.com/motion.mp4"}]
+
+
+@pytest.mark.parametrize(
+    "model, kwargs, message",
+    [
+        # 2.5 takes reference images but not clips
+        ("bytedance/seedance-2.5", {"reference_videos": _CLIP}, "2.5 takes reference IMAGES"),
+        (
+            "bytedance/seedance-2.5",
+            {"reference_image_urls": ["https://e/x.png"], "reference_audios": _CLIP},
+            "does not accept reference video or audio",
+        ),
+        (
+            "bytedance/seedance-1.5-pro",
+            {"reference_image_urls": ["https://e/x.png"]},
+            "does not accept reference images",
+        ),
+        (
+            "xai/grok-imagine-video",
+            {"reference_image_urls": ["https://e/x.png"]},
+            "does not accept reference images",
+        ),
+        (
+            "bytedance/seedance-2.0",
+            {"reference_audios": _CLIP},
+            "requires a reference image or video",
+        ),
+        ("bytedance/seedance-2.0", {"reference_videos": _CLIP * 4}, "at most 3 clips"),
+        (
+            "bytedance/seedance-2.0",
+            {"reference_videos": [{"url": "ftp://e/x.mp4"}]},
+            "entries must be",
+        ),
+        (
+            "bytedance/seedance-2.0",
+            {"reference_videos": [{"url": "https://e/x.mp4", "start": 3}]},
+            "no other keys",
+        ),
+        (
+            "bytedance/seedance-2.0",
+            {"reference_image_urls": ["data:image/png;base64,AA=="]},
+            "http\\(s\\) URLs",
+        ),
+        ("bytedance/seedance-1.5-pro", {"bitrate_mode": "high"}, "requires a Seedance 2.x"),
+        ("bytedance/seedance-2.0", {"bitrate_mode": "ultra"}, "bitrate_mode must be one of"),
+        ("bytedance/seedance-2.0", {"output_format": "mov"}, "requires bytedance/seedance-2.5"),
+        ("bytedance/seedance-2.5", {"output_format": "webm"}, "output_format must be one of"),
+        ("bytedance/seedance-2.0", {"camera_fixed": True}, "requires bytedance/seedance-1.5-pro"),
+        ("xai/grok-imagine-video", {"safety_identifier": "u1"}, "requires a Seedance model"),
+    ],
+)
+def test_per_model_guards_refuse_before_submit(account, account_captured, model, kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        account.generate("x", model=model, **kwargs)
+    assert account_captured == {}
+
+
+def test_empty_reference_lists_are_omitted(account, account_captured):
+    account.generate(
+        "x", model="bytedance/seedance-2.0", reference_image_urls=[], reference_videos=[]
+    )
+    assert "reference_image_urls" not in account_captured["body"]
+    assert "reference_videos" not in account_captured["body"]
 
 
 def test_last_frame_response_is_not_dropped():

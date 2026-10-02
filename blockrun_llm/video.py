@@ -54,6 +54,7 @@ from .validation import (
     validate_api_url,
     validate_private_key,
     validate_video_input_type,
+    validate_video_request,
 )
 from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
 
@@ -198,21 +199,30 @@ class VideoClient:
             last_frame_url: First-and-last-frame interpolation — a second
                 image that seeds the FINAL frame so the model tweens from
                 `image_url` -> `last_frame_url`. Requires `image_url` and a
-                Seedance model (bytedance/seedance-1.5-pro, seedance-2.0,
-                or seedance-2.0-fast). Priced identically to image-to-video.
-            reference_image_urls: Omni / multi-reference — up to 9 (2.0) or 30 (2.5) reference
-                image URLs for character/style consistency (Seedance 2.0/2.5).
-                Cite them as "image 1", "image 2" in the prompt.
-                Mutually exclusive with `image_url`, `last_frame_url`, and
-                `real_face_asset_id`.
-            reference_videos: Up to 3 http(s) motion references on Seedance 2.0.
-                May be combined with reference_image_urls and reference_audios.
-            reference_audios: Up to 3 http(s) audio references on Seedance 2.0.
-                Requires at least one reference image or video.
-            bitrate_mode: Seedance 2.x output bitrate, "standard" or "high".
-            output_format: Seedance 2.5 output container, "mp4" or "mov".
-            camera_fixed: Seedance 1.5-pro fixed-camera control.
-            safety_identifier: Safety identifier forwarded with a Seedance request.
+                Seedance model (1.5-pro, 2.0, 2.0-fast, 2.0-mini, 2.5).
+                Priced identically to image-to-video.
+            reference_image_urls: Omni / multi-reference images for
+                character/style consistency — up to 9 on seedance-2.0 /
+                2.0-fast / 2.0-mini, up to 30 on seedance-2.5. Cite them as
+                "image 1", "image 2" in the prompt. **Account rail only**
+                (BLOCKRUN_API_KEY): the wallet gateways refuse every
+                reference field. Mutually exclusive with `image_url`,
+                `last_frame_url`, and `real_face_asset_id`.
+            reference_videos: Up to 3 motion references, each
+                ``{"url": "https://…"}`` (optional ``"role": "reference"``),
+                on seedance-2.0 / 2.0-fast / 2.0-mini — not 2.5. Account rail
+                only. **Cost:** every reference clip is billed at the model's
+                15.2s reference ceiling whatever its real length, so one clip
+                can multiply the price of a short render several times.
+            reference_audios: Up to 3 audio references, same shape and models
+                as `reference_videos`, billed the same way (at a lower
+                per-second rate). Requires a reference image or video.
+            bitrate_mode: `"standard"` or `"high"` (Seedance 2.0 / 2.0-fast /
+                2.0-mini / 2.5).
+            output_format: `"mp4"` or `"mov"` (seedance-2.5 only).
+            camera_fixed: Lock the camera (seedance-1.5-pro only).
+            safety_identifier: End-user identifier forwarded to the provider
+                for abuse attribution (Seedance only).
             real_face_asset_id: A `ta_xxxxxx` face/character asset for
                 identity consistency — either a Virtual Portrait (AI
                 character, via `PortraitClient`, $0.01) or a RealFace
@@ -249,66 +259,33 @@ class VideoClient:
         Raises:
             ValueError: If mutually-exclusive image inputs are combined
                 (see above), `last_frame_url` is passed without `image_url`,
+                a Seedance-specific field is sent to a model that does not
+                take it, reference media is sent on the wallet rail,
                 `real_face_asset_id` is malformed, or `input_type` is not one
-                of the four accepted values.
+                of the four accepted values. Raised before any request.
             PaymentError: If wallet balance is insufficient.
             APIError: If upstream fails, the job times out, or any transport
                 error occurs.
         """
-        if image_url and real_face_asset_id:
-            raise ValueError(
-                "image_url and real_face_asset_id are mutually exclusive; pass at most one."
-            )
-        if last_frame_url and not image_url:
-            raise ValueError(
-                "last_frame_url requires image_url: image_url seeds the FIRST frame and "
-                "last_frame_url the FINAL frame — send both."
-            )
-        if last_frame_url and real_face_asset_id:
-            raise ValueError(
-                "last_frame_url and real_face_asset_id are mutually exclusive; "
-                "first-and-last-frame uses image_url + last_frame_url."
-            )
-        if reference_image_urls:
-            if image_url or last_frame_url or real_face_asset_id:
-                raise ValueError(
-                    "reference_image_urls is mutually exclusive with image_url, "
-                    "last_frame_url, and real_face_asset_id."
-                )
-            image_limit = 30 if (model or "").removeprefix("bytedance/") == "seedance-2.5" else 9
-            if len(reference_image_urls) > image_limit:
-                raise ValueError(f"reference_image_urls accepts at most {image_limit} images.")
-        if (reference_videos or reference_audios) and (
-            image_url or last_frame_url or real_face_asset_id
-        ):
-            raise ValueError(
-                "reference media is mutually exclusive with frame-seed inputs; use reference_image_urls."
-            )
-        for clips in (reference_videos, reference_audios):
-            if clips is not None:
-                if not 1 <= len(clips) <= 3:
-                    raise ValueError("reference media accepts 1 to 3 clips per type.")
-                if any(
-                    not isinstance(clip, dict)
-                    or not isinstance(clip.get("url"), str)
-                    or not clip["url"].startswith(("https://", "http://"))
-                    or clip.get("role", "reference") != "reference"
-                    for clip in clips
-                ):
-                    raise ValueError(
-                        "reference clips require an http(s) URL and optional reference role."
-                    )
-        if real_face_asset_id is not None and not real_face_asset_id.startswith("ta_"):
-            raise ValueError(
-                "real_face_asset_id must start with 'ta_' "
-                "(a Virtual Portrait or RealFace asset id, e.g. 'ta_abc123xyz' — "
-                "enroll via PortraitClient / POST /v1/portrait/enroll or "
-                "RealFaceClient / POST /v1/realface/enroll)"
-            )
+        resolved_model = model or self.DEFAULT_MODEL
+        validate_video_request(
+            resolved_model,
+            api_key_mode=bool(self.api_key),
+            image_url=image_url,
+            last_frame_url=last_frame_url,
+            reference_image_urls=reference_image_urls,
+            reference_videos=reference_videos,
+            reference_audios=reference_audios,
+            real_face_asset_id=real_face_asset_id,
+            bitrate_mode=bitrate_mode,
+            output_format=output_format,
+            camera_fixed=camera_fixed,
+            safety_identifier=safety_identifier,
+        )
         validate_video_input_type(input_type)
 
         body: dict[str, Any] = {
-            "model": model or self.DEFAULT_MODEL,
+            "model": resolved_model,
             "prompt": prompt,
         }
         if image_url:
@@ -317,9 +294,9 @@ class VideoClient:
             body["last_frame_url"] = last_frame_url
         if reference_image_urls:
             body["reference_image_urls"] = reference_image_urls
-        if reference_videos is not None:
+        if reference_videos:
             body["reference_videos"] = reference_videos
-        if reference_audios is not None:
+        if reference_audios:
             body["reference_audios"] = reference_audios
         if bitrate_mode is not None:
             body["bitrate_mode"] = bitrate_mode
