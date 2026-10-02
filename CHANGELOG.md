@@ -2,7 +2,7 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
-## Unreleased
+## 1.18.0 — 2026-10-02
 
 ### Added
 - **Seedance reference media and output controls** on `VideoClient.generate`,
