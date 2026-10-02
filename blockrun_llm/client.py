@@ -381,31 +381,92 @@ class _ChatPayment(NamedTuple):
     exact_fallback: Callable[[], _ChatPayment] | None = None
 
 
+def _rejection_body(response: httpx.Response) -> dict[str, Any] | None:
+    """The JSON object body of a refusal, or ``None`` when it has none."""
+    try:
+        body = response.json()
+    except Exception:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _rejection_error_text(body: dict[str, Any]) -> str:
+    error = body.get("error")
+    if isinstance(error, dict):
+        error = error.get("message")
+    return error if isinstance(error, str) else ""
+
+
 def _is_payment_rejection(response: httpx.Response) -> bool:
     """Did the gateway refuse the payment itself (before serving anything)?
 
     A 402 on the paid request, or a 4xx whose body is the gateway's
     payment-verification failure (``error: "Payment verification failed"`` /
     a ``PAYMENT_*`` code).
+
+    This decides how a refusal is RAISED. Whether it may be answered with a
+    second, exact payment is narrower: see :func:`_is_verify_failure`.
     """
     status = response.status_code
     if status == 402:
         return True
     if not 400 <= status < 500:
         return False
-    try:
-        body = response.json()
-    except Exception:
+    body = _rejection_body(response)
+    if body is None:
         return False
-    if not isinstance(body, dict):
-        return False
-    error = body.get("error")
-    if isinstance(error, dict):
-        error = error.get("message")
     code = body.get("code")
-    return (isinstance(error, str) and "payment verification failed" in error.lower()) or (
+    return "payment verification failed" in _rejection_error_text(body).lower() or (
         isinstance(code, str) and code.upper().startswith("PAYMENT_")
     )
+
+
+# The codes the gateway's chat route puts on a VERIFY-phase refusal
+# (blockrun src/app/api/v1/chat/completions/route.ts → verifyFailureFields in
+# src/lib/x402.ts). Verify runs before the nonce is claimed and before anything
+# is served or settled, so these prove the signed payment was never used.
+_VERIFY_FAILURE_CODES = frozenset({"PAYMENT_INVALID", "PAYMENT_UNFUNDED"})
+
+
+def _is_payment_replay(response: httpx.Response) -> bool:
+    """Did the gateway refuse the payment because its authorization was
+    ALREADY USED (``code: "PAYMENT_REPLAY"``, or a body pointing at the earlier
+    request's result: ``recoverable`` / ``poll_url`` / ``job_id``)?
+
+    That earlier use was served and paid for: a proxy or load balancer may
+    have duplicated the first send. Nothing about this request may be paid
+    again.
+    """
+    if response.status_code < 400:
+        return False
+    body = _rejection_body(response)
+    if body is None:
+        return False
+    code = body.get("code")
+    if isinstance(code, str) and code.upper() == "PAYMENT_REPLAY":
+        return True
+    return any(body.get(k) for k in ("recoverable", "poll_url", "job_id"))
+
+
+def _is_verify_failure(response: httpx.Response) -> bool:
+    """Is this a DEFINITE pre-use refusal of the payment — one that proves the
+    signed authorization was never consumed?
+
+    An allowlist, not "any 402": the gateway's verify-failure body
+    (``error: "Payment verification failed"`` or a verify-failure ``code``), or
+    a 402 that answers the paid request with a fresh ``payment-required``
+    challenge (the payment was not accepted at all). Never a replay.
+    """
+    if not 400 <= response.status_code < 500 or _is_payment_replay(response):
+        return False
+    body = _rejection_body(response)
+    if body is not None:
+        code = body.get("code")
+        if "payment verification failed" in _rejection_error_text(body).lower():
+            return True
+        if isinstance(code, str) and code.upper() in _VERIFY_FAILURE_CODES:
+            return True
+    return response.status_code == 402 and bool(response.headers.get("payment-required"))
 
 
 def _may_fall_back_to_exact(
@@ -413,12 +474,49 @@ def _may_fall_back_to_exact(
 ) -> bool:
     """May this rejection of an upto payment be answered with an exact one?
 
-    Only when the refused send was the FIRST send of that upto signature. Upto
-    settles after the call is served, so if a 5xx made us replay the same
-    header, the replay's rejection can mean the first send was served and
-    settled (Permit2 nonce used). Paying exact then would charge twice.
+    Only when the refused send was the FIRST send of that upto signature, and
+    the refusal is a definite verification failure (:func:`_is_verify_failure`).
+
+    * Upto settles after the call is served, so if a 5xx made us replay the
+      same header, the replay's rejection can mean the first send was served
+      and settled (Permit2 nonce used).
+    * ``PAYMENT_REPLAY`` on the first send means the authorization was already
+      used by an earlier request that completed and was paid for (e.g. a
+      duplicated send).
+
+    Paying exact in either case would charge twice.
     """
-    return payment.exact_fallback is not None and not replayed and _is_payment_rejection(response)
+    return payment.exact_fallback is not None and not replayed and _is_verify_failure(response)
+
+
+def _payment_rejected_error(response: httpx.Response) -> PaymentError:
+    """The error for a paid request whose payment the gateway refused (a 402).
+
+    A ``PAYMENT_REPLAY`` is not a balance problem and must not read as "just
+    retry": a retry signs a fresh authorization, and is charged again for a
+    request that was already paid for. Keep the gateway's message and, when it
+    names one, the earlier result's ``poll_url``.
+    """
+    if not _is_payment_replay(response):
+        return PaymentError("Payment was rejected. Check your wallet balance.")
+    body = _rejection_body(response) or {}
+    gateway_message = body.get("message")
+    poll_url = body.get("poll_url")
+    detail: dict[str, Any] = sanitize_error_response(body)
+    for key in ("poll_url", "job_id", "recoverable"):
+        if body.get(key) is not None:
+            detail[key] = body[key]
+    text = (
+        "The gateway refused this payment as already used (PAYMENT_REPLAY): an earlier "
+        "request with the same authorization was accepted and may have been charged. "
+        "Nothing more was signed. Retrying signs a new authorization and is billed "
+        "again, so check what the earlier request returned first."
+    )
+    if isinstance(poll_url, str) and poll_url:
+        text += f" Its result can be collected at {poll_url}."
+    if isinstance(gateway_message, str) and gateway_message:
+        text += f" Gateway: {gateway_message}"
+    return PaymentError(text, status_code=response.status_code, response=detail)
 
 
 def _exact_after_upto_rejection(client: Any, payment: _ChatPayment) -> _ChatPayment:
@@ -531,7 +629,7 @@ def _upto_chat_payment(
         signed.amount,
         network=option.network,
         exact_fallback=lambda: _exact_chat_payment(
-            client, body, payment_required, price_info, details
+            client, body, payment_required, price_info, details, upto_refused=True
         ),
     )
 
@@ -542,17 +640,32 @@ def _exact_chat_payment(
     payment_required: dict[str, Any],
     price_info: dict[str, Any],
     details: dict[str, Any],
+    *,
+    upto_refused: bool = False,
 ) -> _ChatPayment:
-    """Sign the exact (EIP-3009) requirement — the path every release has used."""
+    """Sign the exact (EIP-3009) requirement — the path every release has used.
+
+    ``upto_refused``: called as the fallback after the gateway refused an upto
+    payment for this same 402 (only the wording of the upto-only refusal).
+    """
     if details.get("scheme") == "upto":
-        # extract_payment_details falls back to accepts[0] when no exact entry
-        # exists. Signing an upto requirement as EIP-3009 would authorize the
-        # whole upto CEILING as a fixed transfer, so refuse instead.
+        # Chat asks extract_payment_details for the upto entry when no exact
+        # one exists (allow_upto=True). Signing an upto requirement as EIP-3009
+        # would authorize the whole upto CEILING as a fixed transfer, so refuse
+        # instead — with a message that says why upto did not happen.
+        if upto_refused:
+            raise PaymentError(
+                "This 402 offers only the x402 'upto' scheme. An upto payment was "
+                "signed and sent, and the gateway refused it before serving the "
+                "request; there is no exact option to fall back to, so no exact "
+                "payment was signed."
+            )
         raise PaymentError(
             "This 402 offers only the x402 'upto' scheme, and upto could not be used "
             "here (payment_scheme='exact', no Permit2 allowance and no gas "
-            "sponsoring, insufficient balance, or a ceiling over a spend limit). "
-            "Nothing was signed."
+            "sponsoring, insufficient balance, a ceiling over a spend limit, or the "
+            "gateway refused an upto payment from this wallet in the last "
+            f"{UPTO_REJECTION_TTL_SECONDS / 60:.0f} minutes). Nothing was signed."
         )
     try:
         signed_usd = int(str(details.get("amount", 0))) / 1e6
@@ -582,6 +695,7 @@ def _exact_chat_payment(
         account=client.account,
         recipient=details["recipient"],
         amount=details["amount"],
+        scheme=details.get("scheme"),
         network=details.get("network", "eip155:84532" if client.is_testnet() else "eip155:8453"),
         resource_url=validate_resource_url(
             resource.get("url", f"{client.api_url}/v1/chat/completions"), client.api_url
@@ -1555,7 +1669,7 @@ class LLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise _payment_rejected_error(response)
         self._raise_stream_error(response, after_payment=True)
         raise AssertionError("unreachable: _raise_stream_error always raises")
 
@@ -1725,7 +1839,7 @@ class LLMClient:
         Only the signature is sent - your private key never leaves.
         """
         payment_required, price_info = _read_payment_required(response)
-        details = extract_payment_details(payment_required)
+        details = extract_payment_details(payment_required, allow_upto=True)
         offer = _upto_offer(self, body, payment_required, details)
         if offer is not None:
             option, kwargs = offer
@@ -1841,7 +1955,7 @@ class LLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise _payment_rejected_error(retry_response)
 
         if retry_response.status_code != 200:
             try:
@@ -1996,6 +2110,7 @@ class LLMClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
+            scheme=details.get("scheme"),
             network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
             resource_url=validate_resource_url(resource.get("url", url), self.api_url),
             resource_description=resource.get("description", "BlockRun AI API call"),
@@ -2027,7 +2142,7 @@ class LLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise _payment_rejected_error(retry_response)
 
         if retry_response.status_code != 200:
             try:
@@ -2146,6 +2261,7 @@ class LLMClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
+            scheme=details.get("scheme"),
             network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
             resource_url=validate_resource_url(resource.get("url", url), self.api_url),
             resource_description=resource.get("description", "BlockRun AI API call"),
@@ -2175,7 +2291,7 @@ class LLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise _payment_rejected_error(retry_response)
 
         if retry_response.status_code != 200:
             try:
@@ -3699,7 +3815,7 @@ class AsyncLLMClient:
         """Async :meth:`LLMClient._sign_chat_payment`: the upto chain reads do not
         block the event loop."""
         payment_required, price_info = _read_payment_required(response)
-        details = extract_payment_details(payment_required)
+        details = extract_payment_details(payment_required, allow_upto=True)
         offer = _upto_offer(self, body, payment_required, details)
         if offer is not None:
             option, kwargs = offer
@@ -3787,7 +3903,7 @@ class AsyncLLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise _payment_rejected_error(retry_response)
 
         if retry_response.status_code != 200:
             try:
@@ -3920,6 +4036,7 @@ class AsyncLLMClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
+            scheme=details.get("scheme"),
             network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
             resource_url=validate_resource_url(resource.get("url", url), self.api_url),
             resource_description=resource.get("description", "BlockRun AI API call"),
@@ -3951,7 +4068,7 @@ class AsyncLLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise _payment_rejected_error(retry_response)
 
         if retry_response.status_code != 200:
             try:
@@ -4054,6 +4171,7 @@ class AsyncLLMClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
+            scheme=details.get("scheme"),
             network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
             resource_url=validate_resource_url(resource.get("url", url), self.api_url),
             resource_description=resource.get("description", "BlockRun AI API call"),
@@ -4083,7 +4201,7 @@ class AsyncLLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise _payment_rejected_error(retry_response)
 
         if retry_response.status_code != 200:
             try:

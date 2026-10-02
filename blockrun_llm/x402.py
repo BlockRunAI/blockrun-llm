@@ -164,6 +164,7 @@ def create_payment_payload(
     extra: dict[str, str] | None = None,
     extensions: dict[str, Any] | None = None,
     asset: str | None = None,
+    scheme: str | None = "exact",
 ) -> str:
     """
     Create a signed x402 v2 payment payload.
@@ -181,10 +182,20 @@ def create_payment_payload(
         max_timeout_seconds: Max timeout for the payment (default: 300)
         extra: The 402's `extra`. Accepted for compatibility; the domain comes from EVM_NETWORKS.
         asset: The 402's `asset`. Checked against the network's USDC; a mismatch raises ValueError.
+        scheme: The scheme of the requirement being paid (``details["scheme"]``).
+            This signs an EIP-3009 transfer, which is the ``exact`` scheme only;
+            anything else (e.g. an ``upto`` ceiling) raises ValueError, since it
+            would authorize that ceiling as a fixed transfer. ``None`` (a v1
+            requirement without a scheme) is ``exact``.
 
     Returns:
         Base64-encoded signed payment payload
     """
+    if scheme is not None and scheme != "exact":
+        raise ValueError(
+            f"x402 scheme {scheme!r} cannot be signed as an EIP-3009 (exact) transfer; "
+            "nothing was signed"
+        )
     # Current timestamp
     now = int(time.time())
     valid_after = now - 600  # 10 minutes before (allows for clock skew)
@@ -284,7 +295,9 @@ def parse_payment_required(header_value: str) -> dict[str, Any]:
         raise ValueError("Failed to parse payment required header: invalid format")
 
 
-def extract_payment_details(payment_required: dict[str, Any]) -> dict[str, Any]:
+def extract_payment_details(
+    payment_required: dict[str, Any], *, allow_upto: bool = False
+) -> dict[str, Any]:
     """
     Extract payment details from parsed payment required response.
 
@@ -292,9 +305,18 @@ def extract_payment_details(payment_required: dict[str, Any]) -> dict[str, Any]:
 
     Args:
         payment_required: Parsed payment required dict
+        allow_upto: Return the ``upto`` requirement when it is the only one
+            offered, instead of raising. Only for a caller that can pay upto
+            (chat, via :mod:`blockrun_llm.x402_upto`) and checks ``scheme``
+            before signing anything exact.
 
     Returns:
         Dict with amount, recipient, network, asset, and extra info
+
+    Raises:
+        ValueError: No options, no amount, or (unless ``allow_upto``) only
+            ``upto`` options, which an EIP-3009 signer must never sign: it
+            would authorize the whole upto ceiling as a fixed transfer.
     """
     accepts = payment_required.get("accepts", [])
     if not accepts:
@@ -306,8 +328,15 @@ def extract_payment_details(payment_required: dict[str, Any]) -> dict[str, Any]:
     # the facilitator rejects. Upto is chosen separately, in x402_upto.
     option = next(
         (o for o in accepts if isinstance(o, dict) and o.get("scheme", "exact") != "upto"),
-        accepts[0],
+        None,
     )
+    if option is None:
+        if not allow_upto:
+            raise ValueError(
+                "This 402 offers only the x402 'upto' scheme, which this endpoint's "
+                "signer cannot pay; nothing was signed"
+            )
+        option = accepts[0]
 
     # Support both v1 (maxAmountRequired) and v2 (amount) formats
     amount = option.get("amount") or option.get("maxAmountRequired")

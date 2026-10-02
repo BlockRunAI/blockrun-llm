@@ -63,6 +63,17 @@ All notable changes to blockrun-llm will be documented in this file.
   async client books a paid chat call the same way the sync one does.
 - `extract_payment_details` picks the first non-`upto` requirement instead of
   blindly taking `accepts[0]`.
+- The upto→exact retry happens only on a definite verification failure
+  (`Payment verification failed`, `PAYMENT_INVALID` / `PAYMENT_UNFUNDED`, or a
+  fresh `payment-required` challenge), never on `PAYMENT_REPLAY` or a body
+  pointing at an earlier paid use (`recoverable` / `poll_url` / `job_id`): that
+  authorization was already served and paid for, and exact would charge twice.
+  A `PAYMENT_REPLAY` raises a `PaymentError` carrying the gateway's message and
+  `poll_url`, not "check your wallet balance". `extract_payment_details` now
+  raises `ValueError` for an upto-only 402 (chat opts in with
+  `allow_upto=True`), and `create_payment_payload` refuses a non-`exact`
+  `scheme`, so no non-chat endpoint signs an upto ceiling as an EIP-3009
+  transfer.
 - `get_balance()` reads its USDC contract and RPC list from `EVM_NETWORKS`.
 
 ## 1.17.1 — 2026-09-30

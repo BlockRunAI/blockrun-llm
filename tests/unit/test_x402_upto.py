@@ -1306,3 +1306,201 @@ class TestExactSpendCapOnSignedAmount:
                 "deepseek/deepseek-chat", MESSAGES
             )
         assert gw.signed == []
+
+
+# ---------------------------------------------------------------------------
+# PAYMENT_REPLAY on the first send is never answered with an exact payment
+# ---------------------------------------------------------------------------
+
+
+def replay(**extra: Any) -> httpx.Response:
+    """The chat route's nonce-claim refusal (blockrun src/lib/payment-nonce.ts)."""
+    return httpx.Response(
+        402,
+        json={
+            "error": "Payment authorization already used",
+            "message": "Sign a fresh payment authorization for each request.",
+            "code": "PAYMENT_REPLAY",
+            "payer": TEST_ACCOUNT.address,
+            **extra,
+        },
+    )
+
+
+def _assert_replay_error(exc: PaymentError) -> None:
+    assert "PAYMENT_REPLAY" in str(exc)
+    assert "Check your wallet balance" not in str(exc)
+    assert exc.status_code == 402
+    assert exc.response is not None and exc.response["code"] == "PAYMENT_REPLAY"
+
+
+class TestReplayNeverPaysExact:
+    """A first-send ``PAYMENT_REPLAY`` means the authorization was already used
+    by an earlier request that was served and paid (e.g. a proxy duplicated
+    the send). Paying exact on top would charge twice."""
+
+    def test_sync(self, monkeypatch):
+        Chain().install(monkeypatch)
+        gw = Gateway(payment_required(), paid=[replay(), ok()])
+        client = sync_client(gw)
+        with pytest.raises(PaymentError) as exc:
+            client.chat_completion("deepseek/deepseek-chat", MESSAGES)
+        _assert_replay_error(exc.value)
+        assert gw.schemes == ["upto"]  # exactly one paid POST
+        assert client._upto_rejected == {}
+
+    def test_async(self, monkeypatch):
+        Chain().install(monkeypatch)
+        gw = Gateway(payment_required(), paid=[replay(), ok()])
+
+        async def run():
+            await async_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+
+        with pytest.raises(PaymentError) as exc:
+            asyncio.run(run())
+        _assert_replay_error(exc.value)
+        assert gw.schemes == ["upto"]
+
+    def test_sync_stream(self, monkeypatch):
+        Chain().install(monkeypatch)
+        gw = Gateway(payment_required(), paid=[replay(), sse_ok()])
+        with pytest.raises(PaymentError) as exc:
+            list(sync_client(gw).chat_completion_stream("deepseek/deepseek-chat", MESSAGES))
+        _assert_replay_error(exc.value)
+        assert gw.schemes == ["upto"]
+
+    def test_async_stream(self, monkeypatch):
+        Chain().install(monkeypatch)
+        gw = Gateway(payment_required(), paid=[replay(), sse_ok()])
+
+        async def run():
+            client = async_client(gw)
+            return [
+                c async for c in client.chat_completion_stream("deepseek/deepseek-chat", MESSAGES)
+            ]
+
+        with pytest.raises(PaymentError) as exc:
+            asyncio.run(run())
+        _assert_replay_error(exc.value)
+        assert gw.schemes == ["upto"]
+
+    def test_recoverable_prior_use_keeps_the_poll_url(self, monkeypatch):
+        Chain().install(monkeypatch)
+        prior = replay(
+            message="This authorization was already used by an earlier request.",
+            job_id="job_1",
+            poll_url="/api/v1/jobs/job_1",
+            recoverable=True,
+        )
+        gw = Gateway(payment_required(), paid=[prior, ok()])
+        with pytest.raises(PaymentError) as exc:
+            sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["upto"]
+        assert "/api/v1/jobs/job_1" in str(exc.value)
+        assert "already used by an earlier request" in str(exc.value)
+        assert exc.value.response["poll_url"] == "/api/v1/jobs/job_1"
+        assert exc.value.response["recoverable"] is True
+
+    def test_prior_use_markers_without_the_code_still_block_exact(self, monkeypatch):
+        Chain().install(monkeypatch)
+        body = {"error": "Payment verification failed", "poll_url": "/api/v1/jobs/j"}
+        gw = Gateway(payment_required(), paid=[httpx.Response(402, json=body), ok()])
+        with pytest.raises(PaymentError):
+            sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["upto"]
+
+    def test_unclassified_402_is_not_a_verify_failure(self, monkeypatch):
+        Chain().install(monkeypatch)
+        gw = Gateway(payment_required(), paid=[httpx.Response(402, json={"error": "?"}), ok()])
+        with pytest.raises(PaymentError):
+            sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["upto"]
+
+    def test_verify_failure_codes_still_fall_back(self, monkeypatch):
+        Chain().install(monkeypatch)
+        unfunded = httpx.Response(
+            402, json={"error": "Payment verification failed", "code": "PAYMENT_UNFUNDED"}
+        )
+        gw = Gateway(payment_required(), paid=[unfunded, ok()])
+        sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["upto", "exact"]
+
+    def test_fresh_challenge_402_still_falls_back(self, monkeypatch):
+        # The gateway answered the upto payment with a new challenge: it was
+        # not accepted at all, so nothing was used.
+        Chain().install(monkeypatch)
+        challenge = httpx.Response(
+            402,
+            json={"error": "Payment Required"},
+            headers={"payment-required": b64(payment_required())},
+        )
+        gw = Gateway(payment_required(), paid=[challenge, ok()])
+        sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["upto", "exact"]
+
+    def test_upto_only_402_refused_by_the_gateway_says_so(self, monkeypatch):
+        Chain().install(monkeypatch)
+        pr = payment_required()
+        pr["accepts"] = [upto_entry()]
+        gw = Gateway(pr, paid=[verify_failed(), ok()])
+        with pytest.raises(PaymentError, match="the gateway refused it") as exc:
+            sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert "Nothing was signed" not in str(exc.value)
+        assert gw.schemes == ["upto"]
+
+
+# ---------------------------------------------------------------------------
+# The shared EIP-3009 signer never signs an upto requirement
+# ---------------------------------------------------------------------------
+
+
+class TestSharedSignerRefusesUpto:
+    def _upto_only(self) -> dict[str, Any]:
+        pr = payment_required()
+        pr["accepts"] = [upto_entry()]
+        return pr
+
+    def test_extract_payment_details_refuses_upto_only(self):
+        from blockrun_llm.x402 import extract_payment_details
+
+        with pytest.raises(ValueError, match="only the x402 'upto' scheme"):
+            extract_payment_details(self._upto_only())
+
+    def test_extract_payment_details_allow_upto_returns_it(self):
+        from blockrun_llm.x402 import extract_payment_details
+
+        details = extract_payment_details(self._upto_only(), allow_upto=True)
+        assert details["scheme"] == "upto"
+        assert details["amount"] == UPTO_CEILING
+
+    def test_extract_payment_details_prefers_exact_over_a_leading_upto(self):
+        from blockrun_llm.x402 import extract_payment_details
+
+        pr = payment_required()
+        pr["accepts"] = [upto_entry(), exact_entry()]
+        assert extract_payment_details(pr)["scheme"] == "exact"
+
+    def test_create_payment_payload_refuses_a_non_exact_scheme(self):
+        from blockrun_llm.x402 import create_payment_payload
+
+        with pytest.raises(ValueError, match="cannot be signed as an EIP-3009"):
+            create_payment_payload(
+                TEST_ACCOUNT, TEST_RECIPIENT, UPTO_CEILING, asset=USDC_BASE, scheme="upto"
+            )
+
+    def test_create_payment_payload_default_and_v1_none_are_exact(self):
+        from blockrun_llm.x402 import create_payment_payload
+
+        for kwargs in ({}, {"scheme": None}, {"scheme": "exact"}):
+            payload = decode(create_payment_payload(TEST_ACCOUNT, TEST_RECIPIENT, "1000", **kwargs))
+            assert payload["accepted"]["scheme"] == "exact"
+
+    def test_image_client_signs_nothing_for_an_upto_only_402(self):
+        from blockrun_llm.image import ImageClient
+
+        gw = Gateway(self._upto_only())
+        client = ImageClient(private_key=TEST_PRIVATE_KEY)
+        client._client = httpx.Client(transport=httpx.MockTransport(gw))
+        with pytest.raises(ValueError, match="only the x402 'upto' scheme"):
+            client.generate("a cat")
+        assert gw.signed == []
