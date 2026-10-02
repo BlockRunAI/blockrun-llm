@@ -395,6 +395,17 @@ class TestStreaming:
         llm, _ = make_llm(FakeClient(chunks=[paid]))
         (response,) = list(llm.stream_chat([ChatMessage(role="user", content="hi")]))
         assert response.additional_kwargs["cost_usd"] == 0.0021
+        assert "cost_is_ceiling" not in response.additional_kwargs
+
+    def test_upto_ceiling_is_labeled_not_reported_as_a_charge(self) -> None:
+        paid = chunk("hi")
+        paid.cost_usd = 0.05  # type: ignore[attr-defined]
+        paid.payment_scheme = "upto"  # type: ignore[attr-defined]
+        paid.cost_is_ceiling = True  # type: ignore[attr-defined]
+        llm, _ = make_llm(FakeClient(chunks=[paid]))
+        (response,) = list(llm.stream_chat([ChatMessage(role="user", content="hi")]))
+        assert response.additional_kwargs["payment_scheme"] == "upto"
+        assert response.additional_kwargs["cost_is_ceiling"] is True
 
     def test_stream_complete(self) -> None:
         llm, _ = make_llm(FakeClient(chunks=[chunk("a"), chunk("b")]))
