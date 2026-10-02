@@ -169,6 +169,24 @@ The 402 from that host names `eip155:5042`, and the SDK signs the EIP-3009 autho
 2. Fund it with USDC on Arc (Arc's native token, shown as the ERC-20 at `0x3600…0000`)
 3. `api_url="https://arc.blockrun.ai/api"` — payments are automatic via x402
 
+## LlamaIndex
+
+[`llama-index-llms-blockrun`](integrations/llama-index-llms-blockrun) makes any
+BlockRun chat model a LlamaIndex LLM — chat, streaming, async, tool calling and
+agents — paying through this SDK on the chain you pick:
+
+```bash
+pip install llama-index-llms-blockrun            # pay on Base
+pip install "llama-index-llms-blockrun[solana]"  # pay on Solana
+```
+
+```python
+from llama_index.llms.blockrun import BlockRun
+
+llm = BlockRun(model="openai/gpt-5.5")                   # USDC on Base
+llm = BlockRun(model="openai/gpt-5.5", chain="solana")   # USDC on Solana
+```
+
 ## Smart Routing (Router Core)
 
 Let the SDK automatically pick the cheapest capable model for each request:

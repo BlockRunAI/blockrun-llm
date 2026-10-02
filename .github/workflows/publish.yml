@@ -6,6 +6,9 @@ on:
 
 jobs:
   build:
+    # llama-index-llms-blockrun-v* releases publish a different package, from
+    # publish-llama-index.yml; this job would only fail their VERSION check.
+    if: ${{ !startsWith(github.event.release.tag_name, 'llama-index-llms-blockrun-v') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

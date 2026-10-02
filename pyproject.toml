@@ -68,6 +68,8 @@ exclude = [
   ".claude/",
   ".ruff_cache/",
   "*.png",
+  # Separate packages, published from their own pyproject.toml.
+  "integrations/",
 ]
 
 [tool.black]
