@@ -899,12 +899,29 @@ class TestSolanaAccountRailVideo:
             client.video("x", model="bytedance/seedance-2.0")
         assert len(posts) == 1
 
-    def test_timeout_says_the_account_was_billed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_timeout_says_credit_is_reserved_until_completion(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(SolanaLLMClient, "VIDEO_POLL_BUDGET_SECONDS", 0.0)
         client = _account_client(_account_handler([], []))
-        with pytest.raises(APIError, match="billed when the job was accepted") as exc:
+        with pytest.raises(APIError, match="reserved when the job was accepted") as exc:
             client.video("x", model="bytedance/seedance-2.0")
         assert exc.value.response["id"] == "V1"
+
+    def test_failed_job_says_the_credit_hold_is_released(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "POST":
+                return httpx.Response(
+                    202,
+                    json={"id": "V1", "poll_url": "/api/v1/videos/generations/V1"},
+                )
+            return httpx.Response(200, json={"status": "failed", "error": "upstream refused"})
+
+        client = _account_client(handler)
+        with pytest.raises(APIError) as exc:
+            client.video("x", model="bytedance/seedance-2.0")
+        assert "released, not charged" in str(exc.value)
+        assert "settled at submit" not in str(exc.value)
 
     async def test_async_accepted_job_is_polled_to_completion(self) -> None:
         posts: list[httpx.Request] = []

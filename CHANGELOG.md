@@ -41,8 +41,9 @@ All notable changes to blockrun-llm will be documented in this file.
     unsigned.
   - A 502/503 on that POST is no longer replayed, because a replay could bill
     the job twice.
-  - A timeout now says the account was billed, and the error carries the
-    `poll_url` so the job can still be fetched.
+  - A timeout now says credit was reserved at accept (charged only on
+    completion), and the error carries the `poll_url` so the job can still be
+    fetched.
   - Both the sync and async clients are fixed.
 - **Solana `music()`, `speech()` and `sound_effect()` with an API key** get
   the same treatment, sync and async: no 5xx replay of the billed submit, and

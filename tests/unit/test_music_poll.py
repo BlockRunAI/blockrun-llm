@@ -183,6 +183,29 @@ def test_music_poll_times_out_without_settlement(monkeypatch: pytest.MonkeyPatch
     assert "no payment was taken" in str(excinfo.value).lower()
 
 
+def test_music_api_key_timeout_says_credit_is_reserved(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The account rail reserves credit at accept and charges on completion, so
+    # "no payment was taken" would mislead: the reservation still stands.
+    monkeypatch.setattr(MusicClient, "MUSIC_POLL_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(MusicClient, "MUSIC_POLL_BUDGET_SECONDS", 0.05)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            return _queued("mus_5")
+        return httpx.Response(
+            202,
+            headers={"content-type": "application/json"},
+            json={"id": "mus_5", "status": "in_progress"},
+        )
+
+    with pytest.raises(APIError) as excinfo:
+        _apikey_client(httpx.MockTransport(handler), monkeypatch).generate("forever")
+    message = str(excinfo.value).lower()
+    assert excinfo.value.status_code == 504
+    assert "credit was reserved" in message
+    assert "no payment was taken" not in message
+
+
 def test_music_fast_path_unchanged() -> None:
     # A track that finishes inline still comes back as the legacy 200 shape.
     def handler(request: httpx.Request) -> httpx.Response:

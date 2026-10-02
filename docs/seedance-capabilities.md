@@ -31,9 +31,10 @@ table in `blockrun-mcp/src/tools/video.ts`, and both should change together.
 | Base wallet (blockrun.ai) | Refused (gateway 400s before quoting) | Yes |
 | Solana wallet (sol.blockrun.ai) | Refused (gateway 400s before quoting) | Refused (gateway 400s before quoting) |
 
-On the account rail the job is billed when it is accepted, not on completion.
-A job that times out in the SDK has already been paid for. It stays claimable
-for about 48h via the `poll_url` in the error.
+On the account rail, credit is reserved when the job is accepted and charged
+once, when the job completes; a failed job releases it. A job that times out in
+the SDK still holds that reservation and is charged if it completes. It stays
+claimable for about 48h via the `poll_url` in the error, with the same API key.
 
 ## Cost of reference clips
 

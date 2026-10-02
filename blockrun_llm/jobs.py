@@ -140,8 +140,13 @@ def poll_until_completed(
     raise APIError(
         (
             f"{label} generation did not complete within {budget_seconds:.0f}s "
-            f"(last status: {last_status}). Settlement only happens on "
-            "completion, so no payment was taken."
+            f"(last status: {last_status}). "
+            + (
+                "Credit was reserved when the job was accepted and is charged only "
+                "on completion; re-poll poll_url with the same API key to fetch it."
+                if api_key
+                else "Settlement only happens on completion, so no payment was taken."
+            )
         ),
         504,
         {"id": job_id, "last_status": last_status},

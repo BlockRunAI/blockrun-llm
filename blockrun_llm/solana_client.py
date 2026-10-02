@@ -2147,8 +2147,9 @@ class SolanaLLMClient:
                 {"response": submit_data},
             )
         poll_url = self._absolute_url(poll_url_rel, job_id)
-        # The account rail bills at accept, so for messages it behaves like a
-        # route that settles at submit, whatever the wallet rail would do.
+        # Neither rail books spend on completion here: a settled-at-submit
+        # wallet route booked it above, and the account rail has no x402 charge
+        # (it reserves credit at accept and settles it when the job completes).
         charged_at_submit = settled_at_submit or account_job
         if settled_at_submit and not account_job:
             # Solana image routes settle at POST (a signed transaction dies with
@@ -2259,7 +2260,11 @@ class SolanaLLMClient:
             if last_status == "failed":
                 raise APIError(
                     f"{label} failed upstream: {poll_data.get('error', 'unknown')}"
-                    + (" (payment was settled at submit)" if charged_at_submit else ""),
+                    + (
+                        " (credit reserved at accept is released, not charged)"
+                        if account_job
+                        else " (payment was settled at submit)" if settled_at_submit else ""
+                    ),
                     poll_resp.status_code,
                     sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
                     retry_after=retry_after_of(poll_resp),
@@ -2305,9 +2310,10 @@ class SolanaLLMClient:
             (
                 (
                     f"{label} did not complete within {budget:.0f}s "
-                    f"(last status: {last_status}). The account was billed when the "
-                    "job was accepted; it stays claimable for ~48h — re-poll "
-                    "poll_url with the same API key to fetch the result."
+                    f"(last status: {last_status}). Credit was reserved when the job "
+                    "was accepted and is charged only when it completes; the job "
+                    "stays claimable for ~48h — re-poll poll_url with the same API "
+                    "key to fetch the result."
                 )
                 if account_job
                 else (
@@ -2476,7 +2482,7 @@ class SolanaLLMClient:
         Solana wallet gateway refuses it — and seedance-2.5
         first-and-last-frame is not served on the Solana wallet gateway yet.
         Both are refused locally, before any request. On the account rail the
-        job is billed when accepted, not on completion.
+        job's credit is reserved when accepted and charged when it completes.
 
         Args:
             input_type: Optional assertion of the seed mode — ``text`` /
@@ -5319,8 +5325,9 @@ class AsyncSolanaLLMClient:
         if not poll_url_rel:
             raise APIError("Slow-path 202 missing poll_url", 202, {"response": submit_data})
         poll_url = self._absolute_url(poll_url_rel, job_id)
-        # The account rail bills at accept, so for messages it behaves like a
-        # route that settles at submit, whatever the wallet rail would do.
+        # Neither rail books spend on completion here: a settled-at-submit
+        # wallet route booked it above, and the account rail has no x402 charge
+        # (it reserves credit at accept and settles it when the job completes).
         charged_at_submit = settled_at_submit or account_job
         if settled_at_submit and not account_job:
             # Solana image routes settle at POST (a signed transaction dies with
@@ -5423,7 +5430,11 @@ class AsyncSolanaLLMClient:
             if last_status == "failed":
                 raise APIError(
                     f"{label} failed upstream: {poll_data.get('error', 'unknown')}"
-                    + (" (payment was settled at submit)" if charged_at_submit else ""),
+                    + (
+                        " (credit reserved at accept is released, not charged)"
+                        if account_job
+                        else " (payment was settled at submit)" if settled_at_submit else ""
+                    ),
                     poll_resp.status_code,
                     sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
                     retry_after=retry_after_of(poll_resp),
@@ -5465,9 +5476,10 @@ class AsyncSolanaLLMClient:
             (
                 (
                     f"{label} did not complete within {budget:.0f}s "
-                    f"(last status: {last_status}). The account was billed when the "
-                    "job was accepted; it stays claimable for ~48h — re-poll "
-                    "poll_url with the same API key to fetch the result."
+                    f"(last status: {last_status}). Credit was reserved when the job "
+                    "was accepted and is charged only when it completes; the job "
+                    "stays claimable for ~48h — re-poll poll_url with the same API "
+                    "key to fetch the result."
                 )
                 if account_job
                 else (
