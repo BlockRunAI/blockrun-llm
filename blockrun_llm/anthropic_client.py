@@ -86,6 +86,7 @@ class _BlockRunX402Transport(httpx.BaseTransport):
             account=self._account,
             recipient=details["recipient"],
             amount=details["amount"],
+            scheme=details.get("scheme"),
             network=details.get("network", "eip155:8453"),
             resource_url=resource.get("url", f"{self._api_url}/v1/messages"),
             resource_description=resource.get("description", "BlockRun AI API call"),

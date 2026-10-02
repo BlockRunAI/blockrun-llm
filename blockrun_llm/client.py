@@ -43,8 +43,9 @@ import json as _json
 import os
 import re
 import sys
-from collections.abc import AsyncIterator, Iterator
-from typing import Any
+import time
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
+from typing import Any, Callable, NamedTuple, NoReturn
 
 import httpx
 from dotenv import load_dotenv
@@ -85,6 +86,7 @@ from .types import (
     SearchResult,
     SmartChatCompletionResponse,
     SmartChatResponse,
+    SpendLimitError,
     chunk_meta,
     chunk_usage_dict,
     retry_after_of,
@@ -104,7 +106,22 @@ from .validation import (
     validate_temperature,
     validate_top_p,
 )
-from .x402 import create_payment_payload, extract_payment_details, parse_payment_required
+from .x402 import (
+    EVM_NETWORKS,
+    create_payment_payload,
+    extract_payment_details,
+    parse_payment_required,
+)
+from .x402_upto import (
+    UptoOption,
+    UptoPayment,
+    atry_upto_payment,
+    find_upto_option,
+    offers_upto,
+    resolve_payment_scheme,
+    settled_upto_amount,
+    try_upto_payment,
+)
 
 # Load environment variables
 load_dotenv()
@@ -336,6 +353,384 @@ def _enforce_spend_limits(client: Any, cost_usd: float, model: str | None = None
     )
 
 
+# ---------------------------------------------------------------------------
+# Chat payment signing: exact (EIP-3009) or upto (Permit2)
+# ---------------------------------------------------------------------------
+
+
+# How long a gateway's rejection of an upto payment keeps this client on exact
+# for that wallet and network. Long enough not to hammer a gateway that has
+# switched upto off, short enough that one transient "verification failed"
+# does not cost the discount for the rest of a long-running process.
+UPTO_REJECTION_TTL_SECONDS = 600.0
+
+
+class _ChatPayment(NamedTuple):
+    """A signed chat payment: the paid retry's headers, and what to book for it."""
+
+    headers: dict[str, str]
+    # exact: the quote, which is what settles. upto: the signed CEILING, which
+    # is the most that can settle — never book it as paid when a settled
+    # amount is known (see _booked_cost).
+    cost_usd: float
+    scheme: str  # "exact" | "upto"
+    amount_micro: int  # the signed amount, micro-USDC
+    # upto only: the network signed on, and how to sign the same 402's exact
+    # requirement instead if the gateway rejects the upto payment.
+    network: str | None = None
+    exact_fallback: Callable[[], _ChatPayment] | None = None
+
+
+def _rejection_body(response: httpx.Response) -> dict[str, Any] | None:
+    """The JSON object body of a refusal, or ``None`` when it has none."""
+    try:
+        body = response.json()
+    except Exception:
+        return None
+    return body if isinstance(body, dict) else None
+
+
+def _rejection_error_text(body: dict[str, Any]) -> str:
+    error = body.get("error")
+    if isinstance(error, dict):
+        error = error.get("message")
+    return error if isinstance(error, str) else ""
+
+
+def _is_payment_rejection(response: httpx.Response) -> bool:
+    """Did the gateway refuse the payment itself (before serving anything)?
+
+    A 402 on the paid request, or a 4xx whose body is the gateway's
+    payment-verification failure (``error: "Payment verification failed"`` /
+    a ``PAYMENT_*`` code).
+
+    This decides how a refusal is RAISED. Whether it may be answered with a
+    second, exact payment is narrower: see :func:`_is_verify_failure`.
+    """
+    status = response.status_code
+    if status == 402:
+        return True
+    if not 400 <= status < 500:
+        return False
+    body = _rejection_body(response)
+    if body is None:
+        return False
+    code = body.get("code")
+    return "payment verification failed" in _rejection_error_text(body).lower() or (
+        isinstance(code, str) and code.upper().startswith("PAYMENT_")
+    )
+
+
+# The codes the gateway's chat route puts on a VERIFY-phase refusal
+# (blockrun src/app/api/v1/chat/completions/route.ts → verifyFailureFields in
+# src/lib/x402.ts). Verify runs before the nonce is claimed and before anything
+# is served or settled, so these prove the signed payment was never used.
+_VERIFY_FAILURE_CODES = frozenset({"PAYMENT_INVALID", "PAYMENT_UNFUNDED"})
+
+
+def _is_payment_replay(response: httpx.Response) -> bool:
+    """Did the gateway refuse the payment because its authorization was
+    ALREADY USED (``code: "PAYMENT_REPLAY"``, or a body pointing at the earlier
+    request's result: ``recoverable`` / ``poll_url`` / ``job_id``)?
+
+    That earlier use was served and paid for: a proxy or load balancer may
+    have duplicated the first send. Nothing about this request may be paid
+    again.
+    """
+    if response.status_code < 400:
+        return False
+    body = _rejection_body(response)
+    if body is None:
+        return False
+    code = body.get("code")
+    if isinstance(code, str) and code.upper() == "PAYMENT_REPLAY":
+        return True
+    return any(body.get(k) for k in ("recoverable", "poll_url", "job_id"))
+
+
+def _is_verify_failure(response: httpx.Response) -> bool:
+    """Is this a DEFINITE pre-use refusal of the payment — one that proves the
+    signed authorization was never consumed?
+
+    An allowlist, not "any 402": the gateway's verify-failure body
+    (``error: "Payment verification failed"`` or a verify-failure ``code``), or
+    a 402 that answers the paid request with a fresh ``payment-required``
+    challenge (the payment was not accepted at all). Never a replay.
+    """
+    if not 400 <= response.status_code < 500 or _is_payment_replay(response):
+        return False
+    body = _rejection_body(response)
+    if body is not None:
+        code = body.get("code")
+        if "payment verification failed" in _rejection_error_text(body).lower():
+            return True
+        if isinstance(code, str) and code.upper() in _VERIFY_FAILURE_CODES:
+            return True
+    return response.status_code == 402 and bool(response.headers.get("payment-required"))
+
+
+def _may_fall_back_to_exact(
+    payment: _ChatPayment, response: httpx.Response, *, replayed: bool
+) -> bool:
+    """May this rejection of an upto payment be answered with an exact one?
+
+    Only when the refused send was the FIRST send of that upto signature, and
+    the refusal is a definite verification failure (:func:`_is_verify_failure`).
+
+    * Upto settles after the call is served, so if a 5xx made us replay the
+      same header, the replay's rejection can mean the first send was served
+      and settled (Permit2 nonce used).
+    * ``PAYMENT_REPLAY`` on the first send means the authorization was already
+      used by an earlier request that completed and was paid for (e.g. a
+      duplicated send).
+
+    Paying exact in either case would charge twice.
+    """
+    return payment.exact_fallback is not None and not replayed and _is_verify_failure(response)
+
+
+def _payment_rejected_error(response: httpx.Response) -> PaymentError:
+    """The error for a paid request whose payment the gateway refused (a 402).
+
+    A ``PAYMENT_REPLAY`` is not a balance problem and must not read as "just
+    retry": a retry signs a fresh authorization, and is charged again for a
+    request that was already paid for. Keep the gateway's message and, when it
+    names one, the earlier result's ``poll_url``.
+    """
+    if not _is_payment_replay(response):
+        return PaymentError("Payment was rejected. Check your wallet balance.")
+    body = _rejection_body(response) or {}
+    gateway_message = body.get("message")
+    poll_url = body.get("poll_url")
+    detail: dict[str, Any] = sanitize_error_response(body)
+    for key in ("poll_url", "job_id", "recoverable"):
+        if body.get(key) is not None:
+            detail[key] = body[key]
+    text = (
+        "The gateway refused this payment as already used (PAYMENT_REPLAY): an earlier "
+        "request with the same authorization was accepted and may have been charged. "
+        "Nothing more was signed. Retrying signs a new authorization and is billed "
+        "again, so check what the earlier request returned first."
+    )
+    if isinstance(poll_url, str) and poll_url:
+        text += f" Its result can be collected at {poll_url}."
+    if isinstance(gateway_message, str) and gateway_message:
+        text += f" Gateway: {gateway_message}"
+    return PaymentError(text, status_code=response.status_code, response=detail)
+
+
+def _exact_after_upto_rejection(client: Any, payment: _ChatPayment) -> _ChatPayment:
+    """The gateway rejected an upto payment: remember that for this wallet and
+    network (for the life of the client), and sign the 402's exact requirement.
+
+    Called at most once per request, and only before any response body was
+    delivered — a 2xx or a stream in progress is never retried.
+    """
+    assert payment.exact_fallback is not None
+    if client.account is not None and payment.network:
+        client._upto_rejected[(client.account.address.lower(), payment.network)] = time.monotonic()
+    sys.stderr.write(
+        f"[blockrun_llm] upto payment rejected on {payment.network}; retrying once "
+        f"with exact, and using exact on that network for {UPTO_REJECTION_TTL_SECONDS:.0f}s\n"
+    )
+    return payment.exact_fallback()
+
+
+def _payment_headers(payment_payload: str) -> dict[str, str]:
+    return {
+        "Content-Type": "application/json",
+        "User-Agent": _get_user_agent(),
+        "PAYMENT-SIGNATURE": payment_payload,
+    }
+
+
+def _read_payment_required(response: httpx.Response) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``(payment_required, price_info)`` from a 402: the ``payment-required``
+    header, else an ``x402`` body (whose ``price`` then rides along)."""
+    payment_header: Any = response.headers.get("payment-required")
+    price_info: dict[str, Any] = {}
+    if not payment_header:
+        try:
+            resp_body = response.json()
+            if "x402" in resp_body:
+                payment_header = resp_body
+            price_info = resp_body.get("price", {})
+        except Exception:
+            pass
+
+    if not payment_header:
+        raise PaymentError("402 response but no payment requirements found")
+
+    if isinstance(payment_header, str):
+        return parse_payment_required(payment_header), price_info
+    return payment_header, price_info
+
+
+def _within_spend_limits(client: Any, body: dict[str, Any]) -> Callable[[float], bool]:
+    """A predicate: would signing this much pass the client's spend limits?"""
+    model = body.get("model") if isinstance(body, dict) else None
+
+    def ok(cost_usd: float) -> bool:
+        try:
+            _enforce_spend_limits(client, cost_usd, model)
+        except SpendLimitError:
+            return False
+        return True
+
+    return ok
+
+
+def _upto_offer(
+    client: Any,
+    body: dict[str, Any],
+    payment_required: dict[str, Any],
+    details: dict[str, Any],
+) -> tuple[UptoOption, dict[str, Any]] | None:
+    """The upto offer worth trying, with ``try_upto_payment``'s keyword
+    arguments — or ``None``, meaning sign exact exactly as before."""
+    if getattr(client, "_payment_scheme", "auto") != "auto" or client.account is None:
+        return None
+    option = find_upto_option(payment_required)
+    if option is None:
+        return None
+    rejected_at = getattr(client, "_upto_rejected", {}).get(
+        (client.account.address.lower(), option.network)
+    )
+    if rejected_at is not None and time.monotonic() - rejected_at < UPTO_REJECTION_TTL_SECONDS:
+        return None  # this gateway recently refused upto from this wallet
+    resource = details.get("resource") or {}
+    try:
+        resource_url = validate_resource_url(
+            resource.get("url", f"{client.api_url}/v1/chat/completions"), client.api_url
+        )
+    except Exception:
+        return None  # the exact path raises the same error, unchanged
+    return option, {
+        "resource_url": resource_url,
+        "resource_description": resource.get("description", "BlockRun AI API call"),
+        "within_limits": _within_spend_limits(client, body),
+    }
+
+
+def _upto_chat_payment(
+    client: Any,
+    body: dict[str, Any],
+    payment_required: dict[str, Any],
+    price_info: dict[str, Any],
+    details: dict[str, Any],
+    option: UptoOption,
+    signed: UptoPayment,
+) -> _ChatPayment:
+    _warn_if_clamped(body, (details.get("resource") or {}).get("description"))
+    return _ChatPayment(
+        _payment_headers(signed.header),
+        signed.ceiling_usd,
+        "upto",
+        signed.amount,
+        network=option.network,
+        exact_fallback=lambda: _exact_chat_payment(
+            client, body, payment_required, price_info, details, upto_refused=True
+        ),
+    )
+
+
+def _exact_chat_payment(
+    client: Any,
+    body: dict[str, Any],
+    payment_required: dict[str, Any],
+    price_info: dict[str, Any],
+    details: dict[str, Any],
+    *,
+    upto_refused: bool = False,
+) -> _ChatPayment:
+    """Sign the exact (EIP-3009) requirement — the path every release has used.
+
+    ``upto_refused``: called as the fallback after the gateway refused an upto
+    payment for this same 402 (only the wording of the upto-only refusal).
+    """
+    if details.get("scheme") == "upto":
+        # Chat asks extract_payment_details for the upto entry when no exact
+        # one exists (allow_upto=True). Signing an upto requirement as EIP-3009
+        # would authorize the whole upto CEILING as a fixed transfer, so refuse
+        # instead — with a message that says why upto did not happen.
+        if upto_refused:
+            raise PaymentError(
+                "This 402 offers only the x402 'upto' scheme. An upto payment was "
+                "signed and sent, and the gateway refused it before serving the "
+                "request; there is no exact option to fall back to, so no exact "
+                "payment was signed."
+            )
+        raise PaymentError(
+            "This 402 offers only the x402 'upto' scheme, and upto could not be used "
+            "here (payment_scheme='exact', no Permit2 allowance and no gas "
+            "sponsoring, insufficient balance, a ceiling over a spend limit, or the "
+            "gateway refused an upto payment from this wallet in the last "
+            f"{UPTO_REJECTION_TTL_SECONDS / 60:.0f} minutes). Nothing was signed."
+        )
+    try:
+        signed_usd = int(str(details.get("amount", 0))) / 1e6
+    except ValueError:
+        signed_usd = 0.0
+    # A gateway offering upto quotes its `price` at the upto CEILING, which is
+    # not what exact signs; book exact on its own amount then.
+    cost_usd = (
+        float(price_info.get("amount", 0))
+        if price_info and not offers_upto(payment_required)
+        else signed_usd
+    )
+    # Before signing, and on what is SIGNED: the body's `price` is the base
+    # price without the transaction fee, so capping on it would let a call
+    # through that signs slightly more than the limit. A refused quote is
+    # never sent, so nothing settles.
+    _enforce_spend_limits(
+        client, max(cost_usd, signed_usd), body.get("model") if isinstance(body, dict) else None
+    )
+
+    # SECURITY: Signing happens locally - only the signature is sent to server
+    resource = details.get("resource") or {}
+    _warn_if_clamped(body, resource.get("description"))
+    # Pass through extensions from server (for Bazaar discovery)
+    extensions = payment_required.get("extensions", {})
+    payment_payload = create_payment_payload(
+        account=client.account,
+        recipient=details["recipient"],
+        amount=details["amount"],
+        scheme=details.get("scheme"),
+        network=details.get("network", "eip155:84532" if client.is_testnet() else "eip155:8453"),
+        resource_url=validate_resource_url(
+            resource.get("url", f"{client.api_url}/v1/chat/completions"), client.api_url
+        ),
+        resource_description=resource.get("description", "BlockRun AI API call"),
+        max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
+        extra=details.get("extra"),
+        extensions=extensions,
+        asset=details.get("asset"),
+    )
+    try:
+        amount_micro = int(str(details.get("amount", 0)))
+    except ValueError:
+        amount_micro = 0
+    return _ChatPayment(_payment_headers(payment_payload), cost_usd, "exact", amount_micro)
+
+
+def _booked_cost(
+    payment: _ChatPayment, settlement: dict[str, Any] | None
+) -> tuple[float, str | None]:
+    """What to record as spent for a paid call, and on what basis.
+
+    exact → the quote, basis ``None`` (records unchanged from earlier releases).
+    upto  → the settled amount when ``PAYMENT-RESPONSE`` reports one
+    (``"upto_settled"``); otherwise the signed ceiling, labeled
+    ``"upto_ceiling"`` — an upper bound, not a confirmed charge.
+    """
+    if payment.scheme != "upto":
+        return payment.cost_usd, None
+    settled = settled_upto_amount(settlement, payment.amount_micro)
+    if settled is not None:
+        return settled / 1e6, "upto_settled"
+    return payment.cost_usd, "upto_ceiling"
+
+
 def _detect_network(api_url: str) -> str:
     """Map an API URL to the canonical network label used in billing
     records. Returns ``base-mainnet`` / ``base-sepolia`` / ``solana-mainnet``
@@ -396,6 +791,7 @@ class LLMClient:
         transaction_log: bool | str | os.PathLike[str] | None = None,
         max_cost_per_call: float | None = None,
         max_session_cost: float | None = None,
+        payment_scheme: str | None = None,
     ):
         """
         Initialize the BlockRun LLM client.
@@ -415,6 +811,17 @@ class LLMClient:
                            ``transactions.jsonl`` (model, input, output, cost_usd,
                            tx_hash, on-chain amount, payer, payee, network) and
                            writes a pretty-printed JSON file next to it.
+            payment_scheme: ``"auto"`` (default) or ``"exact"``. With ``"auto"``, a chat
+                           call whose 402 also offers x402 ``upto`` pays with a Permit2
+                           ceiling and is settled at the ACTUAL cost after the call
+                           (prompt-cache discounts included) — but only when the wallet
+                           already has a Permit2 allowance or the gateway sponsors the
+                           approval gaslessly; otherwise, or on any error, it signs
+                           ``exact`` as before. The actual cost can be MORE than the
+                           exact quote, which prices output at a tenth of
+                           ``max_tokens``; it is never more than the ceiling (the full
+                           ``max_tokens``). ``"exact"`` never signs upto and pays the
+                           fixed quote. ``None`` honors ``BLOCKRUN_PAYMENT_SCHEME``.
 
         Raises:
             ValueError: If no wallet is configured. For agent use, call setup_agent_wallet() first.
@@ -482,6 +889,9 @@ class LLMClient:
 
         # Session spending tracking
         self._session_total_usd: float = 0.0
+        # The part of _session_total_usd that is an upto CEILING the gateway
+        # did not report a settled amount for: an upper bound, not a charge.
+        self._session_ceiling_usd: float = 0.0
         # Opt-in spend limits. None (the default) means unlimited, which is the
         # behavior every release before 1.9.0 had: every 402 quote was signed
         # automatically with nothing compared against anything.
@@ -489,6 +899,12 @@ class LLMClient:
             max_cost_per_call, "BLOCKRUN_MAX_COST_PER_CALL"
         )
         self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
+        # x402 scheme preference (see x402_upto). Resolved eagerly so a typo in
+        # the argument or BLOCKRUN_PAYMENT_SCHEME fails at construction.
+        self._payment_scheme = resolve_payment_scheme(payment_scheme)
+        # (wallet, network) -> monotonic time the gateway last rejected an upto
+        # payment: that pair goes straight to exact for UPTO_REJECTION_TTL_SECONDS.
+        self._upto_rejected: dict[tuple[str, str], float] = {}
         self._session_calls: int = 0
         self._last_call_cost: float = 0.0
 
@@ -719,7 +1135,10 @@ class LLMClient:
         Get current session spending.
 
         Returns:
-            Dict with total_usd and calls count
+            Dict with ``total_usd``, ``calls`` and ``ceiling_usd``. ``ceiling_usd``
+            is the part of ``total_usd`` booked at an x402 ``upto`` CEILING because
+            the gateway reported no settled amount: an upper bound on what those
+            calls cost, not a confirmed charge (0.0 when every call paid ``exact``).
 
         Example:
             spending = client.get_spending()
@@ -728,7 +1147,20 @@ class LLMClient:
         return {
             "total_usd": self._session_total_usd,
             "calls": self._session_calls,
+            "ceiling_usd": self._session_ceiling_usd,
         }
+
+    def _book_paid_call(
+        self, payment: _ChatPayment, settlement: dict[str, Any] | None
+    ) -> tuple[float, str | None]:
+        """Record a paid call in the session totals; returns ``_booked_cost``'s pair."""
+        cost_usd, basis = _booked_cost(payment, settlement)
+        self._session_calls += 1
+        self._session_total_usd += cost_usd
+        if basis == "upto_ceiling":
+            self._session_ceiling_usd += cost_usd
+        self._last_call_cost = cost_usd
+        return cost_usd, basis
 
     def chat(
         self,
@@ -1120,8 +1552,7 @@ class LLMClient:
         timeout = self.search_timeout if is_search else self.timeout
 
         # ----- Phase 1: probe (no payment header) -----
-        payment_headers: dict[str, str] | None = None
-        cost_usd = 0.0
+        payment: _ChatPayment | None = None
 
         backoffs = self._STREAM_5XX_BACKOFFS
         for attempt in range(len(backoffs) + 1):
@@ -1137,7 +1568,7 @@ class LLMClient:
                     # Account rail: a 402 is the account being out of credit, not a
                     # challenge to sign. Nothing here can sign, so say so plainly.
                     raise_for_api_key_402(resp1, self.api_key)
-                    payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
+                    payment = self._sign_chat_payment(body, resp1)
                     break  # advance to phase 2
                 if resp1.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
                     import time
@@ -1155,9 +1586,11 @@ class LLMClient:
         # Signing above was settlement. A timeout here has already been paid
         # for, so tag it: the stream fallback chain must not settle again on
         # the next model just because zero chunks arrived.
-        assert payment_headers is not None  # break implies signing succeeded
+        assert payment is not None  # break implies signing succeeded
         try:
-            yield from self._stream_paid_phase(url, body, payment_headers, cost_usd, timeout)
+            yield from self._stream_paid_phase(
+                url, body, payment.headers, payment.cost_usd, timeout, payment=payment
+            )
         except (httpx.HTTPError, APIError) as exc:
             _mark_settled(exc)
             raise
@@ -1169,33 +1602,76 @@ class LLMClient:
         payment_headers: dict[str, str],
         cost_usd: float,
         timeout: float | None,
+        *,
+        payment: _ChatPayment | None = None,
+        rejected: httpx.Response | None = None,
     ) -> Iterator[ChatCompletionChunk]:
-        """Phase 2 of :meth:`_stream_with_payment`: the paid, already-settled leg."""
+        """Phase 2 of :meth:`_stream_with_payment`: the paid, already-settled leg.
+
+        ``rejected`` is set on the one exact retry after the gateway refused an
+        upto payment: if exact is refused too, that original refusal surfaces.
+        """
+        if payment is None:
+            payment = _ChatPayment(payment_headers, cost_usd, "exact", 0)
+        upto_refusal: httpx.Response | None = None
         backoffs = self._STREAM_5XX_BACKOFFS
         for attempt in range(len(backoffs) + 1):
             with self._client.stream(
-                "POST", url, json=body, headers=payment_headers, timeout=timeout
+                "POST", url, json=body, headers=payment.headers, timeout=timeout
             ) as resp2:
                 if resp2.status_code == 200:
+                    basis: str | None = None
                     if cost_usd > 0:
-                        self._session_calls += 1
-                        self._session_total_usd += cost_usd
-                        self._last_call_cost = cost_usd
-                        self._capture_settlement(resp2)
-                    yield from self._iter_and_archive(resp2, body, cost_usd, streaming=True)
+                        # A stream's PAYMENT-RESPONSE arrives before the upto
+                        # settle, so an upto stream books its ceiling, labeled,
+                        # whatever amount that header carries.
+                        settlement = self._capture_settlement(resp2)
+                        cost_usd, basis = self._book_paid_call(
+                            payment, None if payment.scheme == "upto" else settlement
+                        )
+                    yield from self._iter_and_archive(
+                        resp2,
+                        body,
+                        cost_usd,
+                        streaming=True,
+                        payment_scheme=payment.scheme,
+                        cost_basis=basis,
+                    )
                     return
                 resp2.read()
-                if resp2.status_code == 402:
-                    # Account rail: a 402 is the account being out of credit, not a
-                    # challenge to sign. Nothing here can sign, so say so plainly.
-                    raise_for_api_key_402(resp2, self.api_key)
-                    raise PaymentError("Payment was rejected. Check your wallet balance.")
+                if _is_payment_rejection(resp2):
+                    if _may_fall_back_to_exact(payment, resp2, replayed=attempt > 0):
+                        upto_refusal = resp2  # nothing streamed yet: retry exact
+                        break
+                    self._raise_payment_rejection(rejected if rejected is not None else resp2)
                 if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
                     import time
 
                     time.sleep(backoffs[attempt])
                     continue
                 self._raise_stream_error(resp2, after_payment=True)
+
+        if upto_refusal is not None:
+            exact = _exact_after_upto_rejection(self, payment)
+            yield from self._stream_paid_phase(
+                url,
+                body,
+                exact.headers,
+                exact.cost_usd,
+                timeout,
+                payment=exact,
+                rejected=upto_refusal,
+            )
+
+    def _raise_payment_rejection(self, response: httpx.Response) -> NoReturn:
+        """Raise for a paid request the gateway refused to accept payment for."""
+        if response.status_code == 402:
+            # Account rail: a 402 is the account being out of credit, not a
+            # challenge to sign. Nothing here can sign, so say so plainly.
+            raise_for_api_key_402(response, self.api_key)
+            raise _payment_rejected_error(response)
+        self._raise_stream_error(response, after_payment=True)
+        raise AssertionError("unreachable: _raise_stream_error always raises")
 
     def _iter_and_archive(
         self,
@@ -1204,6 +1680,8 @@ class LLMClient:
         cost_usd: float,
         *,
         streaming: bool = True,
+        payment_scheme: str | None = None,
+        cost_basis: str | None = None,
     ) -> Iterator[ChatCompletionChunk]:
         """Yield each SSE chunk, accumulate content for the local archive,
         then once ``data: [DONE]`` arrives ``save_to_cache`` the assembled
@@ -1242,6 +1720,11 @@ class LLMClient:
             # (e.g. the blockrun-litellm adapter) read it off the chunk to
             # report the real wallet deduction instead of a list-price estimate.
             chunk.cost_usd = cost_usd
+            if payment_scheme is not None:
+                # upto: cost_usd is the signed ceiling unless the gateway
+                # reported the settled amount — say which.
+                setattr(chunk, "payment_scheme", payment_scheme)  # noqa: B010 (extra field)
+                setattr(chunk, "cost_is_ceiling", cost_basis == "upto_ceiling")  # noqa: B010
             yield chunk
 
         # Stream complete (saw [DONE]). Free models have cost_usd == 0; only
@@ -1274,12 +1757,15 @@ class LLMClient:
                     body,
                     response_data,
                     cost_usd=cost_usd,
+                    cost_basis=cost_basis,
                     **self._billing_meta(),
                 )
             except Exception:
                 # Logging never breaks the call.
                 pass
-            self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
+            self._log_transaction(
+                "/v1/chat/completions", body, response_data, cost_usd, cost_basis=cost_basis
+            )
 
     @staticmethod
     def _iter_sse_chunks(response: httpx.Response) -> Iterator[ChatCompletionChunk]:
@@ -1307,6 +1793,28 @@ class LLMClient:
                 # model construction to avoid silently dropping output.
                 yield ChatCompletionChunk.model_construct(**chunk_dict)
 
+    def _post_paid(
+        self,
+        url: str,
+        body: dict[str, Any],
+        headers: dict[str, str],
+        timeout: float | None,
+    ) -> tuple[httpx.Response, bool]:
+        """The paid POST, with one automatic retry on 502/503.
+
+        Returns ``(response, replayed)``. ``replayed`` means the same signed
+        payment went out twice, so a rejection of the second send may only be
+        the first one having settled (nonce used): see _may_fall_back_to_exact.
+        """
+        response = self._client.post(url, json=body, headers=headers, timeout=timeout)
+        if response.status_code in (502, 503):
+            import time
+
+            time.sleep(1)
+            response = self._client.post(url, json=body, headers=headers, timeout=timeout)
+            return response, True
+        return response, False
+
     def _sign_payment_from_response(
         self,
         body: dict[str, Any],
@@ -1316,65 +1824,31 @@ class LLMClient:
         Extract a 402's payment requirements, sign locally, and return
         ``(headers_with_PAYMENT_SIGNATURE, cost_usd)``.
 
-        Mirrors the inline signing logic in :meth:`_handle_payment_and_retry`
-        but returns the signed headers instead of doing the retry POST —
-        which lets the streaming path open an SSE connection for the retry.
+        Kept for compatibility; see :meth:`_sign_chat_payment`, which also says
+        which scheme was signed (for ``upto``, ``cost_usd`` is the ceiling).
         """
-        payment_header = response.headers.get("payment-required")
-        price_info: dict[str, Any] = {}
-        if not payment_header:
-            try:
-                resp_body = response.json()
-                if "x402" in resp_body:
-                    payment_header = resp_body
-                price_info = resp_body.get("price", {})
-            except Exception:
-                pass
+        payment = self._sign_chat_payment(body, response)
+        return payment.headers, payment.cost_usd
 
-        if not payment_header:
-            raise PaymentError("402 response but no payment requirements found")
+    def _sign_chat_payment(self, body: dict[str, Any], response: httpx.Response) -> _ChatPayment:
+        """Sign a chat 402: ``upto`` when the policy in :mod:`blockrun_llm.x402_upto`
+        allows it, else ``exact`` exactly as before. Returns the paid retry's
+        headers and what to book.
 
-        if isinstance(payment_header, str):
-            payment_required = parse_payment_required(payment_header)
-        else:
-            payment_required = payment_header
-
-        details = extract_payment_details(payment_required)
-
-        cost_usd = (
-            float(price_info.get("amount", 0))
-            if price_info
-            else float(details.get("amount", 0)) / 1e6
-        )
-        # Before signing: a refused quote is never sent, so nothing settles.
-        _enforce_spend_limits(self, cost_usd, body.get("model") if isinstance(body, dict) else None)
-
-        resource = details.get("resource") or {}
-        _warn_if_clamped(body, resource.get("description"))
-        extensions = payment_required.get("extensions", {})
-        payment_payload = create_payment_payload(
-            account=self.account,
-            recipient=details["recipient"],
-            amount=details["amount"],
-            network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
-            resource_url=validate_resource_url(
-                resource.get("url", f"{self.api_url}/v1/chat/completions"), self.api_url
-            ),
-            resource_description=resource.get("description", "BlockRun AI API call"),
-            max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
-            extra=details.get("extra"),
-            extensions=extensions,
-            asset=details.get("asset"),
-        )
-
-        return (
-            {
-                "Content-Type": "application/json",
-                "User-Agent": _get_user_agent(),
-                "PAYMENT-SIGNATURE": payment_payload,
-            },
-            cost_usd,
-        )
+        SECURITY: Payment signing happens entirely on your machine.
+        Only the signature is sent - your private key never leaves.
+        """
+        payment_required, price_info = _read_payment_required(response)
+        details = extract_payment_details(payment_required, allow_upto=True)
+        offer = _upto_offer(self, body, payment_required, details)
+        if offer is not None:
+            option, kwargs = offer
+            signed = try_upto_payment(self.account, option, payment_required, **kwargs)
+            if signed is not None:
+                return _upto_chat_payment(
+                    self, body, payment_required, price_info, details, option, signed
+                )
+        return _exact_chat_payment(self, body, payment_required, price_info, details)
 
     @staticmethod
     def _raise_stream_error(response: httpx.Response, *, after_payment: bool) -> None:
@@ -1458,91 +1932,30 @@ class LLMClient:
         SECURITY: Payment signing happens entirely on your machine.
         Only the signature is sent - your private key never leaves.
         """
-        # Get payment required header (x402 library uses lowercase)
-        payment_header = response.headers.get("payment-required")
-        price_info = {}
-        if not payment_header:
-            # Try to get from response body
-            try:
-                resp_body = response.json()
-                if "x402" in resp_body:
-                    payment_header = resp_body
-                # Extract price info for spending report
-                price_info = resp_body.get("price", {})
-            except Exception:
-                pass
-
-        if not payment_header:
-            raise PaymentError("402 response but no payment requirements found")
-
-        # Parse payment requirements
-        if isinstance(payment_header, str):
-            payment_required = parse_payment_required(payment_header)
-        else:
-            payment_required = payment_header
-
-        # Extract payment details
-        details = extract_payment_details(payment_required)
-
-        # Get the cost being paid
-        cost_usd = (
-            float(price_info.get("amount", 0))
-            if price_info
-            else float(details.get("amount", 0)) / 1e6
-        )
-        # Before signing: a refused quote is never sent, so nothing settles.
-        _enforce_spend_limits(self, cost_usd, body.get("model") if isinstance(body, dict) else None)
-
-        # Create signed payment payload (v2 format)
-        # SECURITY: Signing happens locally - only the signature is sent to server
-        resource = details.get("resource") or {}
-        _warn_if_clamped(body, resource.get("description"))
-        # Pass through extensions from server (for Bazaar discovery)
-        extensions = payment_required.get("extensions", {})
-        payment_payload = create_payment_payload(
-            account=self.account,
-            recipient=details["recipient"],
-            amount=details["amount"],
-            network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
-            resource_url=validate_resource_url(
-                resource.get("url", f"{self.api_url}/v1/chat/completions"), self.api_url
-            ),
-            resource_description=resource.get("description", "BlockRun AI API call"),
-            max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
-            extra=details.get("extra"),
-            extensions=extensions,
-            asset=details.get("asset"),
-        )
+        payment = self._sign_chat_payment(body, response)
 
         # Retry with payment (x402 library expects PAYMENT-SIGNATURE header)
         # Use longer timeout for Live Search requests
         is_search_request = "search_parameters" in body or body.get("search") is True
         request_timeout = self.search_timeout if is_search_request else self.timeout
 
-        payment_headers = {
-            "Content-Type": "application/json",
-            "User-Agent": _get_user_agent(),
-            "PAYMENT-SIGNATURE": payment_payload,
-        }
-
-        # Retry with payment, with one automatic retry on 502/503
-        retry_response = self._client.post(
-            url, json=body, headers=payment_headers, timeout=request_timeout
-        )
-        if retry_response.status_code in (502, 503):
-            import time
-
-            time.sleep(1)
-            retry_response = self._client.post(
-                url, json=body, headers=payment_headers, timeout=request_timeout
-            )
+        retry_response, replayed = self._post_paid(url, body, payment.headers, request_timeout)
+        if _may_fall_back_to_exact(payment, retry_response, replayed=replayed):
+            # The gateway refused the upto payment before serving anything:
+            # one retry with the same 402's exact requirement. If exact is
+            # refused too, the original refusal is what surfaces.
+            rejected = retry_response
+            payment = _exact_after_upto_rejection(self, payment)
+            retry_response, _ = self._post_paid(url, body, payment.headers, request_timeout)
+            if _is_payment_rejection(retry_response):
+                retry_response = rejected
 
         # Check for errors
         if retry_response.status_code == 402:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise _payment_rejected_error(retry_response)
 
         if retry_response.status_code != 200:
             try:
@@ -1560,11 +1973,10 @@ class LLMClient:
         response_data = retry_response.json()
         chat_response = ChatResponse(**response_data)
 
-        # Update session spending
-        self._session_calls += 1
-        self._session_total_usd += cost_usd
-        self._last_call_cost = cost_usd
+        # Update session spending. For upto this is the settled amount when
+        # PAYMENT-RESPONSE reports one, else the signed ceiling, labeled.
         settlement = self._capture_settlement(retry_response)
+        cost_usd, cost_basis = self._book_paid_call(payment, settlement)
 
         # Attach the real x402 charge (and on-chain settlement) to THIS response
         # object so callers get a per-call, race-free cost. Use the value
@@ -1572,6 +1984,8 @@ class LLMClient:
         # (shared state a concurrent call on the same client could overwrite),
         # and a local cost_usd rather than self._last_call_cost which goes stale.
         chat_response.cost_usd = cost_usd
+        chat_response.payment_scheme = payment.scheme
+        chat_response.cost_is_ceiling = cost_basis == "upto_ceiling"
         if settlement:
             chat_response.settlement = dict(settlement)
 
@@ -1583,9 +1997,12 @@ class LLMClient:
             body,
             response_data,
             cost_usd=cost_usd,
+            cost_basis=cost_basis,
             **self._billing_meta(),
         )
-        self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
+        self._log_transaction(
+            "/v1/chat/completions", body, response_data, cost_usd, cost_basis=cost_basis
+        )
 
         return chat_response
 
@@ -1693,6 +2110,7 @@ class LLMClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
+            scheme=details.get("scheme"),
             network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
             resource_url=validate_resource_url(resource.get("url", url), self.api_url),
             resource_description=resource.get("description", "BlockRun AI API call"),
@@ -1724,7 +2142,7 @@ class LLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise _payment_rejected_error(retry_response)
 
         if retry_response.status_code != 200:
             try:
@@ -1843,6 +2261,7 @@ class LLMClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
+            scheme=details.get("scheme"),
             network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
             resource_url=validate_resource_url(resource.get("url", url), self.api_url),
             resource_description=resource.get("description", "BlockRun AI API call"),
@@ -1872,7 +2291,7 @@ class LLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise _payment_rejected_error(retry_response)
 
         if retry_response.status_code != 200:
             try:
@@ -2518,6 +2937,8 @@ class LLMClient:
         body: dict[str, Any],
         response: Any,
         cost_usd: float,
+        *,
+        cost_basis: str | None = None,
     ) -> None:
         """Append one row to the project-local transaction log, if enabled.
 
@@ -2542,6 +2963,7 @@ class LLMClient:
                 network=_detect_network(self.api_url),
                 client_kind=type(self).__name__,
                 settlement=settlement,
+                cost_basis=cost_basis,
             )
         except Exception:
             pass
@@ -2569,19 +2991,11 @@ class LLMClient:
         # USDC contracts
         # Mainnet: Base
         # Testnet: Base Sepolia
-        if self.is_testnet():
-            usdc_contract = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
-            rpcs = [
-                "https://sepolia.base.org",
-                "https://base-sepolia-rpc.publicnode.com",
-            ]
-        else:
-            usdc_contract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-            rpcs = [
-                "https://base.publicnode.com",
-                "https://mainnet.base.org",
-                "https://base.meowrpc.com",
-            ]
+        # Contract + public RPCs from the shared chain table (x402.EVM_NETWORKS),
+        # which the upto scheme's allowance reads use too.
+        net = EVM_NETWORKS["eip155:84532" if self.is_testnet() else "eip155:8453"]
+        usdc_contract = net["usdc"]
+        rpcs = list(net["rpcs"])
 
         # balanceOf(address) function selector
         selector = "0x70a08231"
@@ -2649,6 +3063,7 @@ class AsyncLLMClient:
         transaction_log: bool | str | os.PathLike[str] | None = None,
         max_cost_per_call: float | None = None,
         max_session_cost: float | None = None,
+        payment_scheme: str | None = None,
     ):
         """
         Initialize the async BlockRun LLM client.
@@ -2663,6 +3078,17 @@ class AsyncLLMClient:
                            ``./log/``; pass a string/Path for a custom dir; ``None``
                            honors the ``BLOCKRUN_TX_LOG`` env var. See ``LLMClient``
                            for the full record schema.
+            payment_scheme: ``"auto"`` (default) or ``"exact"``. With ``"auto"``, a chat
+                           call whose 402 also offers x402 ``upto`` pays with a Permit2
+                           ceiling and is settled at the ACTUAL cost after the call
+                           (prompt-cache discounts included) — but only when the wallet
+                           already has a Permit2 allowance or the gateway sponsors the
+                           approval gaslessly; otherwise, or on any error, it signs
+                           ``exact`` as before. The actual cost can be MORE than the
+                           exact quote, which prices output at a tenth of
+                           ``max_tokens``; it is never more than the ceiling (the full
+                           ``max_tokens``). ``"exact"`` never signs upto and pays the
+                           fixed quote. ``None`` honors ``BLOCKRUN_PAYMENT_SCHEME``.
 
         Raises:
             ValueError: If no wallet is configured
@@ -2734,6 +3160,12 @@ class AsyncLLMClient:
             max_cost_per_call, "BLOCKRUN_MAX_COST_PER_CALL"
         )
         self._max_session_cost = resolve_spend_limit(max_session_cost, "BLOCKRUN_MAX_SESSION_COST")
+        # x402 scheme preference (see x402_upto). Resolved eagerly so a typo in
+        # the argument or BLOCKRUN_PAYMENT_SCHEME fails at construction.
+        self._payment_scheme = resolve_payment_scheme(payment_scheme)
+        # (wallet, network) -> monotonic time the gateway last rejected an upto
+        # payment: that pair goes straight to exact for UPTO_REJECTION_TTL_SECONDS.
+        self._upto_rejected: dict[tuple[str, str], float] = {}
 
         log_dir = _resolve_log_dir(transaction_log)
         self._tx_logger: TransactionLogger | None = (
@@ -3126,8 +3558,7 @@ class AsyncLLMClient:
         statuses_5xx = LLMClient._STREAM_5XX_STATUSES
 
         # ----- Phase 1: probe (no payment header) -----
-        payment_headers: dict[str, str] | None = None
-        cost_usd = 0.0
+        payment: _ChatPayment | None = None
 
         for attempt in range(len(backoffs) + 1):
             async with self._client.stream(
@@ -3142,7 +3573,7 @@ class AsyncLLMClient:
                     # Account rail: a 402 is the account being out of credit, not a
                     # challenge to sign. Nothing here can sign, so say so plainly.
                     raise_for_api_key_402(resp1, self.api_key)
-                    payment_headers, cost_usd = self._sign_payment_from_response(body, resp1)
+                    payment = await self._asign_chat_payment(body, resp1)
                     break
                 if resp1.status_code in statuses_5xx and attempt < len(backoffs):
                     import asyncio
@@ -3155,13 +3586,15 @@ class AsyncLLMClient:
 
         # ----- Phase 2: stream with PAYMENT-SIGNATURE -----
         # Settled from here on; see the sync path.
-        assert payment_headers is not None
+        assert payment is not None
         # `async for` does NOT close the inner async generator when this one is
         # closed or an exception leaves the loop, so the paid `async with
         # self._client.stream(...)` inside it would stay suspended and hold the
         # connection until GC finalization. The sync path gets this for free:
         # `yield from` propagates close() into the subgenerator. Close it here.
-        paid = self._astream_paid_phase(url, body, payment_headers, cost_usd, timeout)
+        paid = self._astream_paid_phase(
+            url, body, payment.headers, payment.cost_usd, timeout, payment=payment
+        )
         try:
             async for chunk in paid:
                 yield chunk
@@ -3178,38 +3611,75 @@ class AsyncLLMClient:
         payment_headers: dict[str, str],
         cost_usd: float,
         timeout: float | None,
-    ) -> AsyncIterator[ChatCompletionChunk]:
-        """Phase 2 of the async stream: the paid, already-settled leg."""
+        *,
+        payment: _ChatPayment | None = None,
+        rejected: httpx.Response | None = None,
+    ) -> AsyncGenerator[ChatCompletionChunk, None]:
+        """Phase 2 of the async stream: the paid, already-settled leg.
+
+        Same one-shot exact retry after an upto refusal as the sync path.
+        """
+        if payment is None:
+            payment = _ChatPayment(payment_headers, cost_usd, "exact", 0)
+        upto_refusal: httpx.Response | None = None
         backoffs = LLMClient._STREAM_5XX_BACKOFFS
         statuses_5xx = LLMClient._STREAM_5XX_STATUSES
         for attempt in range(len(backoffs) + 1):
             async with self._client.stream(
-                "POST", url, json=body, headers=payment_headers, timeout=timeout
+                "POST", url, json=body, headers=payment.headers, timeout=timeout
             ) as resp2:
                 if resp2.status_code == 200:
                     # AsyncLLMClient only tracks ``_last_call_cost`` (no session
                     # totals in the async path — matches the existing async
                     # chat_completion convention).
+                    basis: str | None = None
                     if cost_usd > 0:
+                        # Same as the sync stream: an upto ceiling, never the
+                        # pre-settle header's amount.
+                        settlement = self._capture_settlement(resp2)
+                        cost_usd, basis = _booked_cost(
+                            payment, None if payment.scheme == "upto" else settlement
+                        )
                         self._last_call_cost = cost_usd
-                        self._capture_settlement(resp2)
                     async for chunk in self._aiter_and_archive(
-                        resp2, body, cost_usd, streaming=True
+                        resp2,
+                        body,
+                        cost_usd,
+                        streaming=True,
+                        payment_scheme=payment.scheme,
+                        cost_basis=basis,
                     ):
                         yield chunk
                     return
                 await resp2.aread()
-                if resp2.status_code == 402:
-                    # Account rail: a 402 is the account being out of credit, not a
-                    # challenge to sign. Nothing here can sign, so say so plainly.
-                    raise_for_api_key_402(resp2, self.api_key)
-                    raise PaymentError("Payment was rejected. Check your wallet balance.")
+                if _is_payment_rejection(resp2):
+                    if _may_fall_back_to_exact(payment, resp2, replayed=attempt > 0):
+                        upto_refusal = resp2  # nothing streamed yet: retry exact
+                        break
+                    self._raise_payment_rejection(rejected if rejected is not None else resp2)
                 if resp2.status_code in statuses_5xx and attempt < len(backoffs):
                     import asyncio
 
                     await asyncio.sleep(backoffs[attempt])
                     continue
                 self._raise_stream_error(resp2, after_payment=True)
+
+        if upto_refusal is not None:
+            exact = _exact_after_upto_rejection(self, payment)
+            retry = self._astream_paid_phase(
+                url,
+                body,
+                exact.headers,
+                exact.cost_usd,
+                timeout,
+                payment=exact,
+                rejected=upto_refusal,
+            )
+            try:
+                async for chunk in retry:
+                    yield chunk
+            finally:
+                await retry.aclose()
 
     async def _aiter_and_archive(
         self,
@@ -3218,6 +3688,8 @@ class AsyncLLMClient:
         cost_usd: float,
         *,
         streaming: bool = True,
+        payment_scheme: str | None = None,
+        cost_basis: str | None = None,
     ) -> AsyncIterator[ChatCompletionChunk]:
         """Async mirror of :meth:`LLMClient._iter_and_archive`. Writes the
         assembled ``chat.completion`` response to ``~/.blockrun/data/`` and
@@ -3250,6 +3722,11 @@ class AsyncLLMClient:
                 usage_dict = _usage
             # Race-free per-call x402 charge — see LLMClient._iter_and_archive.
             chunk.cost_usd = cost_usd
+            if payment_scheme is not None:
+                # upto: cost_usd is the signed ceiling unless the gateway
+                # reported the settled amount — say which.
+                setattr(chunk, "payment_scheme", payment_scheme)  # noqa: B010 (extra field)
+                setattr(chunk, "cost_is_ceiling", cost_basis == "upto_ceiling")  # noqa: B010
             yield chunk
 
         if cost_usd > 0:
@@ -3280,11 +3757,14 @@ class AsyncLLMClient:
                     body,
                     response_data,
                     cost_usd=cost_usd,
+                    cost_basis=cost_basis,
                     **self._billing_meta(),
                 )
             except Exception:
                 pass
-            self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
+            self._log_transaction(
+                "/v1/chat/completions", body, response_data, cost_usd, cost_basis=cost_basis
+            )
 
     @staticmethod
     async def _aiter_sse_chunks(response: httpx.Response) -> AsyncIterator[ChatCompletionChunk]:
@@ -3306,8 +3786,48 @@ class AsyncLLMClient:
 
     # Reuse the sync helpers — Python class-attribute lookup binds them
     # correctly to whatever self is passed when the bound method is called.
+    # Sync signers kept for compatibility. They read chain state with blocking
+    # I/O when upto is offered, so this client's own paths use
+    # _asign_chat_payment instead.
     _sign_payment_from_response = LLMClient._sign_payment_from_response
+    _sign_chat_payment = LLMClient._sign_chat_payment
+
+    async def _apost_paid(
+        self,
+        url: str,
+        body: dict[str, Any],
+        headers: dict[str, str],
+        timeout: float | None,
+    ) -> tuple[httpx.Response, bool]:
+        """Async :meth:`LLMClient._post_paid`: ``(response, replayed)``."""
+        response = await self._client.post(url, json=body, headers=headers, timeout=timeout)
+        if response.status_code in (502, 503):
+            import asyncio
+
+            await asyncio.sleep(1)
+            response = await self._client.post(url, json=body, headers=headers, timeout=timeout)
+            return response, True
+        return response, False
+
+    async def _asign_chat_payment(
+        self, body: dict[str, Any], response: httpx.Response
+    ) -> _ChatPayment:
+        """Async :meth:`LLMClient._sign_chat_payment`: the upto chain reads do not
+        block the event loop."""
+        payment_required, price_info = _read_payment_required(response)
+        details = extract_payment_details(payment_required, allow_upto=True)
+        offer = _upto_offer(self, body, payment_required, details)
+        if offer is not None:
+            option, kwargs = offer
+            signed = await atry_upto_payment(self.account, option, payment_required, **kwargs)
+            if signed is not None:
+                return _upto_chat_payment(
+                    self, body, payment_required, price_info, details, option, signed
+                )
+        return _exact_chat_payment(self, body, payment_required, price_info, details)
+
     _raise_stream_error = LLMClient._raise_stream_error
+    _raise_payment_rejection = LLMClient._raise_payment_rejection
 
     async def _request_with_payment(self, endpoint: str, body: dict[str, Any]) -> ChatResponse:
         """Make async request with automatic payment handling."""
@@ -3358,84 +3878,32 @@ class AsyncLLMClient:
         response: httpx.Response,
     ) -> ChatResponse:
         """Handle 402 response asynchronously."""
-        # Get payment required header (x402 library uses lowercase)
-        payment_header = response.headers.get("payment-required")
-        if not payment_header:
-            try:
-                resp_body = response.json()
-                if "x402" in resp_body:
-                    payment_header = resp_body
-            except Exception:
-                pass
-
-        if not payment_header:
-            raise PaymentError("402 response but no payment requirements found")
-
-        if isinstance(payment_header, str):
-            payment_required = parse_payment_required(payment_header)
-        else:
-            payment_required = payment_header
-
-        details = extract_payment_details(payment_required)
-
-        # Enforce the spend limit on the QUOTE, before signing. This handler
-        # computes its cost_usd only after the paid POST returns (it prefers the
-        # price echoed on the response), which is far too late to refuse.
-        _enforce_spend_limits(
-            self,
-            float(details.get("amount", 0)) / 1e6,
-            body.get("model") if isinstance(body, dict) else None,
-        )
-
-        # Create signed payment payload (v2 format)
-        # SECURITY: Signing happens locally - only the signature is sent to server
-        resource = details.get("resource") or {}
-        _warn_if_clamped(body, resource.get("description"))
-        # Pass through extensions from server (for Bazaar discovery)
-        extensions = payment_required.get("extensions", {})
-        payment_payload = create_payment_payload(
-            account=self.account,
-            recipient=details["recipient"],
-            amount=details["amount"],
-            network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
-            resource_url=validate_resource_url(
-                resource.get("url", f"{self.api_url}/v1/chat/completions"), self.api_url
-            ),
-            resource_description=resource.get("description", "BlockRun AI API call"),
-            max_timeout_seconds=details.get("maxTimeoutSeconds", 300),
-            extra=details.get("extra"),
-            extensions=extensions,
-            asset=details.get("asset"),
-        )
+        # Signing prices the call: spend limits are enforced on the quote (the
+        # upto ceiling, for upto) before anything is signed or sent.
+        payment = await self._asign_chat_payment(body, response)
 
         # Retry with payment (x402 library expects PAYMENT-SIGNATURE header)
         # Use longer timeout for Live Search requests
         is_search_request = "search_parameters" in body or body.get("search") is True
         request_timeout = self.search_timeout if is_search_request else self.timeout
 
-        payment_headers = {
-            "Content-Type": "application/json",
-            "User-Agent": _get_user_agent(),
-            "PAYMENT-SIGNATURE": payment_payload,
-        }
-
-        # Retry with payment, with one automatic retry on 502/503
-        retry_response = await self._client.post(
-            url, json=body, headers=payment_headers, timeout=request_timeout
+        retry_response, replayed = await self._apost_paid(
+            url, body, payment.headers, request_timeout
         )
-        if retry_response.status_code in (502, 503):
-            import asyncio
-
-            await asyncio.sleep(1)
-            retry_response = await self._client.post(
-                url, json=body, headers=payment_headers, timeout=request_timeout
-            )
+        if _may_fall_back_to_exact(payment, retry_response, replayed=replayed):
+            # Upto refused before anything was served: one exact retry; if exact
+            # is refused too, the original refusal surfaces (see the sync path).
+            rejected = retry_response
+            payment = _exact_after_upto_rejection(self, payment)
+            retry_response, _ = await self._apost_paid(url, body, payment.headers, request_timeout)
+            if _is_payment_rejection(retry_response):
+                retry_response = rejected
 
         if retry_response.status_code == 402:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise _payment_rejected_error(retry_response)
 
         if retry_response.status_code != 200:
             try:
@@ -3449,25 +3917,18 @@ class AsyncLLMClient:
                 retry_after=retry_after_of(retry_response),
             )
 
-        # Extract cost and save locally
-        price_info = {}
-        try:
-            resp_body = response.json()
-            price_info = resp_body.get("price", {})
-        except Exception:
-            pass
-        cost_usd = (
-            float(price_info.get("amount", 0))
-            if price_info
-            else float(details.get("amount", 0)) / 1e6
-        )
-        self._last_call_cost = cost_usd
+        # Book the call: the quote for exact; for upto the settled amount when
+        # PAYMENT-RESPONSE reports one, else the signed ceiling, labeled.
         settlement = self._capture_settlement(retry_response)
+        cost_usd, cost_basis = _booked_cost(payment, settlement)
+        self._last_call_cost = cost_usd
 
         response_data = retry_response.json()
         # Per-call real charge + settlement (see sync _handle_payment_and_retry).
         chat_response = ChatResponse(**response_data)
         chat_response.cost_usd = cost_usd
+        chat_response.payment_scheme = payment.scheme
+        chat_response.cost_is_ceiling = cost_basis == "upto_ceiling"
         if settlement:
             chat_response.settlement = dict(settlement)
         from .cache import save_to_cache
@@ -3477,9 +3938,12 @@ class AsyncLLMClient:
             body,
             response_data,
             cost_usd=cost_usd,
+            cost_basis=cost_basis,
             **self._billing_meta(),
         )
-        self._log_transaction("/v1/chat/completions", body, response_data, cost_usd)
+        self._log_transaction(
+            "/v1/chat/completions", body, response_data, cost_usd, cost_basis=cost_basis
+        )
 
         return chat_response
 
@@ -3572,6 +4036,7 @@ class AsyncLLMClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
+            scheme=details.get("scheme"),
             network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
             resource_url=validate_resource_url(resource.get("url", url), self.api_url),
             resource_description=resource.get("description", "BlockRun AI API call"),
@@ -3603,7 +4068,7 @@ class AsyncLLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise _payment_rejected_error(retry_response)
 
         if retry_response.status_code != 200:
             try:
@@ -3706,6 +4171,7 @@ class AsyncLLMClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
+            scheme=details.get("scheme"),
             network=details.get("network", "eip155:84532" if self.is_testnet() else "eip155:8453"),
             resource_url=validate_resource_url(resource.get("url", url), self.api_url),
             resource_description=resource.get("description", "BlockRun AI API call"),
@@ -3735,7 +4201,7 @@ class AsyncLLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise _payment_rejected_error(retry_response)
 
         if retry_response.status_code != 200:
             try:
@@ -4120,6 +4586,8 @@ class AsyncLLMClient:
         body: dict[str, Any],
         response: Any,
         cost_usd: float,
+        *,
+        cost_basis: str | None = None,
     ) -> None:
         """Async-client twin of :meth:`LLMClient._log_transaction`."""
         logger = self._tx_logger
@@ -4138,6 +4606,7 @@ class AsyncLLMClient:
                 network=_detect_network(self.api_url),
                 client_kind=type(self).__name__,
                 settlement=settlement,
+                cost_basis=cost_basis,
             )
         except Exception:
             pass
@@ -4165,19 +4634,11 @@ class AsyncLLMClient:
         # USDC contracts
         # Mainnet: Base
         # Testnet: Base Sepolia
-        if self.is_testnet():
-            usdc_contract = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
-            rpcs = [
-                "https://sepolia.base.org",
-                "https://base-sepolia-rpc.publicnode.com",
-            ]
-        else:
-            usdc_contract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-            rpcs = [
-                "https://base.publicnode.com",
-                "https://mainnet.base.org",
-                "https://base.meowrpc.com",
-            ]
+        # Contract + public RPCs from the shared chain table (x402.EVM_NETWORKS),
+        # which the upto scheme's allowance reads use too.
+        net = EVM_NETWORKS["eip155:84532" if self.is_testnet() else "eip155:8453"]
+        usdc_contract = net["usdc"]
+        rpcs = list(net["rpcs"])
 
         # balanceOf(address) function selector
         selector = "0x70a08231"

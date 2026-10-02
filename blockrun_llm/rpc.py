@@ -380,6 +380,7 @@ class RpcClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
+            scheme=details.get("scheme"),
             network=details.get("network", "eip155:8453"),
             resource_url=resource.get("url", f"{self.api_url}{endpoint}"),
             resource_description=resource.get("description", "BlockRun Multi-chain RPC"),

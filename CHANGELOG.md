@@ -2,6 +2,80 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## Unreleased
+
+### Added
+- **x402 `upto` (Permit2) on Base: pay the actual cost, not the quote.** Under
+  `exact` the wallet signs a fixed pre-call quote, so a discount the gateway
+  only learns after the call — a DeepSeek prompt-cache hit is $0.028/M input
+  instead of $0.14/M — could never reach an x402 caller. When a 402 also offers
+  `upto` (listed after `exact`), `LLMClient` / `AsyncLLMClient` chat calls
+  (non-stream and stream) now sign a Permit2 `PermitWitnessTransferFrom` for the
+  ceiling and the gateway settles the actual amount.
+
+  Upto settles the actual cost, which is not always below the exact quote:
+  exact prices output at a tenth of `max_tokens`, so a long answer settles for
+  more under upto (never more than the ceiling, the full `max_tokens`), and a
+  short or cache-hit one for less. `payment_scheme="exact"` keeps the fixed
+  quote. Upto is taken when the offer carries
+  `extra.facilitatorAddress` for USDC on a network in `EVM_NETWORKS`; the wallet
+  holds the ceiling; and Permit2 may already pull it, or the 402 declares
+  `eip2612GasSponsoring` — then a gasless EIP-2612 permit approving Permit2 for
+  exactly the ceiling rides along and the facilitator submits it, so a wallet
+  with no ETH works. (Exactly the ceiling: the upto proxy reverts with
+  `Permit2612AmountMismatch` on any other value, and CDP rejects MaxUint256.)
+  Balance / allowance / nonce come from public Base RPCs with a 3 s timeout
+  each. Anything else — no RPC, a signing error, a ceiling over a spend limit —
+  signs `exact` as before (debug log only). A payment the gateway rejects
+  before serving anything is retried once with `exact`, and that client stays
+  on exact for that network for 10 minutes. A rejection that follows a 502/503
+  replay of the same upto payment is never retried with exact (the first send
+  may have settled; paying exact too would charge twice). A 402 offering only
+  upto, when upto cannot be used, raises rather than signing the ceiling as an
+  exact transfer. Exact spend limits cap on the signed amount (the header's,
+  which includes the transaction fee), not the body's base price. Streams book
+  the ceiling whatever their pre-settlement `PAYMENT-RESPONSE` says.
+
+  Per wallet and network only one gas-sponsored upto payment is in flight: a
+  second permit over the same USDC nonce reverted on-chain in a live test of
+  the TS SDK. The SDK records the nonce each permit signs over and, while the
+  on-chain nonce has not moved and the permit's deadline has not passed, pays
+  exact for any call that would need another. Concurrent calls in one client
+  (threads or asyncio) claim a per-wallet preflight marker before their chain
+  read, so only one of them can sign a permit; the others pay upto only if
+  Permit2's allowance already covers their ceiling, else exact. Solana, the Anthropic client and
+  every non-chat endpoint are unchanged.
+
+  Signing matches the official `@x402/evm` 2.28.0 client byte for byte: the
+  tests pin a vector it generated (`scripts/gen-upto-vector.mjs`).
+
+  Opt out with `payment_scheme="exact"` or `BLOCKRUN_PAYMENT_SCHEME=exact`.
+- **A ceiling is not a charge.** `ChatResponse.payment_scheme` /
+  `cost_is_ceiling` (also on stream chunks), `get_spending()["ceiling_usd"]`,
+  a `cost_basis` field on cost-log rows (`upto_settled` / `upto_ceiling`) and a
+  `(upto ceiling)` marker in `transactions.log`. An upto call books the settled
+  amount when `PAYMENT-RESPONSE` reports one, else the ceiling, labeled. Spend
+  limits count the ceiling in full.
+
+### Changed
+- Exact chat payments book and cap on the signed requirement's amount when the
+  402 also offers upto (the body's `price` is then the upto ceiling), and the
+  async client books a paid chat call the same way the sync one does.
+- `extract_payment_details` picks the first non-`upto` requirement instead of
+  blindly taking `accepts[0]`.
+- The upto→exact retry happens only on a definite verification failure
+  (`Payment verification failed`, `PAYMENT_INVALID` / `PAYMENT_UNFUNDED`, or a
+  fresh `payment-required` challenge), never on `PAYMENT_REPLAY` or a body
+  pointing at an earlier paid use (`recoverable` / `poll_url` / `job_id`): that
+  authorization was already served and paid for, and exact would charge twice.
+  A `PAYMENT_REPLAY` raises a `PaymentError` carrying the gateway's message and
+  `poll_url`, not "check your wallet balance". `extract_payment_details` now
+  raises `ValueError` for an upto-only 402 (chat opts in with
+  `allow_upto=True`), and `create_payment_payload` refuses a non-`exact`
+  `scheme`, so no non-chat endpoint signs an upto ceiling as an EIP-3009
+  transfer.
+- `get_balance()` reads its USDC contract and RPC list from `EVM_NETWORKS`.
+
 ## 1.17.1 — 2026-09-30
 
 ### Fixed
