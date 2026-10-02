@@ -75,7 +75,7 @@ response = client.chat("nvidia/nemotron-3.5-lightning", "Explain x402 in 1 sente
 
 # Option 2: let the smart router pick the best free model per request
 result = client.smart_chat("What is 2+2?", routing_profile="free")
-print(result.model)     # e.g. 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning' (free SIMPLE tier)
+print(result.model)     # e.g. 'nvidia/llama-3.2-11b-vision' (free SIMPLE tier)
 print(result.response)  # '4'
 ```
 
@@ -92,7 +92,7 @@ print(result.response)  # '4'
 
 > Two of these (`nemotron-3-nano-omni` and `llama-3.2-11b-vision`) are catalogued as vision-capable, but image input did not hold up on real probes — both return HTTP 200 with a wrong answer. Send images to a paid vision model.
 
-> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.435/$0.87 — the 75% launch promo became the permanent list price after 2026-05-31) — `nvidia/deepseek-v4-pro` is hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash.
+> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.435/$0.87 — the 75% launch promo became the permanent list price after 2026-05-31) — the free `nvidia/deepseek-v4-pro` is retired, and the gateway redirects calls to it to a free NVIDIA Nemotron model.
 
 > **Retired**: NVIDIA has EOL'd most of its early free lineup — the free DeepSeek family (last: `nvidia/deepseek-v4-flash`, 2026-08-12), `step-3.7-flash`, `mistral-nemotron`, `nemotron-nano-9b-v2` / `-12b-v2-vl` (2026-08-30), `gpt-oss-120b/20b` (2026-09-03), `nemotron-3-nano-30b` (2026-09-08), `llama-4-maverick`, the qwen3 SKUs, free Mistral small/large, and more. The gateway auto-redirects pinned callers to a live model, so old model IDs still return 200 — from a different model.
 
@@ -269,9 +269,15 @@ The four capability tiers:
 | Tier | Example Tasks | Auto Profile Model |
 |------|---------------|-------------------|
 | SIMPLE | Short questions, definitions | google/gemini-2.5-flash |
-| MEDIUM | Code snippets, explanations | moonshot/kimi-k2.7 |
+| MEDIUM | Code snippets, explanations | google/gemini-3.5-flash (code); google/gemini-2.5-flash (plain chat) |
 | COMPLEX | Architecture, long documents | google/gemini-3.1-pro |
 | REASONING | Proofs, math, multi-step reasoning | deepseek/deepseek-v4-pro |
+
+These are the picks `client.route()` returned against the live catalog on
+2026-10-02. The task ranker can move a tier's fallback ahead of its configured
+primary — REASONING's primary is `deepseek/deepseek-reasoner`, but proofs and
+step-by-step math rank `deepseek/deepseek-v4-pro` first — so check
+`decision.model` rather than relying on this table.
 
 Every decision is explainable — `result.routing` carries the tier, the task
 type, the confidence, the ranked `candidates`, the per-candidate
