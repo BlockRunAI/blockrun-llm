@@ -36,7 +36,6 @@ from .apikey import (
     payment_mode,
     raise_for_api_key_402,
     resolve_api_key,
-    resolve_poll_url,
     wallet_only,
 )
 
@@ -45,6 +44,7 @@ from .apikey import (
 # in both fallback chains. client.py does not import this module, so there is
 # no cycle.
 from .client import _SETTLED_ATTR, _enforce_spend_limits, _mark_settled
+from .jobs import absolute_poll_url
 from .price import Category, Market, Resolution, Session
 from .realface import _GROUP_ID_RE
 from .router_adapter import (
@@ -578,6 +578,12 @@ class SolanaLLMClient:
     # a signature made earlier goes stale (blockhash lifetime ~60-90s) before the
     # settling poll lands. 25s keeps every signature comfortably fresh.
     MEDIA_RESIGN_FRESH_SECONDS = 25.0
+
+    # Audio jobs (music, speech, sound effects) on the account rail. With a key
+    # the first POST is the billed submit, and a track answers 202 + poll_url
+    # at once, so the wait happens poll by poll. Mirrors the Base MusicClient.
+    AUDIO_POLL_INTERVAL_SECONDS = 5.0
+    AUDIO_POLL_BUDGET_SECONDS = 300.0
 
     # Media generation defaults (mirror the Base MusicClient/SpeechClient).
     MUSIC_DEFAULT_MODEL = "minimax/music-2.5+"
@@ -1934,7 +1940,7 @@ class SolanaLLMClient:
 
         return retry_response.json()
 
-    def _absolute_url(self, url: str) -> str:
+    def _absolute_url(self, url: str, job_id: str | None = None) -> str:
         """Resolve a server-supplied relative ``poll_url`` against the API host.
 
         Poll URLs come back as ``/api/v1/images/generations/<id>``; our
@@ -1945,8 +1951,9 @@ class SolanaLLMClient:
             # api.blockrun.ai serves these routes at /v1/... and answers
             # /api/v1/... with wrong_host, so the gateway-minted prefix has to
             # come off. Shared with the Base clients, which also pins the
-            # Authorization header to the gateway's own origin.
-            return resolve_poll_url(url, self._api_url, self.api_key)
+            # Authorization header to the gateway's own origin; a refusal is
+            # an APIError (still a ValueError) naming the accepted job.
+            return absolute_poll_url(url, self._api_url, self.api_key, job_id)
         base = self._api_url.removesuffix("/api")
         if url.startswith(("http://", "https://")):
             # The poll loop sends (and re-signs) the wallet's PAYMENT-SIGNATURE
@@ -1981,8 +1988,9 @@ class SolanaLLMClient:
 
         Shared by :meth:`image` (5-min budget, ``settled_at_submit`` — Solana
         image routes settle at POST) and :meth:`video` (15-min budget, settles
-        on the completed poll). Both re-sign mid-poll so a signature never
-        outlives its blockhash. ``poll_budget_seconds`` /
+        on the completed poll), and by the account-rail audio calls via
+        :meth:`_request_audio_with_payment`. Both re-sign mid-poll so a
+        signature never outlives its blockhash. ``poll_budget_seconds`` /
         ``poll_interval_seconds`` default to the image constants; ``label``
         only tunes error text.
 
@@ -2048,7 +2056,7 @@ class SolanaLLMClient:
                 except Exception:
                     error_body = {"error": "Request failed"}
                 raise APIError(
-                    f"Image request: HTTP {probe.status_code}",
+                    f"{label} request: HTTP {probe.status_code}",
                     probe.status_code,
                     sanitize_error_response(error_body),
                     retry_after=retry_after_of(probe),
@@ -2118,7 +2126,7 @@ class SolanaLLMClient:
                 except Exception:
                     error_body = {"error": "Request failed"}
                 raise APIError(
-                    f"Image request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
+                    f"{label} request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
                     submit_resp.status_code,
                     sanitize_error_response(error_body),
                     retry_after=retry_after_of(submit_resp),
@@ -2138,7 +2146,7 @@ class SolanaLLMClient:
                 202,
                 {"response": submit_data},
             )
-        poll_url = self._absolute_url(poll_url_rel)
+        poll_url = self._absolute_url(poll_url_rel, job_id)
         # The account rail bills at accept, so for messages it behaves like a
         # route that settles at submit, whatever the wallet rail would do.
         charged_at_submit = settled_at_submit or account_job
@@ -2551,6 +2559,29 @@ class SolanaLLMClient:
     # Music generation (Solana payment)
     # ------------------------------------------------------------------
 
+    def _request_audio_with_payment(
+        self, endpoint: str, body: dict[str, Any], timeout: float | None, label: str
+    ) -> dict[str, Any]:
+        """POST an audio request (music, speech, sound effect) on either rail.
+
+        Wallet rail: the raw x402 helper, unchanged. Account rail: the first
+        POST carries the key and is the billed submit, so it goes through the
+        media helper instead, which never replays it on a 502/503 (that could
+        bill twice) and polls a 202 job to completion unsigned rather than
+        returning the ``{id, poll_url}`` stub as the result.
+        """
+        if not self.api_key:
+            return self._request_with_payment_raw(endpoint, body, timeout=timeout)
+        self._last_raw_headers = None
+        return self._request_image_with_payment(
+            endpoint,
+            body,
+            timeout=timeout if timeout is not None else self._timeout,
+            poll_budget_seconds=self.AUDIO_POLL_BUDGET_SECONDS,
+            poll_interval_seconds=self.AUDIO_POLL_INTERVAL_SECONDS,
+            label=label,
+        )
+
     def music(
         self,
         prompt: str,
@@ -2574,7 +2605,9 @@ class SolanaLLMClient:
         }
         if lyrics and lyrics.strip():
             body["lyrics"] = lyrics.strip()
-        data = self._request_with_payment_raw("/v1/audio/generations", body, timeout=timeout)
+        data = self._request_audio_with_payment(
+            "/v1/audio/generations", body, timeout, "Music generation"
+        )
         self._attach_receipt(data)
         return MusicResponse(**data)
 
@@ -2608,7 +2641,7 @@ class SolanaLLMClient:
             body["response_format"] = response_format
         if speed is not None:
             body["speed"] = speed
-        data = self._request_with_payment_raw("/v1/audio/speech", body, timeout=timeout)
+        data = self._request_audio_with_payment("/v1/audio/speech", body, timeout, "Speech")
         self._attach_receipt(data)
         return SpeechResponse(**data)
 
@@ -2634,7 +2667,9 @@ class SolanaLLMClient:
             body["prompt_influence"] = prompt_influence
         if response_format:
             body["response_format"] = response_format
-        data = self._request_with_payment_raw("/v1/audio/sound-effects", body, timeout=timeout)
+        data = self._request_audio_with_payment(
+            "/v1/audio/sound-effects", body, timeout, "Sound effect"
+        )
         self._attach_receipt(data)
         return SpeechResponse(**data)
 
@@ -4638,15 +4673,16 @@ class AsyncSolanaLLMClient:
         )
         return ImageResponse(**data)
 
-    def _absolute_url(self, url: str) -> str:
+    def _absolute_url(self, url: str, job_id: str | None = None) -> str:
         """Resolve a server-supplied relative ``poll_url`` against the API host
         (``api_url`` already includes the trailing ``/api`` — strip it once)."""
         if self.api_key:
             # api.blockrun.ai serves these routes at /v1/... and answers
             # /api/v1/... with wrong_host, so the gateway-minted prefix has to
             # come off. Shared with the Base clients, which also pins the
-            # Authorization header to the gateway's own origin.
-            return resolve_poll_url(url, self._api_url, self.api_key)
+            # Authorization header to the gateway's own origin; a refusal is
+            # an APIError (still a ValueError) naming the accepted job.
+            return absolute_poll_url(url, self._api_url, self.api_key, job_id)
         base = self._api_url.removesuffix("/api")
         if url.startswith(("http://", "https://")):
             # The poll loop sends (and re-signs) the wallet's PAYMENT-SIGNATURE
@@ -4764,6 +4800,24 @@ class AsyncSolanaLLMClient:
         )
         return VideoResponse(**data)
 
+    async def _request_audio_with_payment(
+        self, endpoint: str, body: dict[str, Any], timeout: float | None, label: str
+    ) -> dict[str, Any]:
+        """Async mirror of :meth:`SolanaLLMClient._request_audio_with_payment`:
+        wallet rail unchanged; on the account rail the keyed first POST is the
+        billed submit, so no 5xx replay and a 202 job is polled unsigned."""
+        if not self.api_key:
+            return await self._request_with_payment_raw(endpoint, body, timeout=timeout)
+        self._last_raw_headers = None
+        return await self._request_image_with_payment(
+            endpoint,
+            body,
+            timeout=timeout if timeout is not None else self._timeout,
+            poll_budget_seconds=SolanaLLMClient.AUDIO_POLL_BUDGET_SECONDS,
+            poll_interval_seconds=SolanaLLMClient.AUDIO_POLL_INTERVAL_SECONDS,
+            label=label,
+        )
+
     async def music(
         self,
         prompt: str,
@@ -4783,7 +4837,9 @@ class AsyncSolanaLLMClient:
         }
         if lyrics and lyrics.strip():
             body["lyrics"] = lyrics.strip()
-        data = await self._request_with_payment_raw("/v1/audio/generations", body, timeout=timeout)
+        data = await self._request_audio_with_payment(
+            "/v1/audio/generations", body, timeout, "Music generation"
+        )
         self._attach_receipt(data)
         return MusicResponse(**data)
 
@@ -4808,7 +4864,7 @@ class AsyncSolanaLLMClient:
             body["response_format"] = response_format
         if speed is not None:
             body["speed"] = speed
-        data = await self._request_with_payment_raw("/v1/audio/speech", body, timeout=timeout)
+        data = await self._request_audio_with_payment("/v1/audio/speech", body, timeout, "Speech")
         self._attach_receipt(data)
         return SpeechResponse(**data)
 
@@ -4833,8 +4889,8 @@ class AsyncSolanaLLMClient:
             body["prompt_influence"] = prompt_influence
         if response_format:
             body["response_format"] = response_format
-        data = await self._request_with_payment_raw(
-            "/v1/audio/sound-effects", body, timeout=timeout
+        data = await self._request_audio_with_payment(
+            "/v1/audio/sound-effects", body, timeout, "Sound effect"
         )
         self._attach_receipt(data)
         return SpeechResponse(**data)
@@ -5177,7 +5233,7 @@ class AsyncSolanaLLMClient:
                 except Exception:
                     error_body = {"error": "Request failed"}
                 raise APIError(
-                    f"Image request: HTTP {probe.status_code}",
+                    f"{label} request: HTTP {probe.status_code}",
                     probe.status_code,
                     sanitize_error_response(error_body),
                     retry_after=retry_after_of(probe),
@@ -5246,7 +5302,7 @@ class AsyncSolanaLLMClient:
                 except Exception:
                     error_body = {"error": "Request failed"}
                 raise APIError(
-                    f"Image request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
+                    f"{label} request failed: {paid_request_error_prefix(submit_resp.headers)}: HTTP {submit_resp.status_code}",
                     submit_resp.status_code,
                     sanitize_error_response(error_body),
                     retry_after=retry_after_of(submit_resp),
@@ -5262,7 +5318,7 @@ class AsyncSolanaLLMClient:
         job_id = submit_data.get("id")
         if not poll_url_rel:
             raise APIError("Slow-path 202 missing poll_url", 202, {"response": submit_data})
-        poll_url = self._absolute_url(poll_url_rel)
+        poll_url = self._absolute_url(poll_url_rel, job_id)
         # The account rail bills at accept, so for messages it behaves like a
         # route that settles at submit, whatever the wallet rail would do.
         charged_at_submit = settled_at_submit or account_job

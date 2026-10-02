@@ -207,12 +207,28 @@ SEEDANCE_REFERENCE_IMAGE_LIMIT: dict[str, int] = {
     "bytedance/seedance-2.0-mini": 9,
     SEEDANCE_25: 30,
 }
-# Reference VIDEO/AUDIO clips. 2.5 is absent on purpose: it takes reference
-# images (supportsReferenceImages) but not clips (supportsReferenceMedia:false).
+# Reference VIDEO/AUDIO clips (supportsReferenceMedia). 2.5 takes them since
+# 2026-09-26. The gateway bills each clip at its model's ceiling whatever the
+# real length (REFERENCE_CEILING_SECONDS in its models.ts): 15.2s on the 2.0
+# family, 30.2s on 2.5.
 SEEDANCE_REFERENCE_MEDIA_MODELS = frozenset(
-    {"bytedance/seedance-2.0", "bytedance/seedance-2.0-fast", "bytedance/seedance-2.0-mini"}
+    {
+        "bytedance/seedance-2.0",
+        "bytedance/seedance-2.0-fast",
+        "bytedance/seedance-2.0-mini",
+        SEEDANCE_25,
+    }
 )
-SEEDANCE_BITRATE_MODE_MODELS = SEEDANCE_REFERENCE_MEDIA_MODELS | {SEEDANCE_25}
+# bitrate_mode is a 2.x control: the same four models, named on their own so
+# it does not move whenever the clip list does.
+SEEDANCE_BITRATE_MODE_MODELS = frozenset(
+    {
+        "bytedance/seedance-2.0",
+        "bytedance/seedance-2.0-fast",
+        "bytedance/seedance-2.0-mini",
+        SEEDANCE_25,
+    }
+)
 SEEDANCE_MAX_REFERENCE_CLIPS = 3
 SEEDANCE_BITRATE_MODES = ("standard", "high")
 SEEDANCE_OUTPUT_FORMATS = ("mp4", "mov")
@@ -322,11 +338,6 @@ def validate_video_request(
         raise ValueError(
             f"Model {model} does not accept reference video or audio clips. "
             f"Supported: {', '.join(sorted(SEEDANCE_REFERENCE_MEDIA_MODELS))}."
-            + (
-                " 2.5 takes reference IMAGES (up to 30) but no clips."
-                if model == SEEDANCE_25
-                else ""
-            )
         )
     for field, clips in (
         ("reference_videos", reference_videos),

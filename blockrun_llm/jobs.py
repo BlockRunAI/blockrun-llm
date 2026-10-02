@@ -19,16 +19,41 @@ from .types import APIError, retry_after_of
 from .validation import build_payment_rejected_error, sanitize_error_response
 
 
-def absolute_poll_url(url: str, api_url: str, api_key: str | None) -> str:
-    """Resolve a relative ``poll_url`` against the configured API host.
+class PollOriginRefusedError(APIError, ValueError):
+    """A ``poll_url`` named an origin the API key may not be sent to.
+
+    An :class:`APIError` because the job was already accepted (``response``
+    carries its ``id`` and the refused ``poll_url``), and still a
+    ``ValueError`` because that is what the Solana account rail raised for
+    this refusal before, so existing handlers keep catching it.
+    """
+
+
+def absolute_poll_url(
+    url: str, api_url: str, api_key: str | None, job_id: str | None = None
+) -> str:
+    """Resolve a server-supplied ``poll_url`` against the configured API host.
 
     Server-returned poll URLs look like ``/api/v1/images/generations/<id>``;
     ``api_url`` already ends with ``/api`` on the wallet rail, and the account
     rail serves the same route without that prefix.
+
+    Absolute URLs go through :func:`resolve_poll_url` too: with an API key it
+    pins them to the gateway's own origin, since every poll carries the key
+    as ``Authorization: Bearer``. Returning them before that check would hand
+    the key to any host a response named. The refusal comes after the job was
+    accepted (and, on the account rail, billed), so it is raised as an
+    :class:`PollOriginRefusedError` carrying the job id and the refused
+    ``poll_url``.
     """
-    if url.startswith(("http://", "https://")):
-        return url
-    return resolve_poll_url(url, api_url, api_key)
+    try:
+        return resolve_poll_url(url, api_url, api_key)
+    except ValueError as exc:
+        raise PollOriginRefusedError(
+            f"{exc} The job was accepted; poll_url {url!r} is not on {api_url}.",
+            502,
+            {"id": job_id, "poll_url": url},
+        ) from exc
 
 
 def poll_until_completed(
@@ -59,7 +84,7 @@ def poll_until_completed(
     if not poll_url_rel:
         raise APIError("Slow-path 202 missing poll_url", 202, {"response": submit_data})
 
-    poll_url = absolute_poll_url(poll_url_rel, api_url, api_key)
+    poll_url = absolute_poll_url(poll_url_rel, api_url, api_key, job_id)
     poll_headers = {"PAYMENT-SIGNATURE": payment_payload} if payment_payload else {}
     deadline = time.monotonic() + budget_seconds
     last_status = submit_data.get("status", "queued")

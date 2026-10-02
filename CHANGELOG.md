@@ -7,21 +7,22 @@ All notable changes to blockrun-llm will be documented in this file.
 ### Added
 - **Seedance reference media and output controls** on `VideoClient.generate`,
   `SolanaLLMClient.video` and `AsyncSolanaLLMClient.video`:
-  - `reference_videos` and `reference_audios` (up to 3 each).
+  - `reference_videos` and `reference_audios` (up to 3 each) on seedance-2.0 /
+    2.0-fast / 2.0-mini / 2.5.
   - Up to 30 `reference_image_urls` on seedance-2.5.
   - `bitrate_mode`, `output_format`, `camera_fixed` and `safety_identifier`.
   - `VideoClip.last_frame_url` / `last_frame_backed_up`.
 
   Reference media is served only on the account rail (`BLOCKRUN_API_KEY`).
-  Reference clips are billed at the 15.2s reference ceiling each, so they can
-  multiply a render's price. See `docs/seedance-capabilities.md`. Contributed
+  Reference clips are billed at the model's reference ceiling each (15.2s on
+  the 2.0 family, 30.2s on 2.5), so they can multiply a render's price. See `docs/seedance-capabilities.md`. Contributed
   by @KillerQueen-Z (#70).
 
 ### Changed
 - **Seedance requests are checked per model before anything is sent.** The
   check is shared by the Base and Solana clients and mirrors the MCP's table.
-  Reference fields on a wallet rail, clips on 2.5, reference images on models
-  that do not take them, audio without an image or video, `output_format` off
+  Reference fields on a wallet rail, reference images or clips on models that
+  do not take them, audio without an image or video, `output_format` off
   2.5, `bitrate_mode` off 2.x, `camera_fixed` off 1.5-pro, and seedance-2.5
   first-and-last-frame on the Solana wallet gateway all raise `ValueError`
   locally.
@@ -43,6 +44,16 @@ All notable changes to blockrun-llm will be documented in this file.
   - A timeout now says the account was billed, and the error carries the
     `poll_url` so the job can still be fetched.
   - Both the sync and async clients are fixed.
+- **Solana `music()`, `speech()` and `sound_effect()` with an API key** get
+  the same treatment, sync and async: no 5xx replay of the billed submit, and
+  a 202 job is polled unsigned to completion instead of failing
+  `MusicResponse` validation after the charge.
+- **An API key is never sent to a foreign `poll_url` origin.** `VideoClient`
+  and the shared image/music poller returned an absolute `poll_url` before
+  the origin pin ran, so a response naming another host received
+  `Authorization: Bearer brk_...`. Every poll URL is now pinned; a refusal
+  raises `PollOriginRefusedError` (an `APIError`, and a `ValueError` as the
+  Solana account rail raised before) carrying the job id and `poll_url`.
 
 ## 1.17.1 — 2026-09-30
 

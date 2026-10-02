@@ -14,7 +14,7 @@ table in `blockrun-mcp/src/tools/video.ts`, and both should change together.
 | --- | --- | --- | --- |
 | seedance-1.5-pro | Yes | No | No |
 | seedance-2.0 / 2.0-fast / 2.0-mini | Yes | 1–9 | 1–3 of each |
-| seedance-2.5 | Yes (not on the Solana wallet gateway yet) | 1–30 | No |
+| seedance-2.5 | Yes (not on the Solana wallet gateway yet) | 1–30 | 1–3 of each |
 | grok-imagine-video, sora-2 | No | No | No |
 
 - Reference audio needs at least one reference image or video in the same request.
@@ -38,8 +38,9 @@ for about 48h via the `poll_url` in the error.
 ## Cost of reference clips
 
 Reference video and audio are billed per reference second, at the model's
-15.2s reference ceiling, whatever the clip's real length. The gateway only
-sees URLs, never durations. One clip on a 5s 720p seedance-2.0-mini render is
+reference ceiling, whatever the clip's real length: 15.2s on seedance-2.0 /
+2.0-fast / 2.0-mini, 30.2s on seedance-2.5. The gateway only sees URLs, never
+durations. One clip on a 5s 720p seedance-2.0-mini render is
 roughly 4x the price of the render alone. At 4K with three of each type the
 price runs into the hundreds of dollars. Audio seconds bill at about 0.3x the
 video rate.

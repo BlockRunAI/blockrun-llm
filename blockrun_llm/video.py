@@ -45,8 +45,8 @@ from .apikey import (
     payment_mode,
     raise_for_api_key_402,
     resolve_api_key,
-    resolve_poll_url,
 )
+from .jobs import absolute_poll_url
 from .types import APIError, PaymentError, VideoResponse, retry_after_of
 from .validation import (
     raise_api_error,
@@ -210,10 +210,11 @@ class VideoClient:
                 `last_frame_url`, and `real_face_asset_id`.
             reference_videos: Up to 3 motion references, each
                 ``{"url": "https://…"}`` (optional ``"role": "reference"``),
-                on seedance-2.0 / 2.0-fast / 2.0-mini — not 2.5. Account rail
+                on seedance-2.0 / 2.0-fast / 2.0-mini / 2.5. Account rail
                 only. **Cost:** every reference clip is billed at the model's
-                15.2s reference ceiling whatever its real length, so one clip
-                can multiply the price of a short render several times.
+                reference ceiling whatever its real length (15.2s on the 2.0
+                family, 30.2s on 2.5), so one clip can multiply the price of a
+                short render several times.
             reference_audios: Up to 3 audio references, same shape and models
                 as `reference_videos`, billed the same way (at a lower
                 per-second rate). Requires a reference image or video.
@@ -440,7 +441,7 @@ class VideoClient:
                 retry_after=retry_after_of(submit_resp),
             )
 
-        poll_url = self._absolute(poll_url_rel)
+        poll_url = absolute_poll_url(poll_url_rel, self.api_url, self.api_key, job_id)
 
         # Step 3: poll with the same PAYMENT-SIGNATURE until completed. The
         # signed authorization is valid for MAX_TIMEOUT_SECONDS (600s); when a
@@ -549,12 +550,6 @@ class VideoClient:
             asset=details.get("asset"),
             extensions=extensions,
         )
-
-    def _absolute(self, url: str) -> str:
-        if url.startswith(("http://", "https://")):
-            return url
-        # self.api_url already ends without '/'; poll_url starts with '/api/...'
-        return resolve_poll_url(url, self.api_url, self.api_key)
 
     def _extract_payment_required(self, resp: httpx.Response) -> dict[str, Any]:
         header = resp.headers.get("payment-required")

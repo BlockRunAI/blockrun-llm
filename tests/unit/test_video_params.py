@@ -241,12 +241,29 @@ _CLIP = [{"url": "https://example.com/motion.mp4"}]
 @pytest.mark.parametrize(
     "model, kwargs, message",
     [
-        # 2.5 takes reference images but not clips
-        ("bytedance/seedance-2.5", {"reference_videos": _CLIP}, "2.5 takes reference IMAGES"),
+        # 1.5-pro takes no reference clips at all
+        (
+            "bytedance/seedance-1.5-pro",
+            {"reference_videos": _CLIP},
+            "does not accept reference video or audio",
+        ),
+        (
+            "bytedance/seedance-1.5-pro",
+            {"reference_image_urls": ["https://e/x.png"], "reference_audios": _CLIP},
+            "does not accept reference",
+        ),
+        (
+            "xai/grok-imagine-video",
+            {"reference_videos": _CLIP},
+            "does not accept reference video or audio",
+        ),
+        # 2.5 keeps the rest of the clip rules
+        ("bytedance/seedance-2.5", {"reference_audios": _CLIP}, "requires a reference image"),
+        ("bytedance/seedance-2.5", {"reference_videos": _CLIP * 4}, "at most 3 clips"),
         (
             "bytedance/seedance-2.5",
-            {"reference_image_urls": ["https://e/x.png"], "reference_audios": _CLIP},
-            "does not accept reference video or audio",
+            {"reference_image_urls": ["https://e/x.png"] * 31},
+            "at most 30 images",
         ),
         (
             "bytedance/seedance-1.5-pro",
@@ -291,6 +308,37 @@ def test_per_model_guards_refuse_before_submit(account, account_captured, model,
     with pytest.raises(ValueError, match=message):
         account.generate("x", model=model, **kwargs)
     assert account_captured == {}
+
+
+@pytest.mark.parametrize(
+    "model", ["bytedance/seedance-2.0", "bytedance/seedance-2.0-mini", "bytedance/seedance-2.5"]
+)
+def test_reference_clips_reach_the_body(account, account_captured, model):
+    # 2.5 takes clips since 2026-09-26 (gateway ceiling 30.2s), alongside the
+    # 2.0 family; images, audio and bitrate ride with them unchanged.
+    account.generate(
+        "follow the motion",
+        model=model,
+        reference_image_urls=["https://e/x.png"],
+        reference_videos=_CLIP,
+        reference_audios=[{"url": "https://example.com/a.mp3"}],
+        bitrate_mode="high",
+    )
+    body = account_captured["body"]
+    assert body["reference_videos"] == _CLIP
+    assert body["reference_audios"] == [{"url": "https://example.com/a.mp3"}]
+    assert body["bitrate_mode"] == "high"
+
+
+def test_bitrate_mode_models_unchanged():
+    from blockrun_llm.validation import SEEDANCE_BITRATE_MODE_MODELS
+
+    assert SEEDANCE_BITRATE_MODE_MODELS == {
+        "bytedance/seedance-2.0",
+        "bytedance/seedance-2.0-fast",
+        "bytedance/seedance-2.0-mini",
+        "bytedance/seedance-2.5",
+    }
 
 
 def test_empty_reference_lists_are_omitted(account, account_captured):
