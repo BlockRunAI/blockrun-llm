@@ -1,0 +1,66 @@
+name: Publish llama-index-llms-blockrun to PyPI
+
+# Released separately from the SDK: cut a GitHub release tagged
+# llama-index-llms-blockrun-v<version> (the version in
+# integrations/llama-index-llms-blockrun/pyproject.toml). publish.yml skips
+# these tags.
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    if: ${{ startsWith(github.event.release.tag_name, 'llama-index-llms-blockrun-v') }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: integrations/llama-index-llms-blockrun
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install package and test deps
+        run: pip install -e "../..[solana]" -e ".[dev]" build
+
+      # PyPI never lets a published file be replaced, so a tag that names the
+      # wrong version is refused here, before anything is uploaded.
+      - name: Verify the release tag matches the package version
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          declared="llama-index-llms-blockrun-v$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "$tag" != "$declared" ]; then
+            echo "Release tag $tag does not match pyproject version ($declared)." >&2
+            exit 1
+          fi
+          echo "Release tag $tag matches pyproject version."
+
+      - name: Verify the release is publishable
+        run: pytest -q
+
+      - name: Build package
+        run: python -m build
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-llama-index
+          path: integrations/llama-index-llms-blockrun/dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist-llama-index
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

@@ -44,6 +44,34 @@ jobs:
             pytest tests/unit --ignore=tests/unit/test_solana_client.py --ignore=tests/unit/test_solana_wallet.py -k "not SolanaX402"
           fi
 
+  # llama-index-llms-blockrun, published from integrations/ as its own PyPI
+  # package. Installed against THIS checkout of the SDK, so an SDK change that
+  # breaks the adapter fails here rather than after both are released. The
+  # lowest leg pins the floor of every declared range: a floor that is never
+  # installed is a floor nobody has checked (0.6.5 of the OpenAI serializer
+  # raises on a ThinkingBlock that 0.8 skips).
+  llama-index:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - python-version: '3.10'
+            pins: 'llama-index-core==0.14.5 llama-index-llms-openai==0.6.5'
+          - python-version: '3.12'
+            pins: ''
+    defaults:
+      run:
+        working-directory: integrations/llama-index-llms-blockrun
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: pip install -e "../..[solana]" -e ".[dev]" ${{ matrix.pins }}
+      - name: Run unit tests
+        run: pytest
+
   # Fails when a number in the docs disagrees with brand-numbers.json.
   # Offline by design: it reads the committed snapshot and never fetches, so a
   # blockrun.ai deploy in progress cannot fail this repo's CI. Its own job

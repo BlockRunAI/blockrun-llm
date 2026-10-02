@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llama-index-llms-blockrun"
+version = "0.1.0"
+description = "LlamaIndex LLM for BlockRun: one OpenAI-compatible gateway, paid per call in USDC over x402 on Base or Solana. No API key."
+authors = [{ name = "BlockRun", email = "hello@blockrun.ai" }]
+requires-python = ">=3.10,<4.0"
+readme = "README.md"
+license = "MIT"
+keywords = ["llama-index", "llm", "x402", "usdc", "base", "solana", "blockrun"]
+dependencies = [
+    "llama-index-core>=0.14.5,<0.15",
+    # Only for to_openai_message_dicts / resolve_tool_choice: the gateway speaks
+    # the OpenAI chat schema, and that is LlamaIndex's own serializer for it.
+    "llama-index-llms-openai>=0.6.5,<0.9",
+    "blockrun-llm>=1.17.0,<2",
+]
+
+[project.optional-dependencies]
+solana = ["blockrun-llm[solana]>=1.17.0,<2"]
+dev = ["pytest>=7.0.0", "pytest-asyncio>=0.21.0"]
+
+[project.urls]
+Homepage = "https://blockrun.ai"
+Repository = "https://github.com/BlockRunAI/blockrun-llm/tree/main/integrations/llama-index-llms-blockrun"
+
+[tool.hatch.build.targets.sdist]
+include = ["llama_index/", "tests/", "README.md", "LICENSE"]
+
+[tool.hatch.build.targets.wheel]
+include = ["llama_index/"]
+
+[tool.llamahub]
+contains_example = false
+import_path = "llama_index.llms.blockrun"
+
+[tool.llamahub.class_authors]
+BlockRun = "BlockRunAI"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

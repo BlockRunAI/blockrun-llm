@@ -1,6 +1,6 @@
 # BlockRun LLM SDK (Python)
 
-> **blockrun-llm** is a Python SDK for accessing <!-- br:models.chatVisible -->82<!-- /br:models.chatVisible --> large language models (GPT-5.x, Claude 4.x, Gemini 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, prediction-market data (Predexon), Exa neural web search, and Pyth-backed market data. Every call is paid per request — no subscription, no seats, no minimum. Built for AI agents that need to operate autonomously.
+> **blockrun-llm** is a Python SDK for accessing <!-- br:models.chatVisible -->82<!-- /br:models.chatVisible --> large language models (GPT-6, GPT-5.x, Claude 5.x, Gemini 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, prediction-market data (Predexon), Exa neural web search, and Pyth-backed market data. Every call is paid per request — no subscription, no seats, no minimum. Built for AI agents that need to operate autonomously.
 >
 > **Two ways to pay, same SDK, same catalogue.** Sign up at
 > **[user.blockrun.ai](https://user.blockrun.ai)** for an API key and prepaid
@@ -75,7 +75,7 @@ response = client.chat("nvidia/nemotron-3.5-lightning", "Explain x402 in 1 sente
 
 # Option 2: let the smart router pick the best free model per request
 result = client.smart_chat("What is 2+2?", routing_profile="free")
-print(result.model)     # e.g. 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning' (free SIMPLE tier)
+print(result.model)     # e.g. 'nvidia/llama-3.2-11b-vision' (free SIMPLE tier)
 print(result.response)  # '4'
 ```
 
@@ -92,7 +92,7 @@ print(result.response)  # '4'
 
 > Two of these (`nemotron-3-nano-omni` and `llama-3.2-11b-vision`) are catalogued as vision-capable, but image input did not hold up on real probes — both return HTTP 200 with a wrong answer. Send images to a paid vision model.
 
-> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.435/$0.87 — the 75% launch promo became the permanent list price after 2026-05-31) — `nvidia/deepseek-v4-pro` is hidden because NVIDIA's NIM deployment is hung; backend MODEL_REDIRECTS forwards calls to V4 Flash.
+> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.435/$0.87 — the 75% launch promo became the permanent list price after 2026-05-31) — the free `nvidia/deepseek-v4-pro` is retired, and the gateway redirects calls to it to a free NVIDIA Nemotron model.
 
 > **Retired**: NVIDIA has EOL'd most of its early free lineup — the free DeepSeek family (last: `nvidia/deepseek-v4-flash`, 2026-08-12), `step-3.7-flash`, `mistral-nemotron`, `nemotron-nano-9b-v2` / `-12b-v2-vl` (2026-08-30), `gpt-oss-120b/20b` (2026-09-03), `nemotron-3-nano-30b` (2026-09-08), `llama-4-maverick`, the qwen3 SKUs, free Mistral small/large, and more. The gateway auto-redirects pinned callers to a live model, so old model IDs still return 200 — from a different model.
 
@@ -168,6 +168,24 @@ The 402 from that host names `eip155:5042`, and the SDK signs the EIP-3009 autho
 1. Same wallet key as Base: `export BLOCKRUN_WALLET_KEY="0x..."`
 2. Fund it with USDC on Arc (Arc's native token, shown as the ERC-20 at `0x3600…0000`)
 3. `api_url="https://arc.blockrun.ai/api"` — payments are automatic via x402
+
+## LlamaIndex
+
+[`llama-index-llms-blockrun`](integrations/llama-index-llms-blockrun) makes any
+BlockRun chat model a LlamaIndex LLM — chat, streaming, async, tool calling and
+agents — paying through this SDK on the chain you pick:
+
+```bash
+pip install llama-index-llms-blockrun            # pay on Base
+pip install "llama-index-llms-blockrun[solana]"  # pay on Solana
+```
+
+```python
+from llama_index.llms.blockrun import BlockRun
+
+llm = BlockRun(model="openai/gpt-5.5")                   # USDC on Base
+llm = BlockRun(model="openai/gpt-5.5", chain="solana")   # USDC on Solana
+```
 
 ## Smart Routing (Router Core)
 
@@ -269,9 +287,15 @@ The four capability tiers:
 | Tier | Example Tasks | Auto Profile Model |
 |------|---------------|-------------------|
 | SIMPLE | Short questions, definitions | google/gemini-2.5-flash |
-| MEDIUM | Code snippets, explanations | moonshot/kimi-k2.7 |
+| MEDIUM | Code snippets, explanations | google/gemini-3.5-flash (code); google/gemini-2.5-flash (plain chat) |
 | COMPLEX | Architecture, long documents | google/gemini-3.1-pro |
 | REASONING | Proofs, math, multi-step reasoning | deepseek/deepseek-v4-pro |
+
+These are the picks `client.route()` returned against the live catalog on
+2026-10-02. The task ranker can move a tier's fallback ahead of its configured
+primary — REASONING's primary is `deepseek/deepseek-reasoner`, but proofs and
+step-by-step math rank `deepseek/deepseek-v4-pro` first — so check
+`decision.model` rather than relying on this table.
 
 Every decision is explainable — `result.routing` carries the tier, the task
 type, the confidence, the ranked `candidates`, the per-candidate
@@ -458,127 +482,164 @@ Spend limits count ceilings in full, so they err on the safe side.
 
 ## Available Models
 
-### OpenAI GPT-5.5 Family
-Released 2026-04-23 — first fully retrained base since GPT-4.5. 1M context, 128K output, native agent + computer use.
+**Prices are not listed here.** They change often, and a number copied into a
+README is wrong the day after it lands. See **[blockrun.ai/models](https://blockrun.ai/models)**
+for live rates, or read them from the catalog at runtime — `client.list_models()`
+and `client.list_image_models()` return exactly what the gateway is charging.
 
-| Model | Input Price | Output Price | Context |
-|-------|-------------|--------------|---------|
-| `openai/gpt-5.5` | $5.00/M | $30.00/M | 1M |
+### OpenAI GPT-6 Family
 
-### OpenAI GPT-5.4 Family
-| Model | Input Price | Output Price | Context |
-|-------|-------------|--------------|---------|
-| `openai/gpt-5.4` | $2.50/M | $15.00/M | 1M |
-| `openai/gpt-5.4-pro` | $30.00/M | $180.00/M | 1M |
-| `openai/gpt-5.4-mini` | $0.75/M | $4.50/M | 400K |
-| `openai/gpt-5.4-nano` | $0.20/M | $1.25/M | 1M |
+The GPT-6 generation: Astra is the flagship for long-horizon agentic work and
+computer use, Sol the cost-efficient tier for complex coding, Luna the fast
+low-cost tier.
 
-### OpenAI GPT-5 Family
-| Model | Input Price | Output Price | Context |
-|-------|-------------|--------------|---------|
-| `openai/gpt-5.3` | $1.75/M | $14.00/M | 128K |
-| `openai/gpt-5.2` | $1.75/M | $14.00/M | 400K |
-| `openai/gpt-5-mini` | $0.25/M | $2.00/M | 200K |
-| `openai/gpt-5.2-pro` | $21.00/M | $168.00/M | 400K |
-| `openai/gpt-5.3-codex` | $1.75/M | $14.00/M | 400K |
+| Model | Context |
+|---|---|
+| `openai/gpt-6-astra` | 1.05M |
+| `openai/gpt-6-sol` | 1.05M |
+| `openai/gpt-6-luna` | 1.05M |
 
-### OpenAI GPT-4o Family
-| Model | Input Price | Output Price | Context |
-|-------|-------------|--------------|---------|
-| `openai/gpt-4o` | $2.50/M | $10.00/M | 128K |
-| `openai/gpt-4o-mini` | $0.15/M | $0.60/M | 128K |
+### OpenAI GPT-5.6 Family
+
+Three tiers on one 1.05M-context base — Sol (deepest reasoning), Terra
+(balanced), Luna (cheap and fast). Each has a `-pro` sibling that thinks
+longer at the same token price.
+
+| Model | Context |
+|---|---|
+| `openai/gpt-5.6-sol` | 1.05M |
+| `openai/gpt-5.6-sol-pro` | 1.05M |
+| `openai/gpt-5.6-terra` | 1.05M |
+| `openai/gpt-5.6-terra-pro` | 1.05M |
+| `openai/gpt-5.6-luna` | 1.05M |
+| `openai/gpt-5.6-luna-pro` | 1.05M |
+
+### OpenAI GPT-5.5 / 5.4 / 5.2 / 5.1 Families
+
+| Model | Context | Notes |
+|---|---|---|
+| `openai/gpt-5.5` | 1.05M |  |
+| `openai/gpt-5.5-pro` | 1.05M |  |
+| `openai/chat-latest` | 128K | ChatGPT Instant — the model behind chatgpt.com |
+| `openai/gpt-5.4` | 1.05M |  |
+| `openai/gpt-5.4-pro` | 1.05M |  |
+| `openai/gpt-5.4-mini` | 400K |  |
+| `openai/gpt-5.4-nano` | 1.05M |  |
+| `openai/gpt-5.2` | 400K |  |
+| `openai/gpt-5.2-pro` | 400K |  |
+| `openai/gpt-5.1` | 400K | Configurable reasoning effort |
+| `openai/gpt-5.3-codex` | 400K | Coding/agentic SKU |
+| `openai/gpt-5-mini` | 200K |  |
+
+### OpenAI GPT-4 Family
+
+| Model | Context |
+|---|---|
+| `openai/gpt-4.1` | 128K |
+| `openai/gpt-4.1-mini` | 128K |
+| `openai/gpt-4.1-nano` | 128K |
+| `openai/gpt-4o` | 128K |
+| `openai/gpt-4o-mini` | 128K |
 
 ### OpenAI O-Series (Reasoning)
-| Model | Input Price | Output Price | Context |
-|-------|-------------|--------------|---------|
-| `openai/o1` | $15.00/M | $60.00/M | 200K |
-| `openai/o3` | $2.00/M | $8.00/M | 200K |
-| `openai/o3-mini` | $1.10/M | $4.40/M | 128K |
+
+| Model | Context |
+|---|---|
+| `openai/o1` | 200K |
+| `openai/o3` | 200K |
+| `openai/o3-mini` | 128K |
+| `openai/o4-mini` | 128K |
 
 ### Anthropic Claude
-| Model | Input Price | Output Price | Context | Notes |
-|-------|-------------|--------------|---------|-------|
-| `anthropic/claude-opus-4.8` | $5.00/M | $25.00/M | 1M | Most capable Claude — agentic coding + adaptive thinking, 128K output |
-| `anthropic/claude-opus-4.7` | $5.00/M | $25.00/M | 1M | Agentic coding + adaptive thinking, 128K output |
-| `anthropic/claude-opus-4.6` | $5.00/M | $25.00/M | 200K | Hidden from `/v1/models` (superseded by 4.7); direct calls still work |
-| `anthropic/claude-opus-4.5` | $5.00/M | $25.00/M | 200K | |
-| `anthropic/claude-sonnet-4.6` | $3.00/M | $15.00/M | 200K | |
-| `anthropic/claude-haiku-4.5` | $1.00/M | $5.00/M | 200K | |
+
+| Model | Context | Notes |
+|---|---|---|
+| `anthropic/claude-fable-5.1` | 1M | Most capable — successor to Fable 5 at the same tier and price |
+| `anthropic/claude-fable-5` | 1M | Mythos-class flagship above Opus — always-on thinking, 128K output |
+| `anthropic/claude-opus-5.5` | 1M | Newest Opus — Opus-class reasoning at a lower price than Opus 5 |
+| `anthropic/claude-opus-5` | 1M | Flagship — the baseline the routing savings claim is measured against |
+| `anthropic/claude-opus-4.8` | 1M | Agentic coding + adaptive thinking, 128K output |
+| `anthropic/claude-opus-4.7` | 1M |  |
+| `anthropic/claude-opus-4.5` | 200K |  |
+| `anthropic/claude-sonnet-5.5` | 1M | Newest Sonnet — everyday coding and agent work, 128K output |
+| `anthropic/claude-sonnet-5` | 1M | Best cost/quality balance for long-context agent turns |
+| `anthropic/claude-sonnet-4.6` | 1M |  |
+| `anthropic/claude-sonnet-4.5` | 200K |  |
+| `anthropic/claude-haiku-4.5` | 200K |  |
 
 ### Google Gemini
-| Model | Input Price | Output Price | Context |
-|-------|-------------|--------------|---------|
-| `google/gemini-3.1-pro` | $2.00/M | $12.00/M | 1M |
-| `google/gemini-3.5-flash` | $0.50/M | $3.00/M | 1M |
-| `google/gemini-3-flash-preview` | $0.50/M | $3.00/M | 1M |
-| `google/gemini-2.5-pro` | $1.25/M | $10.00/M | 1M |
-| `google/gemini-2.5-flash` | $0.30/M | $2.50/M | 1M |
-| `google/gemini-3.1-flash-lite` | $0.25/M | $1.50/M | 1M |
-| `google/gemini-2.5-flash-lite` | $0.10/M | $0.40/M | 1M |
+
+| Model | Context |
+|---|---|
+| `google/gemini-3.1-pro` | 1M |
+| `google/gemini-3.8-flash` | 1M |
+| `google/gemini-3.6-flash` | 1M |
+| `google/gemini-3.5-flash` | 1M |
+| `google/gemini-3-flash-preview` | 1M |
+| `google/gemini-3.5-flash-lite` | 1M |
+| `google/gemini-3.1-flash-lite` | 1M |
+| `google/gemini-2.5-pro` | 1M |
+| `google/gemini-2.5-flash` | 1M |
+| `google/gemini-2.5-flash-lite` | 1M |
 
 ### DeepSeek
 
-V4 family launched 2026-04-24. DeepSeek upstream now serves the legacy
-`deepseek-chat` / `deepseek-reasoner` aliases as V4 Flash non-thinking /
-thinking modes. V4 Pro is the new flagship paid SKU — 1.6T MoE / 49B active,
-1M context, MMLU-Pro 87.5, GPQA 90.1, SWE-bench 80.6, LiveCodeBench 93.5.
+DeepSeek upstream serves the legacy `deepseek-chat` / `deepseek-reasoner`
+aliases as V4 Flash non-thinking / thinking modes. V4 Pro is the flagship
+paid SKU; the vision SKU is an experimental preview.
 
-| Model | Input Price | Output Price | Context | Notes |
-|-------|-------------|--------------|---------|-------|
-| `deepseek/deepseek-v4-pro` | $0.435/M | $0.87/M | 1M | V4 flagship — strongest open-weight reasoner. The 75% launch promo became the permanent list price after 2026-05-31 |
-| `deepseek/deepseek-chat` | $0.14/M | $0.28/M | 1M | V4 Flash non-thinking (paid endpoint with 5MB request bodies) |
-| `deepseek/deepseek-reasoner` | $0.20/M | $0.40/M | 1M | V4 Flash thinking (same upstream as `deepseek-chat`, thinking enabled by default) |
-
-### MiniMax
-| Model | Input Price | Output Price | Context | Notes |
-|-------|-------------|--------------|---------|-------|
-| `minimax/minimax-m3` | $0.30/M | $1.20/M | 1M | M3 flagship — strong reasoning + coding, 1M context |
-| `minimax/minimax-m2.7` | $0.30/M | $1.20/M | 200K | |
+| Model | Context | Notes |
+|---|---|---|
+| `deepseek/deepseek-v4-pro` | 1M | V4 flagship — strongest open-weight reasoner |
+| `deepseek/deepseek-v4-flash-vision-exp` | 1M | Experimental vision preview |
+| `deepseek/deepseek-chat` | 1M | V4 Flash non-thinking |
+| `deepseek/deepseek-reasoner` | 1M | V4 Flash thinking (same upstream, thinking on by default) |
 
 ### xAI Grok
 
-Grok 4.3 and Grok Build are resold through BlockRun's OpenRouter credit pool
-(same pattern as `deepseek/deepseek-v4-pro` and `minimax/minimax-m3`). Older
-Grok chat SKUs (grok-3/4/4.1-fast families) are hidden from `/v1/models` but
-direct calls by full ID still work.
+The older Grok chat SKUs (grok-3/3-mini, the grok-4 fast families,
+grok-code-fast-1, grok-2-vision) have left the catalog. Retired ids stay
+callable — the gateway redirects them to a healthy model — but `smart_chat`
+only ranks what `/v1/models` lists.
 
-| Model | Input Price | Output Price | Context | Notes |
-|-------|-------------|--------------|---------|-------|
-| `xai/grok-4.3` | $1.25/M | $2.50/M | 1M | Reasoning model, vision-capable, tuned for agentic workflows |
-| `xai/grok-build-0.1` | $1.00/M | $2.00/M | 256K | Fast agentic coding model — interactive software-engineering workflows |
+| Model | Context | Notes |
+|---|---|---|
+| `xai/grok-4.7` | 500K | Flagship — reasoning + vision, selectable effort (low → xhigh), native Live Search (`search: true`) |
+| `xai/grok-4.6` | 500K | Reasoning with selectable effort, native Live Search |
+| `xai/grok-4.5` | 500K | Reasoning + vision, native Live Search |
+| `xai/grok-4.3` | 1M | Reasoning + vision, tuned for agentic workflows |
+| `xai/grok-build-0.1` | 256K | Fast agentic coding model |
 
-### ZAI
+### Moonshot, MiniMax, Z.ai, Qwen
 
-The GLM flat-rate launch promos have fully ended (glm-5.1 on 2026-06-05;
-glm-5 and glm-5-turbo on 2026-06-06) — the whole family now bills per-token.
+| Model | Context | Notes |
+|---|---|---|
+| `moonshot/kimi-k3` | 1M | Replaces the retired `kimi-k2.5` / `k2.6` SKUs |
+| `minimax/minimax-m3` | 1M |  |
+| `minimax/minimax-m2.7` | 200K |  |
+| `zai/glm-5.3` | 1M |  |
+| `zai/glm-5.3-flash` | 1M | Cheapest vision-capable paid SKU |
+| `zai/glm-5.2` | 1M |  |
+| `zai/glm-5.1` | 200K |  |
+| `zai/glm-5` | 200K |  |
+| `zai/glm-5-turbo` | 200K |  |
+| `qwen/qwen3.7-max` | 1M |  |
+| `qwen/qwen3.7-plus` | 1M |  |
+| `qwen/qwen3.8-flash` | 1M |  |
+| `qwen/qwen3.7-flash` | 1M | Cheapest paid chat model in the catalog |
 
-| Model | Input Price | Output Price | Context | Notes |
-|-------|-------------|--------------|---------|-------|
-| `zai/glm-5.2` | $1.40/M | $4.40/M | 1M | Z.AI's newest flagship — 1M-token context, top open-source on long-horizon coding |
-| `zai/glm-5.1` | $1.40/M | $4.40/M | 200K | #1 open-source on SWE-Bench Pro, 8-hour autonomous execution |
-| `zai/glm-5` | $0.60/M | $1.92/M | 200K | |
-| `zai/glm-5-turbo` | $1.20/M | $4.00/M | 200K | |
+### Xiaomi
 
-### NVIDIA (Free & Hosted)
+| Model | Context |
+|---|---|
+| `xiaomi/mimo-v2.5` | 1M |
+| `xiaomi/mimo-v2.5-pro` | 1M |
 
-Free tier checked against `/v1/models` on 2026-09-29. NVIDIA has retired
-(HTTP 410 end-of-life, or deprovisioned) most of its earlier free lineup — the
-free DeepSeek family, `step-3.7-flash`, the `nemotron-nano` v2 SKUs,
-`gpt-oss-120b/20b` (2026-09-03) and `nemotron-3-nano-30b` (2026-09-08) among
-them. Retired models stay callable by ID: the gateway auto-redirects them to a
-live model, so pinned callers still get a 200. The free tier also includes two
-non-NVIDIA models, `cohere/north-mini-code` and `poolside/laguna-xs-2.1` (see
-[Try It Free](#try-it-free-no-balance-required)). The live list is
-`GET /v1/models` filtered on $0 pricing.
+### Free Tier
 
-| Model | Input Price | Output Price | Context | Notes |
-|-------|-------------|--------------|---------|-------|
-| `nvidia/nemotron-3.5-lightning` | **FREE** | **FREE** | 1M | Free default — thinking-mode reasoning |
-| `nvidia/nemotron-3-ultra-550b` | **FREE** | **FREE** | 1M | Largest free model (550B / 55B active MoE) |
-| `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | **FREE** | **FREE** | 256K | Fast general chat + reasoning |
-| `nvidia/llama-3.2-11b-vision` | **FREE** | **FREE** | 128K | Meta Llama 3.2 11B |
-| `moonshot/kimi-k2.5` | $0.60/M | $3.00/M | 262K | Kimi K2.5 direct from Moonshot (replaces `nvidia/kimi-k2.5`) |
-| `moonshot/kimi-k2.6` | $0.95/M | $4.00/M | 256K | Moonshot flagship (vision + reasoning_content) |
+The <!-- br:models.free -->6<!-- /br:models.free --> free models are listed under
+[Try It Free](#try-it-free-no-balance-required). Pin them by full model id, or
+use `routing_profile="free"`.
 
 ### Testnet Models (Base Sepolia)
 | Model | Price |
