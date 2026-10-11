@@ -23,6 +23,7 @@ blockrun_llm/
 ├── wallet.py                # EVM wallet management
 ├── solana_wallet.py         # Solana wallet management
 ├── x402.py                  # x402 payment protocol
+├── poll_auth.py             # Solana media-poll ownership proofs (x-poll-* headers)
 ├── router_core/             # Port of @blockrun/router-core (shared with the TS SDK + gateway)
 ├── router_adapter.py        # Host glue: catalog ids, payment floors, free profile
 ├── router.py                # Back-compat shim over router_core

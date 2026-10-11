@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
+import logging
 import os
 import re
 import sys
@@ -46,6 +47,13 @@ from .apikey import (
 # no cycle.
 from .client import _SETTLED_ATTR, _enforce_spend_limits, _mark_settled
 from .jobs import absolute_poll_url
+from .poll_auth import (
+    is_poll_ownership_refusal,
+    poll_auth_headers,
+    poll_job_id,
+    poll_keypair_of,
+    poll_kind_for_url,
+)
 from .price import Category, Market, Resolution, Session
 from .realface import _GROUP_ID_RE
 from .router_adapter import (
@@ -116,6 +124,8 @@ except ImportError:
     _HAS_X402 = False
 
 SOLANA_API_URL = "https://sol.blockrun.ai/api"
+
+logger = logging.getLogger(__name__)
 
 
 def _create_signer(private_key: str) -> KeypairSigner:
@@ -524,6 +534,16 @@ def _receipt_from_headers(headers: Any) -> str | None:
     return headers.get("x-payment-receipt") or headers.get("X-Payment-Receipt")
 
 
+def _is_pending_media_job(data: Any) -> bool:
+    """A paid POST answered with an accepted job (``202 + poll_url``) rather
+    than the finished media."""
+    return (
+        isinstance(data, dict)
+        and bool(data.get("poll_url"))
+        and data.get("status") in ("queued", "in_progress")
+    )
+
+
 def _assert_same_payment_terms(signed_payload: Any, orig_amount: Any, orig_pay_to: Any) -> None:
     """Guard a mid-poll re-sign: the fresh 402 challenge must charge the same
     amount to the same recipient as the payment originally authorized for this
@@ -706,6 +726,14 @@ class SolanaLLMClient:
         # metadata the shared JSON-only helper would otherwise drop. Read it
         # immediately after the helper returns (no intervening await).
         self._last_raw_headers: httpx.Headers | None = None
+        # (challenge, signed payload) of the most recent raw paid POST, read
+        # the same way: music polls a slow track against the terms it paid.
+        self._last_raw_payment: tuple[Any, Any] | None = None
+
+        # The wallet's ed25519 key, for signing poll ownership proofs
+        # (poll_auth.py). None on the account rail and for a signer that does
+        # not expose one; those polls keep the payment-signature path.
+        self._poll_keypair: Any = None
 
         # Account calls need neither an x402 client nor a local signer. Keep
         # all shared request/receipt state above this branch initialized.
@@ -726,6 +754,7 @@ class SolanaLLMClient:
                 "Invalid Solana private key (expected a base58-encoded keypair " "or 32-byte seed)."
             ) from e
         _register_svm_with_headers(self._x402_client, signer, resolved_url, resolved_headers)
+        self._poll_keypair = poll_keypair_of(signer)
         # x402ClientSync is NOT thread-safe: concurrent payment signing on one
         # shared client races on nonce/authorization state. This lock serializes
         # just the (fast) signing step so a single client can be shared across
@@ -1687,6 +1716,7 @@ class SolanaLLMClient:
         # Reset per-call receipt headers; only a paid retry repopulates them, so
         # a free/cached model can't inherit a prior call's settlement receipt.
         self._last_raw_headers = None
+        self._last_raw_payment = None
 
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
@@ -1763,6 +1793,7 @@ class SolanaLLMClient:
         # means nothing settles.
         _enforce_spend_limits(self, float(payment_payload.accepted.amount) / 1e6, body.get("model"))
         encoded_payment = encode_payment_signature_header(payment_payload)
+        self._last_raw_payment = (payment_required, payment_payload)
 
         payment_headers = {
             "Content-Type": "application/json",
@@ -2157,6 +2188,67 @@ class SolanaLLMClient:
         except Exception:
             submit_data = {}
 
+        return self._poll_media_job(
+            endpoint,
+            body,
+            submit_data,
+            eff_timeout=eff_timeout,
+            poll_budget_seconds=poll_budget_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            max_resigns=max_resigns,
+            label=label,
+            settled_at_submit=settled_at_submit,
+            account_job=account_job,
+            payment_required=payment_required,
+            encoded_payment=encoded_payment,
+            cost_usd=cost_usd,
+            orig_amount=orig_amount,
+            orig_pay_to=orig_pay_to,
+        )
+
+    def _poll_media_job(
+        self,
+        endpoint: str,
+        body: dict[str, Any],
+        submit_data: dict[str, Any],
+        *,
+        eff_timeout: float,
+        poll_budget_seconds: float | None,
+        poll_interval_seconds: float | None,
+        max_resigns: int,
+        label: str,
+        settled_at_submit: bool,
+        account_job: bool,
+        payment_required: Any,
+        encoded_payment: str | None,
+        cost_usd: float,
+        orig_amount: Any,
+        orig_pay_to: Any,
+        book_completion: bool = True,
+    ) -> dict[str, Any]:
+        """Poll an accepted media job (``202 + poll_url``) to completion.
+
+        Wallet rail, Solana poll routes: each poll carries a fresh x-poll-*
+        ownership proof (see :mod:`blockrun_llm.poll_auth`) instead of a payment
+        signature, so a pending job costs no signatures at all. Images and music
+        were paid at POST, so their polls never pay. A finished, unpaid video
+        answers 402 with the x402 challenge and ``status: "completed"``: ONE
+        payment is signed from that challenge and the same GET is re-sent with
+        it, which settles the clip. A poll that refuses the proof as "no such
+        job" falls back, once, to the payment-signature polling below; so does
+        any other 402 (a batch-billed image job).
+
+        Account rail, or a wallet whose signer exposes no keypair: the
+        payment-signature polling, unchanged.
+
+        ``book_completion=False`` is for a caller that already booked and logged
+        the paid POST (music on the wallet rail): the completed poll is returned
+        without being counted, cached or logged a second time.
+        """
+        import time as _time
+
+        from .cache import save_to_cache
+
         poll_url_rel = submit_data.get("poll_url")
         job_id = submit_data.get("id")
         if not poll_url_rel:
@@ -2170,7 +2262,7 @@ class SolanaLLMClient:
         # wallet route booked it above, and the account rail has no x402 charge
         # (it reserves credit at accept and settles it when the job completes).
         charged_at_submit = settled_at_submit or account_job
-        if settled_at_submit and not account_job:
+        if settled_at_submit and not account_job and book_completion:
             # Solana image routes settle at POST (a signed transaction dies with
             # its ~60-90s blockhash, so the gateway cannot wait for a long
             # render). The charge has already happened: book it now, or a job
@@ -2181,6 +2273,21 @@ class SolanaLLMClient:
         poll_headers = {"User-Agent": _get_user_agent()}
         if encoded_payment is not None:
             poll_headers["PAYMENT-SIGNATURE"] = encoded_payment
+
+        # Ownership polling: wallet rail only (an API key is its own proof), on
+        # a route the gateway knows a <kind> for, with a key that can sign.
+        poll_kind = None if account_job else poll_kind_for_url(poll_url)
+        poll_keypair = self._poll_keypair if poll_kind is not None else None
+        ownership = poll_keypair is not None
+        poll_job = poll_job_id(poll_url)
+        # Payment signatures a finished video may cost under ownership polling:
+        # the one that settles it, plus the same re-sign allowance the payment
+        # path has for a settle that failed (stale blockhash, a concurrent claim).
+        completion_payments_left = 1 + max_resigns
+        completion_paid = False
+        # Set when a completed video's 402 was just signed: the next request is
+        # that paid GET, sent at once rather than after the poll interval.
+        paid_completion_header: str | None = None
 
         budget = (
             poll_budget_seconds
@@ -2197,38 +2304,125 @@ class SolanaLLMClient:
         resigns_left = max_resigns
         last_resign_at = _time.monotonic()
 
-        while _time.monotonic() < deadline:
-            _time.sleep(interval)
-
-            # Keep the settlement blockhash fresh (poll-based media path only,
-            # gated on max_resigns). Re-sign the ORIGINAL challenge — same amount/pay_to,
-            # only a freshly-fetched blockhash — so that whenever upstream flips to
-            # "completed" the signature is <MEDIA_RESIGN_FRESH_SECONDS old and
-            # settlement can't hit a stale-blockhash transaction_simulation_failed.
-            # Only the completed poll actually settles; in-progress polls ignore
-            # the header, so re-signing here never double-charges.
-            if (
-                max_resigns > 0
-                and _time.monotonic() - last_resign_at >= self.MEDIA_RESIGN_FRESH_SECONDS
-            ):
+        def _fall_back_to_payment_polls(reason: str) -> None:
+            nonlocal ownership, last_resign_at
+            ownership = False
+            logger.warning(
+                "%s job %s: %s; falling back to payment-signature polling for this job.",
+                label,
+                job_id,
+                reason,
+            )
+            if payment_required is not None:
                 try:
-                    fresh_payload = self._sign_payment(payment_required)
                     poll_headers["PAYMENT-SIGNATURE"] = encode_payment_signature_header(
-                        fresh_payload
+                        self._sign_payment(payment_required)
                     )
                     last_resign_at = _time.monotonic()
                 except Exception:
-                    # Best-effort only: a failed proactive re-sign (RPC hiccup,
-                    # SolanaRpcException, etc.) must never abort the poll loop —
-                    # we simply keep the prior signature (pre-fix behaviour).
+                    # Same tolerance as the proactive re-sign: keep the submit
+                    # signature, and the payment path's 402 re-sign takes over.
                     pass
 
-            poll_resp = self._client.get(poll_url, headers=poll_headers, timeout=eff_timeout)
+        while _time.monotonic() < deadline:
+            sending_paid_completion = paid_completion_header is not None
+            request_headers: dict[str, str]
+            if paid_completion_header is not None:
+                request_headers = {
+                    "User-Agent": _get_user_agent(),
+                    "PAYMENT-SIGNATURE": paid_completion_header,
+                }
+                paid_completion_header = None
+            elif ownership and poll_kind is not None:
+                _time.sleep(interval)
+                request_headers = {
+                    "User-Agent": _get_user_agent(),
+                    **poll_auth_headers(poll_keypair, poll_kind, poll_job),
+                }
+            else:
+                _time.sleep(interval)
+
+                # Keep the settlement blockhash fresh (poll-based media path only,
+                # gated on max_resigns). Re-sign the ORIGINAL challenge — same
+                # amount/pay_to, only a freshly-fetched blockhash — so that whenever
+                # upstream flips to "completed" the signature is
+                # <MEDIA_RESIGN_FRESH_SECONDS old and settlement can't hit a
+                # stale-blockhash transaction_simulation_failed. Only the completed
+                # poll actually settles; in-progress polls ignore the header, so
+                # re-signing here never double-charges.
+                if (
+                    max_resigns > 0
+                    and payment_required is not None
+                    and _time.monotonic() - last_resign_at >= self.MEDIA_RESIGN_FRESH_SECONDS
+                ):
+                    try:
+                        fresh_payload = self._sign_payment(payment_required)
+                        poll_headers["PAYMENT-SIGNATURE"] = encode_payment_signature_header(
+                            fresh_payload
+                        )
+                        last_resign_at = _time.monotonic()
+                    except Exception:
+                        # Best-effort only: a failed proactive re-sign (RPC hiccup,
+                        # SolanaRpcException, etc.) must never abort the poll loop —
+                        # we simply keep the prior signature (pre-fix behaviour).
+                        pass
+                request_headers = poll_headers
+
+            poll_resp = self._client.get(poll_url, headers=request_headers, timeout=eff_timeout)
             try:
                 poll_data = poll_resp.json()
             except Exception:
                 poll_data = {}
+            if not isinstance(poll_data, dict):
+                poll_data = {}
             last_status = poll_data.get("status", last_status)
+
+            if ownership and sending_paid_completion and poll_resp.status_code == 402:
+                # The one payment did not settle on this poll: another poll holds
+                # the job's settlement claim, the blockhash went stale, or an
+                # earlier settle's outcome is still unknown. The next ownership
+                # poll answers either "already settled" (no new charge) or a
+                # fresh challenge, so go back to polling rather than re-signing
+                # blind.
+                if completion_payments_left > 0:
+                    continue
+                raise build_payment_rejected_error(poll_resp)
+
+            if ownership and not sending_paid_completion:
+                if poll_kind is not None and is_poll_ownership_refusal(
+                    poll_kind, poll_resp.status_code, poll_data
+                ):
+                    _fall_back_to_payment_polls(
+                        f"the gateway refused the poll ownership proof "
+                        f"(HTTP {poll_resp.status_code} {poll_data.get('error')!r})"
+                    )
+                    continue
+                if poll_resp.status_code == 402:
+                    challenge_header = self._extract_payment_header(poll_resp)
+                    if (
+                        poll_kind == "video"
+                        and poll_data.get("status") == "completed"
+                        and challenge_header
+                    ):
+                        # The clip is ready and unpaid: this 402 is the challenge
+                        # for the one payment that settles it.
+                        if completion_payments_left <= 0:
+                            raise build_payment_rejected_error(poll_resp)
+                        completion_payments_left -= 1
+                        completion_payload = self._sign_payment(
+                            decode_payment_required_header(challenge_header)
+                        )
+                        if orig_amount is not None:
+                            # Same guard as a mid-poll re-sign: the completion
+                            # challenge must charge what the submit authorized.
+                            _assert_same_payment_terms(completion_payload, orig_amount, orig_pay_to)
+                        paid_completion_header = encode_payment_signature_header(completion_payload)
+                        completion_paid = True
+                        continue
+                    # Any other 402 on an ownership poll (a batch-billed image
+                    # job asks for its batch payment): the payment path.
+                    _fall_back_to_payment_polls("the poll answered 402")
+                    continue
 
             if poll_resp.status_code == 402:
                 # Account rail: a 402 is the account being out of credit, not a
@@ -2285,7 +2479,7 @@ class SolanaLLMClient:
                         else " (payment was settled at submit)" if settled_at_submit else ""
                     ),
                     poll_resp.status_code,
-                    sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
+                    sanitize_error_response(poll_data),
                     retry_after=retry_after_of(poll_resp),
                 )
 
@@ -2297,9 +2491,14 @@ class SolanaLLMClient:
                 tx_hash = poll_resp.headers.get("x-payment-receipt") or poll_resp.headers.get(
                     "X-Payment-Receipt"
                 )
-                if tx_hash and isinstance(poll_data, dict) and not poll_data.get("txHash"):
+                if tx_hash and not poll_data.get("txHash"):
                     poll_data["txHash"] = tx_hash
-                if not charged_at_submit:
+                if not book_completion:
+                    return poll_data
+                # An ownership poll can be handed a clip some earlier poll paid
+                # for ("already_settled"); only a payment this call signed is
+                # booked to this session.
+                if not charged_at_submit and (completion_paid or not ownership):
                     self._session_calls += 1
                     self._session_total_usd += cost_usd
                     self._last_call_cost = cost_usd
@@ -2589,14 +2788,48 @@ class SolanaLLMClient:
     ) -> dict[str, Any]:
         """POST an audio request (music, speech, sound effect) on either rail.
 
-        Wallet rail: the raw x402 helper, unchanged. Account rail: the first
-        POST carries the key and is the billed submit, so it goes through the
-        media helper instead, which never replays it on a 502/503 (that could
-        bill twice) and polls a 202 job to completion unsigned rather than
-        returning the ``{id, poll_url}`` stub as the result.
+        Wallet rail: the raw x402 helper. A slow track answers ``202 +
+        poll_url`` after its payment settled at POST; it is polled to
+        completion with ownership proofs (never another payment) rather than
+        returning the ``{id, poll_url}`` stub as the result. Account rail: the
+        first POST carries the key and is the billed submit, so it goes through
+        the media helper instead, which never replays it on a 502/503 (that
+        could bill twice) and polls a 202 job to completion unsigned.
         """
         if not self.api_key:
-            return self._request_with_payment_raw(endpoint, body, timeout=timeout)
+            data = self._request_with_payment_raw(endpoint, body, timeout=timeout)
+            if not _is_pending_media_job(data):
+                return data
+            # The receipt callers attach is the paid POST's, not a poll's.
+            paid_headers = self._last_raw_headers
+            required, payload = self._last_raw_payment or (None, None)
+            try:
+                return self._poll_media_job(
+                    endpoint,
+                    body,
+                    data,
+                    eff_timeout=timeout if timeout is not None else self._timeout,
+                    poll_budget_seconds=self.AUDIO_POLL_BUDGET_SECONDS,
+                    poll_interval_seconds=self.AUDIO_POLL_INTERVAL_SECONDS,
+                    max_resigns=self.MEDIA_POLL_MAX_RESIGNS,
+                    label=label,
+                    settled_at_submit=True,
+                    account_job=False,
+                    payment_required=required,
+                    encoded_payment=(
+                        encode_payment_signature_header(payload) if payload is not None else None
+                    ),
+                    cost_usd=self._last_call_cost,
+                    orig_amount=payload.accepted.amount if payload is not None else None,
+                    orig_pay_to=payload.accepted.pay_to if payload is not None else None,
+                    book_completion=False,
+                )
+            except (httpx.HTTPError, APIError) as exc:
+                # The track was paid for at POST: nothing may buy a retry.
+                _mark_settled(exc)
+                raise
+            finally:
+                self._last_raw_headers = paid_headers
         self._last_raw_headers = None
         return self._request_image_with_payment(
             endpoint,
@@ -3583,7 +3816,12 @@ class AsyncSolanaLLMClient:
         # metadata the shared JSON-only helper would otherwise drop. Read it
         # immediately after the helper returns (no intervening await).
         self._last_raw_headers: httpx.Headers | None = None
+        # (challenge, signed payload) of the most recent raw paid POST, read
+        # the same way: music polls a slow track against the terms it paid.
+        self._last_raw_payment: tuple[Any, Any] | None = None
 
+        # The wallet's ed25519 key for poll ownership proofs; see the sync class.
+        self._poll_keypair: Any = None
         if api_key:
             self._x402_client = None
             self._payment_lock = None
@@ -3603,6 +3841,7 @@ class AsyncSolanaLLMClient:
                 "Invalid Solana private key (expected a base58-encoded keypair " "or 32-byte seed)."
             ) from e
         _register_svm_with_headers(self._x402_client, signer, resolved_url, resolved_headers)
+        self._poll_keypair = poll_keypair_of(signer)
         # Lazily created on first sign (avoids binding asyncio.Lock to a loop at
         # construction time). Serializes the async signing critical section so a
         # shared client is safe across concurrent coroutines — see _sign_payment.
@@ -4232,6 +4471,7 @@ class AsyncSolanaLLMClient:
         # See the sync path: refusing here means nothing is ever sent.
         _enforce_spend_limits(self, float(payment_payload.accepted.amount) / 1e6)
         encoded_payment = encode_payment_signature_header(payment_payload)
+        self._last_raw_payment = (payment_required, payment_payload)
         cost_usd = float(payment_payload.accepted.amount) / 1e6
         return (
             {
@@ -4405,6 +4645,7 @@ class AsyncSolanaLLMClient:
         # Reset per-call receipt headers; only a paid retry repopulates them, so
         # a free/cached model can't inherit a prior call's settlement receipt.
         self._last_raw_headers = None
+        self._last_raw_payment = None
 
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
@@ -4845,10 +5086,43 @@ class AsyncSolanaLLMClient:
         self, endpoint: str, body: dict[str, Any], timeout: float | None, label: str
     ) -> dict[str, Any]:
         """Async mirror of :meth:`SolanaLLMClient._request_audio_with_payment`:
-        wallet rail unchanged; on the account rail the keyed first POST is the
+        on the wallet rail a slow track's ``202 + poll_url`` is polled with
+        ownership proofs; on the account rail the keyed first POST is the
         billed submit, so no 5xx replay and a 202 job is polled unsigned."""
         if not self.api_key:
-            return await self._request_with_payment_raw(endpoint, body, timeout=timeout)
+            data = await self._request_with_payment_raw(endpoint, body, timeout=timeout)
+            if not _is_pending_media_job(data):
+                return data
+            # The receipt callers attach is the paid POST's, not a poll's.
+            paid_headers = self._last_raw_headers
+            required, payload = self._last_raw_payment or (None, None)
+            try:
+                return await self._poll_media_job(
+                    endpoint,
+                    body,
+                    data,
+                    eff_timeout=timeout if timeout is not None else self._timeout,
+                    poll_budget_seconds=SolanaLLMClient.AUDIO_POLL_BUDGET_SECONDS,
+                    poll_interval_seconds=SolanaLLMClient.AUDIO_POLL_INTERVAL_SECONDS,
+                    max_resigns=SolanaLLMClient.MEDIA_POLL_MAX_RESIGNS,
+                    label=label,
+                    settled_at_submit=True,
+                    account_job=False,
+                    payment_required=required,
+                    encoded_payment=(
+                        encode_payment_signature_header(payload) if payload is not None else None
+                    ),
+                    cost_usd=self._last_call_cost,
+                    orig_amount=payload.accepted.amount if payload is not None else None,
+                    orig_pay_to=payload.accepted.pay_to if payload is not None else None,
+                    book_completion=False,
+                )
+            except (httpx.HTTPError, APIError) as exc:
+                # The track was paid for at POST: nothing may buy a retry.
+                _mark_settled(exc)
+                raise
+            finally:
+                self._last_raw_headers = paid_headers
         self._last_raw_headers = None
         return await self._request_image_with_payment(
             endpoint,
@@ -5232,7 +5506,6 @@ class AsyncSolanaLLMClient:
         :meth:`image` and :meth:`video` (``max_resigns`` re-signs to survive
         the 600s x402 authorization window on long video polls).
         """
-        import time as _time
 
         from .cache import get_cached, save_to_cache
 
@@ -5357,16 +5630,82 @@ class AsyncSolanaLLMClient:
         except Exception:
             submit_data = {}
 
+        return await self._poll_media_job(
+            endpoint,
+            body,
+            submit_data,
+            eff_timeout=eff_timeout,
+            poll_budget_seconds=poll_budget_seconds,
+            poll_interval_seconds=poll_interval_seconds,
+            max_resigns=max_resigns,
+            label=label,
+            settled_at_submit=settled_at_submit,
+            account_job=account_job,
+            payment_required=payment_required,
+            encoded_payment=encoded_payment,
+            cost_usd=cost_usd,
+            orig_amount=orig_amount,
+            orig_pay_to=orig_pay_to,
+        )
+
+    async def _poll_media_job(
+        self,
+        endpoint: str,
+        body: dict[str, Any],
+        submit_data: dict[str, Any],
+        *,
+        eff_timeout: float,
+        poll_budget_seconds: float | None,
+        poll_interval_seconds: float | None,
+        max_resigns: int,
+        label: str,
+        settled_at_submit: bool,
+        account_job: bool,
+        payment_required: Any,
+        encoded_payment: str | None,
+        cost_usd: float,
+        orig_amount: Any,
+        orig_pay_to: Any,
+        book_completion: bool = True,
+    ) -> dict[str, Any]:
+        """Async mirror of :meth:`SolanaLLMClient._poll_media_job`: poll an
+        accepted media job (``202 + poll_url``) to completion.
+
+        Wallet rail, Solana poll routes: each poll carries a fresh x-poll-*
+        ownership proof (see :mod:`blockrun_llm.poll_auth`) instead of a payment
+        signature, so a pending job costs no signatures at all. Images and music
+        were paid at POST, so their polls never pay. A finished, unpaid video
+        answers 402 with the x402 challenge and ``status: "completed"``: ONE
+        payment is signed from that challenge and the same GET is re-sent with
+        it, which settles the clip. A poll that refuses the proof as "no such
+        job" falls back, once, to the payment-signature polling below; so does
+        any other 402 (a batch-billed image job).
+
+        Account rail, or a wallet whose signer exposes no keypair: the
+        payment-signature polling, unchanged.
+
+        ``book_completion=False`` is for a caller that already booked and logged
+        the paid POST (music on the wallet rail): the completed poll is returned
+        without being counted, cached or logged a second time.
+        """
+        import time as _time
+
+        from .cache import save_to_cache
+
         poll_url_rel = submit_data.get("poll_url")
         job_id = submit_data.get("id")
         if not poll_url_rel:
-            raise APIError("Slow-path 202 missing poll_url", 202, {"response": submit_data})
+            raise APIError(
+                "Slow-path 202 missing poll_url",
+                202,
+                {"response": submit_data},
+            )
         poll_url = self._absolute_url(poll_url_rel, job_id)
         # Neither rail books spend on completion here: a settled-at-submit
         # wallet route booked it above, and the account rail has no x402 charge
         # (it reserves credit at accept and settles it when the job completes).
         charged_at_submit = settled_at_submit or account_job
-        if settled_at_submit and not account_job:
+        if settled_at_submit and not account_job and book_completion:
             # Solana image routes settle at POST (a signed transaction dies with
             # its ~60-90s blockhash, so the gateway cannot wait for a long
             # render). The charge has already happened: book it now, or a job
@@ -5377,6 +5716,21 @@ class AsyncSolanaLLMClient:
         poll_headers = {"User-Agent": _get_user_agent()}
         if encoded_payment is not None:
             poll_headers["PAYMENT-SIGNATURE"] = encoded_payment
+
+        # Ownership polling: wallet rail only (an API key is its own proof), on
+        # a route the gateway knows a <kind> for, with a key that can sign.
+        poll_kind = None if account_job else poll_kind_for_url(poll_url)
+        poll_keypair = self._poll_keypair if poll_kind is not None else None
+        ownership = poll_keypair is not None
+        poll_job = poll_job_id(poll_url)
+        # Payment signatures a finished video may cost under ownership polling:
+        # the one that settles it, plus the same re-sign allowance the payment
+        # path has for a settle that failed (stale blockhash, a concurrent claim).
+        completion_payments_left = 1 + max_resigns
+        completion_paid = False
+        # Set when a completed video's 402 was just signed: the next request is
+        # that paid GET, sent at once rather than after the poll interval.
+        paid_completion_header: str | None = None
 
         budget = (
             poll_budget_seconds
@@ -5393,47 +5747,143 @@ class AsyncSolanaLLMClient:
         resigns_left = max_resigns
         last_resign_at = _time.monotonic()
 
-        while _time.monotonic() < deadline:
-            await asyncio.sleep(interval)
-
-            # Keep the settlement blockhash fresh (poll-based media path only,
-            # gated on max_resigns) — mirror of the sync helper. Re-sign the
-            # ORIGINAL challenge (same amount/
-            # pay_to, fresh blockhash) every MEDIA_RESIGN_FRESH_SECONDS so a slow /
-            # flaky-status model (1080p Seedance) can't age the signature out
-            # before the settling "completed" poll lands. Only completed settles.
-            if (
-                max_resigns > 0
-                and _time.monotonic() - last_resign_at >= SolanaLLMClient.MEDIA_RESIGN_FRESH_SECONDS
-            ):
+        async def _fall_back_to_payment_polls(reason: str) -> None:
+            nonlocal ownership, last_resign_at
+            ownership = False
+            logger.warning(
+                "%s job %s: %s; falling back to payment-signature polling for this job.",
+                label,
+                job_id,
+                reason,
+            )
+            if payment_required is not None:
                 try:
-                    fresh_payload = await self._sign_payment(payment_required)
                     poll_headers["PAYMENT-SIGNATURE"] = encode_payment_signature_header(
-                        fresh_payload
+                        await self._sign_payment(payment_required)
                     )
                     last_resign_at = _time.monotonic()
                 except Exception:
+                    # Same tolerance as the proactive re-sign: keep the submit
+                    # signature, and the payment path's 402 re-sign takes over.
                     pass
 
-            poll_resp = await self._client.get(poll_url, headers=poll_headers, timeout=eff_timeout)
+        while _time.monotonic() < deadline:
+            sending_paid_completion = paid_completion_header is not None
+            request_headers: dict[str, str]
+            if paid_completion_header is not None:
+                request_headers = {
+                    "User-Agent": _get_user_agent(),
+                    "PAYMENT-SIGNATURE": paid_completion_header,
+                }
+                paid_completion_header = None
+            elif ownership and poll_kind is not None:
+                await asyncio.sleep(interval)
+                request_headers = {
+                    "User-Agent": _get_user_agent(),
+                    **poll_auth_headers(poll_keypair, poll_kind, poll_job),
+                }
+            else:
+                await asyncio.sleep(interval)
+
+                # Keep the settlement blockhash fresh (poll-based media path only,
+                # gated on max_resigns). Re-sign the ORIGINAL challenge — same
+                # amount/pay_to, only a freshly-fetched blockhash — so that whenever
+                # upstream flips to "completed" the signature is
+                # <MEDIA_RESIGN_FRESH_SECONDS old and settlement can't hit a
+                # stale-blockhash transaction_simulation_failed. Only the completed
+                # poll actually settles; in-progress polls ignore the header, so
+                # re-signing here never double-charges.
+                if (
+                    max_resigns > 0
+                    and payment_required is not None
+                    and _time.monotonic() - last_resign_at
+                    >= SolanaLLMClient.MEDIA_RESIGN_FRESH_SECONDS
+                ):
+                    try:
+                        fresh_payload = await self._sign_payment(payment_required)
+                        poll_headers["PAYMENT-SIGNATURE"] = encode_payment_signature_header(
+                            fresh_payload
+                        )
+                        last_resign_at = _time.monotonic()
+                    except Exception:
+                        # Best-effort only: a failed proactive re-sign (RPC hiccup,
+                        # SolanaRpcException, etc.) must never abort the poll loop —
+                        # we simply keep the prior signature (pre-fix behaviour).
+                        pass
+                request_headers = poll_headers
+
+            poll_resp = await self._client.get(
+                poll_url, headers=request_headers, timeout=eff_timeout
+            )
             try:
                 poll_data = poll_resp.json()
             except Exception:
                 poll_data = {}
+            if not isinstance(poll_data, dict):
+                poll_data = {}
             last_status = poll_data.get("status", last_status)
+
+            if ownership and sending_paid_completion and poll_resp.status_code == 402:
+                # The one payment did not settle on this poll: another poll holds
+                # the job's settlement claim, the blockhash went stale, or an
+                # earlier settle's outcome is still unknown. The next ownership
+                # poll answers either "already settled" (no new charge) or a
+                # fresh challenge, so go back to polling rather than re-signing
+                # blind.
+                if completion_payments_left > 0:
+                    continue
+                raise build_payment_rejected_error(poll_resp)
+
+            if ownership and not sending_paid_completion:
+                if poll_kind is not None and is_poll_ownership_refusal(
+                    poll_kind, poll_resp.status_code, poll_data
+                ):
+                    await _fall_back_to_payment_polls(
+                        f"the gateway refused the poll ownership proof "
+                        f"(HTTP {poll_resp.status_code} {poll_data.get('error')!r})"
+                    )
+                    continue
+                if poll_resp.status_code == 402:
+                    challenge_header = SolanaLLMClient._extract_payment_header(poll_resp)
+                    if (
+                        poll_kind == "video"
+                        and poll_data.get("status") == "completed"
+                        and challenge_header
+                    ):
+                        # The clip is ready and unpaid: this 402 is the challenge
+                        # for the one payment that settles it.
+                        if completion_payments_left <= 0:
+                            raise build_payment_rejected_error(poll_resp)
+                        completion_payments_left -= 1
+                        completion_payload = await self._sign_payment(
+                            decode_payment_required_header(challenge_header)
+                        )
+                        if orig_amount is not None:
+                            # Same guard as a mid-poll re-sign: the completion
+                            # challenge must charge what the submit authorized.
+                            _assert_same_payment_terms(completion_payload, orig_amount, orig_pay_to)
+                        paid_completion_header = encode_payment_signature_header(completion_payload)
+                        completion_paid = True
+                        continue
+                    # Any other 402 on an ownership poll (a batch-billed image
+                    # job asks for its batch payment): the payment path.
+                    await _fall_back_to_payment_polls("the poll answered 402")
+                    continue
 
             if poll_resp.status_code == 402:
                 # Account rail: a 402 is the account being out of credit, not a
                 # challenge to sign. Nothing here can sign, so say so plainly.
                 raise_for_api_key_402(poll_resp, self.api_key)
-                # Mid-poll 402 = settlement failed, almost always a stale
-                # blockhash (the payment was signed at submit time but only
-                # settles when the job completes; by then the signed tx's
-                # recent-blockhash can be expired -> transaction_simulation_failed).
-                # The failing poll carries NO fresh challenge, so re-GET poll_url
-                # WITHOUT the stale signature to solicit a fresh 402 (new
-                # blockhash), re-sign, and keep polling. Mirrors the sync helper /
-                # Base VideoClient.
+                # Mid-poll 402 = settlement of the signed payment failed. For
+                # long jobs this is almost always a stale blockhash: the payment
+                # was signed at submit time, but the on-chain settlement only
+                # runs once the job completes, and by then the signed
+                # transaction's recent-blockhash can be expired — the facilitator
+                # reports ``transaction_simulation_failed``. The failing poll
+                # response carries NO fresh challenge, so re-GET poll_url WITHOUT
+                # the stale signature to solicit a fresh 402 (new blockhash),
+                # re-sign, and keep polling. Mirrors the Base VideoClient. A
+                # fresh signature that 402s again is a genuine payment problem.
                 if resigns_left > 0:
                     resigns_left -= 1
                     resign_payload = None
@@ -5448,14 +5898,16 @@ class AsyncSolanaLLMClient:
                             resign_required = decode_payment_required_header(resign_header)
                             resign_payload = await self._sign_payment(resign_required)
                     except (PaymentError, httpx.HTTPError):
-                        # Challenge GET or re-sign failed — surface the gateway's
-                        # real 402 reason, not a network/signing error.
+                        # Challenge GET failed, or signing was rejected — fall
+                        # through to surface the gateway's real 402 reason rather
+                        # than masking it with a network/signing error. Nothing
+                        # settled here.
                         resign_payload = None
                     if resign_payload is not None:
                         # Refuse a re-challenge that reprices or redirects the
                         # payment vs. what this job originally authorized. This
                         # PaymentError must propagate (NOT fall through to the
-                        # generic 402); the guard also pins the amount, so the
+                        # generic 402). The guard also pins the amount, so the
                         # submit-time cost_usd stays correct for the ledger.
                         _assert_same_payment_terms(resign_payload, orig_amount, orig_pay_to)
                         poll_headers["PAYMENT-SIGNATURE"] = encode_payment_signature_header(
@@ -5473,19 +5925,26 @@ class AsyncSolanaLLMClient:
                         else " (payment was settled at submit)" if settled_at_submit else ""
                     ),
                     poll_resp.status_code,
-                    sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
+                    sanitize_error_response(poll_data),
                     retry_after=retry_after_of(poll_resp),
                 )
 
-            # Terminal success is keyed on status, NOT the HTTP code (see the
-            # sync helper) — a completed-but-non-200 poll is still success.
+            # Terminal success is keyed on status, NOT the HTTP code — the
+            # gateway settles the moment a poll reports completed, so a
+            # completed-but-non-200 poll (which the caller was already charged
+            # for) must still be treated as success.
             if last_status == "completed":
                 tx_hash = poll_resp.headers.get("x-payment-receipt") or poll_resp.headers.get(
                     "X-Payment-Receipt"
                 )
-                if tx_hash and isinstance(poll_data, dict) and not poll_data.get("txHash"):
+                if tx_hash and not poll_data.get("txHash"):
                     poll_data["txHash"] = tx_hash
-                if not charged_at_submit:
+                if not book_completion:
+                    return poll_data
+                # An ownership poll can be handed a clip some earlier poll paid
+                # for ("already_settled"); only a payment this call signed is
+                # booked to this session.
+                if not charged_at_submit and (completion_paid or not ownership):
                     self._session_calls += 1
                     self._session_total_usd += cost_usd
                     self._last_call_cost = cost_usd
@@ -5495,6 +5954,8 @@ class AsyncSolanaLLMClient:
                 return poll_data
 
             if poll_resp.status_code in (202, 504):
+                # 202 = still queued/in_progress; 504 = transient upstream
+                # hiccup. Both are retriable inside the budget.
                 continue
 
             if poll_resp.status_code != 200:

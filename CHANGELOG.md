@@ -2,6 +2,25 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## Unreleased
+
+### Changed
+- **Solana media polls prove job ownership instead of signing a payment.**
+  `SolanaLLMClient` / `AsyncSolanaLLMClient` poll `video()`, slow `image()` /
+  `image_edit()` and slow `music()` jobs with an ed25519 signature by the
+  submitting wallet (`x-poll-wallet` / `x-poll-timestamp` / `x-poll-signature`
+  over `blockrun-poll:v1:<kind>:<job id>:<unix seconds>`), signed fresh per
+  poll. A video signs exactly one payment, from the 402 its finished-but-unpaid
+  poll returns; images and music never pay on a poll. A refused proof falls back
+  once, per job, to the per-poll payment signature, with a warning on the
+  `blockrun_llm.solana_client` logger. Wallet rail on sol.blockrun.ai only; the
+  account rail and Base are unchanged.
+
+### Fixed
+- **Slow `music()` tracks on the Solana wallet rail are polled to completion.**
+  The paid POST's `202 + poll_url` stub was returned as the result and failed
+  `MusicResponse` validation after the track had been paid for.
+
 ## 1.18.1 — 2026-10-02
 
 ### Fixed
