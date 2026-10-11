@@ -151,6 +151,25 @@ export SOLANA_WALLET_KEY="your-bs58-solana-key"
 > what to switch to instead of failing with a cryptic "must be 66 characters"
 > error.
 
+**Polling slow media jobs.** `video()`, slow `image()` / `image_edit()` models
+and slow `music()` tracks answer `202 + poll_url`, and the client polls until the
+job finishes. On Solana a payment dies with its blockhash in ~60-90s, so instead
+of signing a payment on every poll the client proves it owns the job: each poll
+carries `x-poll-wallet`, `x-poll-timestamp` and `x-poll-signature`, an ed25519
+signature by your wallet over `blockrun-poll:v1:<video|audio|image>:<job id>:<unix
+seconds>`. No transaction, nothing a facilitator can settle.
+
+- **Video** is charged once, when it is ready: the finished-but-unpaid poll
+  answers 402, the client signs one payment from that challenge and re-sends
+  the poll, which settles the clip. A poll budget that runs out costs nothing.
+- **Images and music** were paid at submit, so their polls never sign a payment.
+- If the gateway refuses the proof, the client falls back once, for that job,
+  to signing a payment per poll (logged as a warning on
+  `blockrun_llm.solana_client`).
+
+The account rail (API key) and Base are unchanged: an API key is its own proof,
+and a Base authorization lives for hours.
+
 ## Arc Support
 
 The same `LLMClient` pays on [Circle's Arc](https://www.arc.network) via [arc.blockrun.ai](https://arc.blockrun.ai) — point `api_url` at it and hold USDC on Arc in the same EVM wallet:
