@@ -2,7 +2,7 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
-## Unreleased
+## 1.19.0 — 2026-10-11
 
 ### Changed
 - **Solana media polls prove job ownership instead of signing a payment.**
