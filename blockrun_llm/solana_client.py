@@ -2430,7 +2430,12 @@ class SolanaLLMClient:
                 paid_completion_header = None
                 state.completion_sent = True
             elif ownership and poll_kind is not None:
-                _time.sleep(interval if next_wait is None else next_wait)
+                # A Retry-After never sleeps past the poll budget.
+                _time.sleep(
+                    interval
+                    if next_wait is None
+                    else min(next_wait, max(0.0, deadline - _time.monotonic()))
+                )
                 next_wait = None
                 request_headers = {
                     "User-Agent": _get_user_agent(),
@@ -5988,7 +5993,12 @@ class AsyncSolanaLLMClient:
                 paid_completion_header = None
                 state.completion_sent = True
             elif ownership and poll_kind is not None:
-                await asyncio.sleep(interval if next_wait is None else next_wait)
+                # A Retry-After never sleeps past the poll budget.
+                await asyncio.sleep(
+                    interval
+                    if next_wait is None
+                    else min(next_wait, max(0.0, deadline - _time.monotonic()))
+                )
                 next_wait = None
                 request_headers = {
                     "User-Agent": _get_user_agent(),

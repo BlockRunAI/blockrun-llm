@@ -998,11 +998,11 @@ class TestPaidCompletionInDoubt:
             if request.method == "GET" and "PAYMENT-SIGNATURE" in request.headers:
                 gw.paid_polls.append(request)
                 return _json(
-                    402, {"error": "Payment settlement in progress"}, **{"retry-after": "1"}
+                    402, {"error": "Payment settlement in progress"}, **{"retry-after": "60"}
                 )
             return gw(request)
 
-        kw = {**_VIDEO_KW, "poll_budget_seconds": 0.3}
+        kw = {**_VIDEO_KW, "poll_budget_seconds": 1.5}
         if use_async:
             aclient = _make_async_client(handler, keypair=kp)
             try:
