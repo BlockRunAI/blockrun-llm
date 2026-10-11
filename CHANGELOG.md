@@ -20,6 +20,24 @@ All notable changes to blockrun-llm will be documented in this file.
 - **Slow `music()` tracks on the Solana wallet rail are polled to completion.**
   The paid POST's `202 + poll_url` stub was returned as the result and failed
   `MusicResponse` validation after the track had been paid for.
+- **Solana `image()`, `image_edit()`, `video()` and `video_from_content()`
+  enforce `max_cost_per_call` and `max_session_cost`.** They are checked before
+  the submit payment is signed, and again before a video's completion payment
+  is signed. Before this, these calls ignored both limits.
+- **A video's completion payment that may have settled is never treated as
+  free.** If the paid poll is lost in transit, polling resumes and reads the
+  job's settlement record instead of abandoning the clip. A Retry-After on a
+  paid poll the gateway could not settle yet is honoured. An error or timeout
+  after the payment went out says it may still settle and is tagged as paid,
+  so no fallback chain buys a second job.
+- **A completion challenge is not a delivered clip.** Under ownership polling,
+  only a 200 delivers. A 5xx on the paid poll is no longer returned as the
+  video and booked to the session. A clip that an earlier poll or call already
+  paid for is logged at zero cost.
+- **A raw paid POST's challenge is kept per thread and per asyncio task.**
+  Concurrent music calls on one shared client can no longer poll, or fall back
+  to paying, against another call's challenge, and a cached answer no longer
+  inherits a previous call's challenge.
 
 ## 1.18.1 — 2026-10-02
 

@@ -25,6 +25,8 @@ import re
 import sys
 import threading
 from collections.abc import Iterator
+from contextvars import ContextVar
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -73,6 +75,7 @@ from .tx_log import (
 )
 from .types import (
     APIError,
+    BlockrunError,
     ChatCompletionChunk,
     ChatResponse,
     ImageResponse,
@@ -544,6 +547,38 @@ def _is_pending_media_job(data: Any) -> bool:
     )
 
 
+def _quoted_cost_usd(payment_required: Any) -> float | None:
+    """The USD a 402 challenge can cost this wallet, read BEFORE signing.
+
+    The highest amount among the challenge's Solana ``exact`` accepts (the only
+    scheme this client registers), so a spend limit checked against it can
+    never be exceeded by the accept the signer then picks. ``None`` when the
+    challenge has no such accept to read; the caller then checks the signed
+    payload's amount before anything is sent.
+    """
+    amounts: list[int] = []
+    for req in getattr(payment_required, "accepts", None) or ():
+        network = str(getattr(req, "network", "") or "")
+        if getattr(req, "scheme", None) != "exact" or not network.startswith("solana"):
+            continue
+        raw = getattr(req, "amount", None)
+        if raw is None:  # x402 v1 names it max_amount_required
+            raw = getattr(req, "max_amount_required", None)
+        try:
+            amounts.append(int(str(raw)))
+        except (TypeError, ValueError):
+            return None
+    return max(amounts) / 1e6 if amounts else None
+
+
+def _retry_after_seconds(response: Any, cap: float = 120.0) -> float | None:
+    """A response's ``Retry-After`` in seconds (delta-seconds only), capped."""
+    raw = retry_after_of(response)
+    if raw is None or not str(raw).strip().isdigit():
+        return None
+    return min(float(str(raw).strip()), cap)
+
+
 def _assert_same_payment_terms(signed_payload: Any, orig_amount: Any, orig_pay_to: Any) -> None:
     """Guard a mid-poll re-sign: the fresh 402 challenge must charge the same
     amount to the same recipient as the payment originally authorized for this
@@ -726,9 +761,12 @@ class SolanaLLMClient:
         # metadata the shared JSON-only helper would otherwise drop. Read it
         # immediately after the helper returns (no intervening await).
         self._last_raw_headers: httpx.Headers | None = None
-        # (challenge, signed payload) of the most recent raw paid POST, read
-        # the same way: music polls a slow track against the terms it paid.
-        self._last_raw_payment: tuple[Any, Any] | None = None
+        # (challenge, signed payload) of the most recent raw paid POST: music
+        # polls a slow track against the terms it paid. Held per thread / per
+        # asyncio task (see the property), never on the shared client.
+        self._raw_payment_var: ContextVar[tuple[Any, Any] | None] = ContextVar(
+            f"blockrun_raw_payment_{id(self)}", default=None
+        )
 
         # The wallet's ed25519 key, for signing poll ownership proofs
         # (poll_auth.py). None on the account rail and for a signer that does
@@ -760,6 +798,17 @@ class SolanaLLMClient:
         # just the (fast) signing step so a single client can be shared across
         # threads — see _sign_payment.
         self._payment_lock = threading.Lock()
+
+    @property
+    def _last_raw_payment(self) -> tuple[Any, Any] | None:
+        """(challenge, signed payload) of the raw paid POST made by THIS thread
+        or asyncio task. A shared client's concurrent music calls must never
+        poll (or fall back to paying) against another call's challenge."""
+        return self._raw_payment_var.get()
+
+    @_last_raw_payment.setter
+    def _last_raw_payment(self, value: tuple[Any, Any] | None) -> None:
+        self._raw_payment_var.set(value)
 
     def _sign_payment(self, payment_required: Any) -> Any:
         """Thread-safe wrapper around ``x402_client.create_payment_payload``.
@@ -1708,6 +1757,11 @@ class SolanaLLMClient:
         """Make a request with Solana x402 payment, returning raw JSON."""
         from .cache import get_cached, save_to_cache
 
+        # Before the cache check: a cached answer must not inherit a prior
+        # call's paid challenge (music would poll, or fall back to paying,
+        # against it).
+        self._last_raw_payment = None
+
         # Check cache first — don't pay twice for same data
         cached = get_cached(endpoint, body)
         if cached is not None:
@@ -1716,7 +1770,6 @@ class SolanaLLMClient:
         # Reset per-call receipt headers; only a paid retry repopulates them, so
         # a free/cached model can't inherit a prior call's settlement receipt.
         self._last_raw_headers = None
-        self._last_raw_payment = None
 
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
@@ -2130,9 +2183,17 @@ class SolanaLLMClient:
                 raise PaymentError("402 response but no payment requirements found")
 
             payment_required = decode_payment_required_header(payment_header_str)
+            # Spend limits, before signing: image settles at this POST, and a
+            # video's completion payment is pinned to these terms.
+            quote_usd = _quoted_cost_usd(payment_required)
+            if quote_usd is not None:
+                _enforce_spend_limits(self, quote_usd, body.get("model"))
             payment_payload_obj = self._sign_payment(payment_required)
-            encoded_payment = encode_payment_signature_header(payment_payload_obj)
             cost_usd = float(payment_payload_obj.accepted.amount) / 1e6
+            if quote_usd is None:
+                # No readable quote: check the signed amount before it is sent.
+                _enforce_spend_limits(self, cost_usd, body.get("model"))
+            encoded_payment = encode_payment_signature_header(payment_payload_obj)
             # Terms this job is authorized to pay — any mid-poll re-sign must match.
             orig_amount = payment_payload_obj.accepted.amount
             orig_pay_to = payment_payload_obj.accepted.pay_to
@@ -2207,11 +2268,33 @@ class SolanaLLMClient:
         )
 
     def _poll_media_job(
+        self, endpoint: str, body: dict[str, Any], submit_data: dict[str, Any], **kwargs: Any
+    ) -> dict[str, Any]:
+        """Poll an accepted media job; see :meth:`_poll_media_job_impl`.
+
+        Anything that escapes once this job's money moved, or may have moved,
+        is tagged settled (:func:`blockrun_llm.client._mark_settled`) so no
+        fallback chain buys a second job: an image or music job paid at its
+        POST, and a video once its completion payment went out (a paid poll
+        lost in transit may still have settled).
+        """
+        state = SimpleNamespace(completion_sent=False)
+        try:
+            return self._poll_media_job_impl(endpoint, body, submit_data, state=state, **kwargs)
+        except (httpx.HTTPError, BlockrunError) as exc:
+            if state.completion_sent or (
+                kwargs.get("settled_at_submit") and not kwargs.get("account_job")
+            ):
+                _mark_settled(exc)
+            raise
+
+    def _poll_media_job_impl(
         self,
         endpoint: str,
         body: dict[str, Any],
         submit_data: dict[str, Any],
         *,
+        state: Any,
         eff_timeout: float,
         poll_budget_seconds: float | None,
         poll_interval_seconds: float | None,
@@ -2288,6 +2371,10 @@ class SolanaLLMClient:
         # Set when a completed video's 402 was just signed: the next request is
         # that paid GET, sent at once rather than after the poll interval.
         paid_completion_header: str | None = None
+        # The gateway's Retry-After on a paid completion poll it could not
+        # settle yet (a claim held while an earlier settle's outcome is
+        # resolved): honoured by the next ownership poll instead of the interval.
+        next_wait: float | None = None
 
         budget = (
             poll_budget_seconds
@@ -2324,8 +2411,15 @@ class SolanaLLMClient:
                     # signature, and the payment path's 402 re-sign takes over.
                     pass
 
-        while _time.monotonic() < deadline:
+        # A completion payment signed just before the deadline is still sent:
+        # leaving it unsent would strand a finished clip behind a spent signature.
+        while paid_completion_header is not None or _time.monotonic() < deadline:
             sending_paid_completion = paid_completion_header is not None
+            # Whether this request is on the ownership flow (a proof poll, or
+            # the paid completion GET). There, success is a 200: the
+            # completion 402's body already says status "completed", so the
+            # carried-over status alone must never turn an error into a result.
+            ownership_request = ownership or sending_paid_completion
             request_headers: dict[str, str]
             if paid_completion_header is not None:
                 request_headers = {
@@ -2333,8 +2427,10 @@ class SolanaLLMClient:
                     "PAYMENT-SIGNATURE": paid_completion_header,
                 }
                 paid_completion_header = None
+                state.completion_sent = True
             elif ownership and poll_kind is not None:
-                _time.sleep(interval)
+                _time.sleep(interval if next_wait is None else next_wait)
+                next_wait = None
                 request_headers = {
                     "User-Agent": _get_user_agent(),
                     **poll_auth_headers(poll_keypair, poll_kind, poll_job),
@@ -2368,7 +2464,22 @@ class SolanaLLMClient:
                         pass
                 request_headers = poll_headers
 
-            poll_resp = self._client.get(poll_url, headers=request_headers, timeout=eff_timeout)
+            try:
+                poll_resp = self._client.get(poll_url, headers=request_headers, timeout=eff_timeout)
+            except httpx.TransportError as exc:
+                if not sending_paid_completion:
+                    raise
+                # The payment may have reached the gateway and settled, with
+                # only the answer lost. The next ownership poll reads the job's
+                # settlement record: "already settled" (no new charge) or, if
+                # it never settled, a fresh challenge.
+                if completion_payments_left > 0:
+                    continue
+                raise PaymentError(
+                    f"{label}: the paid poll for the finished job failed in transit "
+                    f"({type(exc).__name__}). The payment may have settled: re-poll "
+                    f"{poll_url} with the same wallet before submitting again."
+                ) from exc
             try:
                 poll_data = poll_resp.json()
             except Exception:
@@ -2385,8 +2496,13 @@ class SolanaLLMClient:
                 # fresh challenge, so go back to polling rather than re-signing
                 # blind.
                 if completion_payments_left > 0:
+                    next_wait = _retry_after_seconds(poll_resp)
                     continue
-                raise build_payment_rejected_error(poll_resp)
+                refusal = build_payment_rejected_error(poll_resp)
+                raise PaymentError(
+                    f"{refusal} The payment for the finished job may still settle: "
+                    f"re-poll {poll_url} with the same wallet before submitting again."
+                ) from refusal
 
             if ownership and not sending_paid_completion:
                 if poll_kind is not None and is_poll_ownership_refusal(
@@ -2408,10 +2524,24 @@ class SolanaLLMClient:
                         # for the one payment that settles it.
                         if completion_payments_left <= 0:
                             raise build_payment_rejected_error(poll_resp)
+                        if _time.monotonic() >= deadline:
+                            # Out of budget: sign nothing new (the payment a
+                            # signature is already out for is the timeout's
+                            # concern); the 504 below says how to resume.
+                            break
                         completion_payments_left -= 1
-                        completion_payload = self._sign_payment(
-                            decode_payment_required_header(challenge_header)
+                        completion_required = decode_payment_required_header(challenge_header)
+                        # Spend limits, before signing the one payment that
+                        # settles the clip. The terms guard below pins it to the
+                        # submit's amount, so that is the quote when the
+                        # challenge has none to read.
+                        completion_quote = _quoted_cost_usd(completion_required)
+                        _enforce_spend_limits(
+                            self,
+                            completion_quote if completion_quote is not None else cost_usd,
+                            body.get("model"),
                         )
+                        completion_payload = self._sign_payment(completion_required)
                         if orig_amount is not None:
                             # Same guard as a mid-poll re-sign: the completion
                             # challenge must charge what the submit authorized.
@@ -2487,7 +2617,9 @@ class SolanaLLMClient:
             # gateway settles the moment a poll reports completed, so a
             # completed-but-non-200 poll (which the caller was already charged
             # for) must still be treated as success.
-            if last_status == "completed":
+            if last_status == "completed" and (
+                not ownership_request or poll_resp.status_code == 200
+            ):
                 tx_hash = poll_resp.headers.get("x-payment-receipt") or poll_resp.headers.get(
                     "X-Payment-Receipt"
                 )
@@ -2498,16 +2630,27 @@ class SolanaLLMClient:
                 # An ownership poll can be handed a clip some earlier poll paid
                 # for ("already_settled"); only a payment this call signed is
                 # booked to this session.
-                if not charged_at_submit and (completion_paid or not ownership):
+                paid_by_this_call = completion_paid or not ownership
+                if not charged_at_submit and paid_by_this_call:
                     self._session_calls += 1
                     self._session_total_usd += cost_usd
                     self._last_call_cost = cost_usd
+                # The cost log and transaction log record what this call paid:
+                # nothing, for a clip an earlier poll or call already settled.
+                logged_cost = cost_usd if charged_at_submit or paid_by_this_call else 0.0
                 self._capture_settlement(poll_resp)
-                save_to_cache(endpoint, body, poll_data, cost_usd=cost_usd, **self._billing_meta())
-                self._log_transaction(endpoint, body, poll_data, cost_usd)
+                save_to_cache(
+                    endpoint, body, poll_data, cost_usd=logged_cost, **self._billing_meta()
+                )
+                self._log_transaction(endpoint, body, poll_data, logged_cost)
                 return poll_data
 
-            if poll_resp.status_code in (202, 504):
+            if poll_resp.status_code in (202, 504) or (
+                # A paid or proof poll answered 503 (the gateway's verifier
+                # is briefly down): nothing settled, so it is retriable.
+                ownership_request
+                and poll_resp.status_code == 503
+            ):
                 # 202 = still queued/in_progress; 504 = transient upstream
                 # hiccup. Both are retriable inside the budget.
                 continue
@@ -2543,11 +2686,20 @@ class SolanaLLMClient:
                     )
                     if settled_at_submit
                     else (
-                        f"{label} did not complete within {budget:.0f}s "
-                        f"(last status: {last_status}). Settlement only happens on "
-                        "completion, so no payment was taken. The job stays claimable "
-                        "for ~48h — re-poll poll_url with a fresh signature from the "
-                        "same wallet to fetch (and settle) the finished result."
+                        (
+                            f"{label} did not complete within {budget:.0f}s "
+                            f"(last status: {last_status}). A payment for the finished job "
+                            "was sent and may still settle: re-poll poll_url with the same "
+                            "wallet before submitting again (no new charge if it settled)."
+                        )
+                        if state.completion_sent
+                        else (
+                            f"{label} did not complete within {budget:.0f}s "
+                            f"(last status: {last_status}). Settlement only happens on "
+                            "completion, so no payment was taken. The job stays claimable "
+                            "for ~48h — re-poll poll_url with a fresh signature from the "
+                            "same wallet to fetch (and settle) the finished result."
+                        )
                     )
                 )
             ),
@@ -3816,9 +3968,12 @@ class AsyncSolanaLLMClient:
         # metadata the shared JSON-only helper would otherwise drop. Read it
         # immediately after the helper returns (no intervening await).
         self._last_raw_headers: httpx.Headers | None = None
-        # (challenge, signed payload) of the most recent raw paid POST, read
-        # the same way: music polls a slow track against the terms it paid.
-        self._last_raw_payment: tuple[Any, Any] | None = None
+        # (challenge, signed payload) of the most recent raw paid POST: music
+        # polls a slow track against the terms it paid. Held per thread / per
+        # asyncio task (see the property), never on the shared client.
+        self._raw_payment_var: ContextVar[tuple[Any, Any] | None] = ContextVar(
+            f"blockrun_raw_payment_{id(self)}", default=None
+        )
 
         # The wallet's ed25519 key for poll ownership proofs; see the sync class.
         self._poll_keypair: Any = None
@@ -3846,6 +4001,17 @@ class AsyncSolanaLLMClient:
         # construction time). Serializes the async signing critical section so a
         # shared client is safe across concurrent coroutines — see _sign_payment.
         self._payment_lock: asyncio.Lock | None = None
+
+    @property
+    def _last_raw_payment(self) -> tuple[Any, Any] | None:
+        """(challenge, signed payload) of the raw paid POST made by THIS thread
+        or asyncio task. A shared client's concurrent music calls must never
+        poll (or fall back to paying) against another call's challenge."""
+        return self._raw_payment_var.get()
+
+    @_last_raw_payment.setter
+    def _last_raw_payment(self, value: tuple[Any, Any] | None) -> None:
+        self._raw_payment_var.set(value)
 
     async def _sign_payment(self, payment_required: Any) -> Any:
         """Task-safe async wrapper around ``x402_client.create_payment_payload``.
@@ -4638,6 +4804,9 @@ class AsyncSolanaLLMClient:
         the sync :class:`SolanaLLMClient` helper)."""
         from .cache import get_cached, save_to_cache
 
+        # Before the cache check: see the sync helper.
+        self._last_raw_payment = None
+
         cached = get_cached(endpoint, body)
         if cached is not None:
             return cached
@@ -4645,7 +4814,6 @@ class AsyncSolanaLLMClient:
         # Reset per-call receipt headers; only a paid retry repopulates them, so
         # a free/cached model can't inherit a prior call's settlement receipt.
         self._last_raw_headers = None
-        self._last_raw_payment = None
 
         url = f"{self._api_url}{endpoint}"
         headers = {"Content-Type": "application/json", "User-Agent": _get_user_agent()}
@@ -5573,9 +5741,15 @@ class AsyncSolanaLLMClient:
             if not probe_payment_header:
                 raise PaymentError("402 response but no payment requirements found")
             payment_required = decode_payment_required_header(probe_payment_header)
+            # Spend limits, before signing (see the sync helper).
+            quote_usd = _quoted_cost_usd(payment_required)
+            if quote_usd is not None:
+                _enforce_spend_limits(self, quote_usd, body.get("model"))
             payment_payload_obj = await self._sign_payment(payment_required)
-            encoded_payment = encode_payment_signature_header(payment_payload_obj)
             cost_usd = float(payment_payload_obj.accepted.amount) / 1e6
+            if quote_usd is None:
+                _enforce_spend_limits(self, cost_usd, body.get("model"))
+            encoded_payment = encode_payment_signature_header(payment_payload_obj)
             # Terms this job is authorized to pay — any mid-poll re-sign must match.
             orig_amount = payment_payload_obj.accepted.amount
             orig_pay_to = payment_payload_obj.accepted.pay_to
@@ -5649,11 +5823,35 @@ class AsyncSolanaLLMClient:
         )
 
     async def _poll_media_job(
+        self, endpoint: str, body: dict[str, Any], submit_data: dict[str, Any], **kwargs: Any
+    ) -> dict[str, Any]:
+        """Poll an accepted media job; see :meth:`_poll_media_job_impl`.
+
+        Anything that escapes once this job's money moved, or may have moved,
+        is tagged settled (:func:`blockrun_llm.client._mark_settled`) so no
+        fallback chain buys a second job: an image or music job paid at its
+        POST, and a video once its completion payment went out (a paid poll
+        lost in transit may still have settled).
+        """
+        state = SimpleNamespace(completion_sent=False)
+        try:
+            return await self._poll_media_job_impl(
+                endpoint, body, submit_data, state=state, **kwargs
+            )
+        except (httpx.HTTPError, BlockrunError) as exc:
+            if state.completion_sent or (
+                kwargs.get("settled_at_submit") and not kwargs.get("account_job")
+            ):
+                _mark_settled(exc)
+            raise
+
+    async def _poll_media_job_impl(
         self,
         endpoint: str,
         body: dict[str, Any],
         submit_data: dict[str, Any],
         *,
+        state: Any,
         eff_timeout: float,
         poll_budget_seconds: float | None,
         poll_interval_seconds: float | None,
@@ -5731,6 +5929,10 @@ class AsyncSolanaLLMClient:
         # Set when a completed video's 402 was just signed: the next request is
         # that paid GET, sent at once rather than after the poll interval.
         paid_completion_header: str | None = None
+        # The gateway's Retry-After on a paid completion poll it could not
+        # settle yet (a claim held while an earlier settle's outcome is
+        # resolved): honoured by the next ownership poll instead of the interval.
+        next_wait: float | None = None
 
         budget = (
             poll_budget_seconds
@@ -5767,8 +5969,15 @@ class AsyncSolanaLLMClient:
                     # signature, and the payment path's 402 re-sign takes over.
                     pass
 
-        while _time.monotonic() < deadline:
+        # A completion payment signed just before the deadline is still sent:
+        # leaving it unsent would strand a finished clip behind a spent signature.
+        while paid_completion_header is not None or _time.monotonic() < deadline:
             sending_paid_completion = paid_completion_header is not None
+            # Whether this request is on the ownership flow (a proof poll, or
+            # the paid completion GET). There, success is a 200: the
+            # completion 402's body already says status "completed", so the
+            # carried-over status alone must never turn an error into a result.
+            ownership_request = ownership or sending_paid_completion
             request_headers: dict[str, str]
             if paid_completion_header is not None:
                 request_headers = {
@@ -5776,8 +5985,10 @@ class AsyncSolanaLLMClient:
                     "PAYMENT-SIGNATURE": paid_completion_header,
                 }
                 paid_completion_header = None
+                state.completion_sent = True
             elif ownership and poll_kind is not None:
-                await asyncio.sleep(interval)
+                await asyncio.sleep(interval if next_wait is None else next_wait)
+                next_wait = None
                 request_headers = {
                     "User-Agent": _get_user_agent(),
                     **poll_auth_headers(poll_keypair, poll_kind, poll_job),
@@ -5812,9 +6023,22 @@ class AsyncSolanaLLMClient:
                         pass
                 request_headers = poll_headers
 
-            poll_resp = await self._client.get(
-                poll_url, headers=request_headers, timeout=eff_timeout
-            )
+            try:
+                poll_resp = await self._client.get(
+                    poll_url, headers=request_headers, timeout=eff_timeout
+                )
+            except httpx.TransportError as exc:
+                if not sending_paid_completion:
+                    raise
+                # See the sync helper: the payment may have settled; the next
+                # ownership poll reads the job's settlement record.
+                if completion_payments_left > 0:
+                    continue
+                raise PaymentError(
+                    f"{label}: the paid poll for the finished job failed in transit "
+                    f"({type(exc).__name__}). The payment may have settled: re-poll "
+                    f"{poll_url} with the same wallet before submitting again."
+                ) from exc
             try:
                 poll_data = poll_resp.json()
             except Exception:
@@ -5831,8 +6055,13 @@ class AsyncSolanaLLMClient:
                 # fresh challenge, so go back to polling rather than re-signing
                 # blind.
                 if completion_payments_left > 0:
+                    next_wait = _retry_after_seconds(poll_resp)
                     continue
-                raise build_payment_rejected_error(poll_resp)
+                refusal = build_payment_rejected_error(poll_resp)
+                raise PaymentError(
+                    f"{refusal} The payment for the finished job may still settle: "
+                    f"re-poll {poll_url} with the same wallet before submitting again."
+                ) from refusal
 
             if ownership and not sending_paid_completion:
                 if poll_kind is not None and is_poll_ownership_refusal(
@@ -5854,10 +6083,24 @@ class AsyncSolanaLLMClient:
                         # for the one payment that settles it.
                         if completion_payments_left <= 0:
                             raise build_payment_rejected_error(poll_resp)
+                        if _time.monotonic() >= deadline:
+                            # Out of budget: sign nothing new (the payment a
+                            # signature is already out for is the timeout's
+                            # concern); the 504 below says how to resume.
+                            break
                         completion_payments_left -= 1
-                        completion_payload = await self._sign_payment(
-                            decode_payment_required_header(challenge_header)
+                        completion_required = decode_payment_required_header(challenge_header)
+                        # Spend limits, before signing the one payment that
+                        # settles the clip. The terms guard below pins it to the
+                        # submit's amount, so that is the quote when the
+                        # challenge has none to read.
+                        completion_quote = _quoted_cost_usd(completion_required)
+                        _enforce_spend_limits(
+                            self,
+                            completion_quote if completion_quote is not None else cost_usd,
+                            body.get("model"),
                         )
+                        completion_payload = await self._sign_payment(completion_required)
                         if orig_amount is not None:
                             # Same guard as a mid-poll re-sign: the completion
                             # challenge must charge what the submit authorized.
@@ -5933,7 +6176,9 @@ class AsyncSolanaLLMClient:
             # gateway settles the moment a poll reports completed, so a
             # completed-but-non-200 poll (which the caller was already charged
             # for) must still be treated as success.
-            if last_status == "completed":
+            if last_status == "completed" and (
+                not ownership_request or poll_resp.status_code == 200
+            ):
                 tx_hash = poll_resp.headers.get("x-payment-receipt") or poll_resp.headers.get(
                     "X-Payment-Receipt"
                 )
@@ -5944,16 +6189,27 @@ class AsyncSolanaLLMClient:
                 # An ownership poll can be handed a clip some earlier poll paid
                 # for ("already_settled"); only a payment this call signed is
                 # booked to this session.
-                if not charged_at_submit and (completion_paid or not ownership):
+                paid_by_this_call = completion_paid or not ownership
+                if not charged_at_submit and paid_by_this_call:
                     self._session_calls += 1
                     self._session_total_usd += cost_usd
                     self._last_call_cost = cost_usd
+                # The cost log and transaction log record what this call paid:
+                # nothing, for a clip an earlier poll or call already settled.
+                logged_cost = cost_usd if charged_at_submit or paid_by_this_call else 0.0
                 self._capture_settlement(poll_resp)
-                save_to_cache(endpoint, body, poll_data, cost_usd=cost_usd, **self._billing_meta())
-                self._log_transaction(endpoint, body, poll_data, cost_usd)
+                save_to_cache(
+                    endpoint, body, poll_data, cost_usd=logged_cost, **self._billing_meta()
+                )
+                self._log_transaction(endpoint, body, poll_data, logged_cost)
                 return poll_data
 
-            if poll_resp.status_code in (202, 504):
+            if poll_resp.status_code in (202, 504) or (
+                # A paid or proof poll answered 503 (the gateway's verifier
+                # is briefly down): nothing settled, so it is retriable.
+                ownership_request
+                and poll_resp.status_code == 503
+            ):
                 # 202 = still queued/in_progress; 504 = transient upstream
                 # hiccup. Both are retriable inside the budget.
                 continue
@@ -5989,11 +6245,20 @@ class AsyncSolanaLLMClient:
                     )
                     if settled_at_submit
                     else (
-                        f"{label} did not complete within {budget:.0f}s "
-                        f"(last status: {last_status}). Settlement only happens on "
-                        "completion, so no payment was taken. The job stays claimable "
-                        "for ~48h — re-poll poll_url with a fresh signature from the "
-                        "same wallet to fetch (and settle) the finished result."
+                        (
+                            f"{label} did not complete within {budget:.0f}s "
+                            f"(last status: {last_status}). A payment for the finished job "
+                            "was sent and may still settle: re-poll poll_url with the same "
+                            "wallet before submitting again (no new charge if it settled)."
+                        )
+                        if state.completion_sent
+                        else (
+                            f"{label} did not complete within {budget:.0f}s "
+                            f"(last status: {last_status}). Settlement only happens on "
+                            "completion, so no payment was taken. The job stays claimable "
+                            "for ~48h — re-poll poll_url with a fresh signature from the "
+                            "same wallet to fetch (and settle) the finished result."
+                        )
                     )
                 )
             ),

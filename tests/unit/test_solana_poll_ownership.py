@@ -885,3 +885,495 @@ class TestOtherRails:
         client._request_image_with_payment("/v1/images/generations", dict(_IMAGE_BODY), **_IMAGE_KW)
         assert len(polls) == 1 and not has_proof(polls[0])
         assert "PAYMENT-SIGNATURE" not in polls[0].headers
+
+
+# ---------------------------------------------------------------------------
+# Money already moved (or may have): a lost paid poll, logging, timeouts
+# ---------------------------------------------------------------------------
+
+
+class LostPaidPollGateway(FakeVideoGateway):
+    """The paid completion poll reaches the gateway, which settles it, but the
+    answer is lost in transit (``settles=True``); or it never arrives and
+    nothing settles (``settles=False``)."""
+
+    def __init__(self, wallet: str, *, settles: bool, **kw: Any) -> None:
+        super().__init__(wallet, **kw)
+        self.settles = settles
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and "PAYMENT-SIGNATURE" in request.headers:
+            self.paid_polls.append(request)
+            if self.settles:
+                self.settled = True
+            raise httpx.ReadTimeout("answer lost", request=request)
+        return super().__call__(request)
+
+
+def _is_tagged_settled(exc: BaseException) -> bool:
+    return bool(getattr(exc, "blockrun_payment_settled", False))
+
+
+class TestPaidCompletionInDoubt:
+    def test_lost_paid_poll_resumes_and_delivers_without_paying_again(self) -> None:
+        kp = Keypair()
+        gw = LostPaidPollGateway(str(kp.pubkey()), settles=True, pending=1)
+        client = _make_client(gw, keypair=kp)
+
+        data = client._request_image_with_payment(
+            "/v1/videos/generations", dict(_VIDEO_BODY), **_VIDEO_KW
+        )
+
+        assert data["payment"]["status"] == "already_settled"
+        # The submit and ONE completion payment; the next proof poll found it settled.
+        assert _signed_challenges(client) == ["submit-challenge", "completion-challenge-2"]
+        assert len(gw.paid_polls) == 1
+        assert client._session_calls == 1
+        assert client._session_total_usd == pytest.approx(1.0)
+
+    async def test_async_lost_paid_poll_resumes_and_delivers(self) -> None:
+        kp = Keypair()
+        gw = LostPaidPollGateway(str(kp.pubkey()), settles=True, pending=1)
+        client = _make_async_client(gw, keypair=kp)
+        try:
+            data = await client._request_image_with_payment(
+                "/v1/videos/generations", dict(_VIDEO_BODY), **_VIDEO_KW
+            )
+        finally:
+            await client._client.aclose()
+
+        assert data["payment"]["status"] == "already_settled"
+        assert _signed_challenges(client) == ["submit-challenge", "completion-challenge-2"]
+        assert client._session_calls == 1
+
+    def test_lost_paid_polls_exhausted_raise_tagged_possibly_charged(self) -> None:
+        kp = Keypair()
+        gw = LostPaidPollGateway(str(kp.pubkey()), settles=False, pending=0)
+        client = _make_client(gw, keypair=kp)
+
+        with pytest.raises(PaymentError, match="may have settled") as info:
+            client._request_image_with_payment(
+                "/v1/videos/generations", dict(_VIDEO_BODY), **_VIDEO_KW
+            )
+
+        assert _is_tagged_settled(info.value)
+        assert len(gw.paid_polls) == 3  # 1 + max_resigns, then stop
+
+    async def test_async_lost_paid_polls_exhausted_raise_tagged(self) -> None:
+        kp = Keypair()
+        gw = LostPaidPollGateway(str(kp.pubkey()), settles=False, pending=0)
+        client = _make_async_client(gw, keypair=kp)
+        try:
+            with pytest.raises(PaymentError, match="may have settled") as info:
+                await client._request_image_with_payment(
+                    "/v1/videos/generations", dict(_VIDEO_BODY), **_VIDEO_KW
+                )
+        finally:
+            await client._client.aclose()
+
+        assert _is_tagged_settled(info.value)
+        assert len(gw.paid_polls) == 3
+
+    def test_refused_completion_payments_are_tagged(self) -> None:
+        kp = Keypair()
+        gw = FakeVideoGateway(str(kp.pubkey()), pending=0, refuse_payments=True)
+        client = _make_client(gw, keypair=kp)
+
+        with pytest.raises(PaymentError) as info:
+            client._request_image_with_payment(
+                "/v1/videos/generations", dict(_VIDEO_BODY), **_VIDEO_KW
+            )
+        # A payment for the finished job went out: no fallback chain may buy
+        # another job on top of it.
+        assert _is_tagged_settled(info.value)
+
+    @pytest.mark.parametrize("use_async", [False, True])
+    async def test_budget_runs_out_after_the_completion_payment(self, use_async: bool) -> None:
+        # Every paid poll hears "settlement in progress" with a Retry-After
+        # longer than the budget: the call ends, but a payment is out there.
+        kp = Keypair()
+        gw = FakeVideoGateway(str(kp.pubkey()), pending=0)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET" and "PAYMENT-SIGNATURE" in request.headers:
+                gw.paid_polls.append(request)
+                return _json(
+                    402, {"error": "Payment settlement in progress"}, **{"retry-after": "1"}
+                )
+            return gw(request)
+
+        kw = {**_VIDEO_KW, "poll_budget_seconds": 0.3}
+        if use_async:
+            aclient = _make_async_client(handler, keypair=kp)
+            try:
+                with pytest.raises(APIError) as info:
+                    await aclient._request_image_with_payment(
+                        "/v1/videos/generations", dict(_VIDEO_BODY), **kw
+                    )
+            finally:
+                await aclient._client.aclose()
+        else:
+            client = _make_client(handler, keypair=kp)
+            with pytest.raises(APIError) as info:
+                client._request_image_with_payment(
+                    "/v1/videos/generations", dict(_VIDEO_BODY), **kw
+                )
+
+        assert info.value.status_code == 504
+        assert "may still settle" in str(info.value)
+        assert "no payment was taken" not in str(info.value)
+        assert _is_tagged_settled(info.value)
+        # The Retry-After was honoured: one paid poll, not one per interval.
+        assert len(gw.paid_polls) == 1
+
+    @pytest.mark.parametrize("use_async", [False, True])
+    async def test_clip_settled_elsewhere_is_logged_at_zero_cost(self, use_async: bool) -> None:
+        # The first proof poll finds the job already paid (an earlier call or
+        # poll settled it): this call paid nothing and must not log a charge.
+        kp = Keypair()
+        gw = FakeVideoGateway(str(kp.pubkey()), pending=0)
+        gw.settled = True
+        logged: list[float] = []
+        cached: list[float] = []
+
+        def fake_save(*a: Any, cost_usd: float = -1.0, **k: Any) -> None:
+            cached.append(cost_usd)
+
+        with mock.patch("blockrun_llm.cache.save_to_cache", fake_save):
+            if use_async:
+                aclient = _make_async_client(gw, keypair=kp)
+                aclient._log_transaction = lambda e, b, r, cost: logged.append(cost)  # type: ignore[method-assign]
+                try:
+                    await aclient._request_image_with_payment(
+                        "/v1/videos/generations", dict(_VIDEO_BODY), **_VIDEO_KW
+                    )
+                finally:
+                    await aclient._client.aclose()
+                assert aclient._session_calls == 0
+            else:
+                client = _make_client(gw, keypair=kp)
+                client._log_transaction = lambda e, b, r, cost: logged.append(cost)  # type: ignore[method-assign]
+                client._request_image_with_payment(
+                    "/v1/videos/generations", dict(_VIDEO_BODY), **_VIDEO_KW
+                )
+                assert client._session_calls == 0
+
+        assert logged == [0.0]
+        assert cached == [0.0]
+        assert gw.paid_polls == []
+
+
+# ---------------------------------------------------------------------------
+# Spend limits: image and video refuse BEFORE signing
+# ---------------------------------------------------------------------------
+
+
+class _Challenge(dict):
+    """A decoded 402 the stubbed codec can carry, with readable x402 accepts."""
+
+    def __init__(self, header: str, amount: str = "1000000") -> None:
+        super().__init__(challenge=header)
+        self.accepts = [
+            SimpleNamespace(scheme="exact", network="solana:mainnet", amount=amount),
+        ]
+
+
+@pytest.fixture
+def _readable_quotes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "blockrun_llm.solana_client.decode_payment_required_header",
+        lambda header: _Challenge(header),
+    )
+
+
+def _limit(client: Any, *, per_call: float | None = None, session: float | None = None) -> None:
+    client._max_cost_per_call = per_call
+    client._max_session_cost = session
+
+
+class TestSpendLimits:
+    @pytest.mark.usefixtures("_readable_quotes")
+    @pytest.mark.parametrize("use_async", [False, True])
+    @pytest.mark.parametrize("method", ["image", "video"])
+    async def test_per_call_limit_refuses_before_signing(
+        self, use_async: bool, method: str
+    ) -> None:
+        from blockrun_llm.types import SpendLimitError
+
+        kp = Keypair()
+        if method == "image":
+            gw: Any = FakePaidAtPostGateway("image", "images", str(kp.pubkey()), done=_IMAGE_DONE)
+        else:
+            gw = FakeVideoGateway(str(kp.pubkey()))
+        sent: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return gw(request)
+
+        client: Any = (_make_async_client if use_async else _make_client)(handler, keypair=kp)
+        _limit(client, per_call=0.5)
+        try:
+            with pytest.raises(SpendLimitError):
+                call = getattr(client, method)("a cat")
+                if use_async:
+                    await call
+        finally:
+            if use_async:
+                await client._client.aclose()
+
+        assert _signed_challenges(client) == []  # refused before signing
+        assert all("PAYMENT-SIGNATURE" not in r.headers for r in sent)
+        assert client._session_total_usd == 0
+
+    @pytest.mark.parametrize("use_async", [False, True])
+    async def test_unreadable_quote_is_checked_before_sending(self, use_async: bool) -> None:
+        # The stub codec's challenge has no accepts: the signed amount is
+        # checked instead, still before the paid POST goes out.
+        from blockrun_llm.types import SpendLimitError
+
+        kp = Keypair()
+        gw = FakePaidAtPostGateway("image", "images", str(kp.pubkey()), done=_IMAGE_DONE)
+        sent: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return gw(request)
+
+        client: Any = (_make_async_client if use_async else _make_client)(handler, keypair=kp)
+        _limit(client, session=1.5)
+        client._session_total_usd = 1.0
+        try:
+            with pytest.raises(SpendLimitError):
+                call = client.image("a cat")
+                if use_async:
+                    await call
+        finally:
+            if use_async:
+                await client._client.aclose()
+
+        assert all("PAYMENT-SIGNATURE" not in r.headers for r in sent)
+        assert client._session_total_usd == pytest.approx(1.0)
+
+    @pytest.mark.usefixtures("_readable_quotes")
+    @pytest.mark.parametrize("use_async", [False, True])
+    async def test_session_limit_refuses_the_completion_payment(self, use_async: bool) -> None:
+        # The submit fits the session budget; other calls spend while the clip
+        # renders, so the completion payment would breach it. Refused before
+        # the completion challenge is signed; the job stays claimable.
+        from blockrun_llm.types import SpendLimitError
+
+        kp = Keypair()
+        gw = FakeVideoGateway(str(kp.pubkey()), pending=1)
+        holder: dict[str, Any] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET" and has_proof(request):
+                holder["client"]._session_total_usd = 1.0  # spent elsewhere meanwhile
+            return gw(request)
+
+        client: Any = (_make_async_client if use_async else _make_client)(handler, keypair=kp)
+        holder["client"] = client
+        _limit(client, session=1.5)
+        try:
+            with pytest.raises(SpendLimitError) as info:
+                call = client._request_image_with_payment(
+                    "/v1/videos/generations", dict(_VIDEO_BODY), **_VIDEO_KW
+                )
+                if use_async:
+                    await call
+        finally:
+            if use_async:
+                await client._client.aclose()
+
+        assert _signed_challenges(client) == ["submit-challenge"]
+        assert gw.paid_polls == []
+        assert not _is_tagged_settled(info.value)
+
+
+# ---------------------------------------------------------------------------
+# The raw paid POST's challenge is per thread / task, and never cached over
+# ---------------------------------------------------------------------------
+
+
+class TestRawPaymentIsolation:
+    def test_another_thread_never_sees_this_threads_payment(self) -> None:
+        import threading
+
+        client = _make_client(lambda r: _json(200, {}), keypair=Keypair())
+        client._last_raw_payment = ("challenge-A", "payload-A")
+        seen: list[Any] = []
+        t = threading.Thread(target=lambda: seen.append(client._last_raw_payment))
+        t.start()
+        t.join()
+
+        assert seen == [None]
+        assert client._last_raw_payment == ("challenge-A", "payload-A")
+
+    async def test_another_task_never_sees_this_tasks_payment(self) -> None:
+        import asyncio
+
+        client = _make_async_client(lambda r: _json(200, {}), keypair=Keypair())
+        try:
+            gate = asyncio.Event()
+
+            async def payer() -> None:
+                client._last_raw_payment = ("challenge-A", "payload-A")
+                gate.set()
+
+            async def other() -> Any:
+                await gate.wait()
+                return client._last_raw_payment
+
+            _, seen = await asyncio.gather(payer(), other())
+        finally:
+            await client._client.aclose()
+        assert seen is None
+
+    def test_a_cache_hit_does_not_inherit_a_prior_payment(self) -> None:
+        client = _make_client(lambda r: _json(200, {}), keypair=Keypair())
+        client._last_raw_payment = ("old-challenge", "old-payload")
+        with mock.patch("blockrun_llm.cache.get_cached", lambda *a, **k: {"cached": True}):
+            client._request_with_payment_raw_once("/v1/audio/generations", {"prompt": "x"})
+        assert client._last_raw_payment is None
+
+
+# ---------------------------------------------------------------------------
+# The completion 402 says status "completed": that is not a delivered clip
+# ---------------------------------------------------------------------------
+
+
+class TestCompletedIsNotDelivered:
+    @pytest.mark.parametrize("use_async", [False, True])
+    async def test_verifier_outage_on_the_paid_poll_is_retried_not_returned(
+        self, use_async: bool
+    ) -> None:
+        # The paid GET answers 503 (no status field) once; the clip is then
+        # paid and delivered. The 503 body must never be returned as the video.
+        kp = Keypair()
+        gw = FakeVideoGateway(str(kp.pubkey()), pending=0)
+        outage = {"left": 1}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if (
+                request.method == "GET"
+                and "PAYMENT-SIGNATURE" in request.headers
+                and outage["left"]
+            ):
+                outage["left"] -= 1
+                return _json(503, {"error": "Payment verification temporarily unavailable"})
+            return gw(request)
+
+        client: Any = (_make_async_client if use_async else _make_client)(handler, keypair=kp)
+        try:
+            call = client._request_image_with_payment(
+                "/v1/videos/generations", dict(_VIDEO_BODY), **_VIDEO_KW
+            )
+            data = await call if use_async else call
+        finally:
+            if use_async:
+                await client._client.aclose()
+
+        assert data["data"][0]["url"] == "https://cdn/v.mp4"
+        assert client._session_calls == 1
+        assert client._session_total_usd == pytest.approx(1.0)
+
+    @pytest.mark.parametrize("use_async", [False, True])
+    @pytest.mark.parametrize("status", [500, 524])
+    async def test_an_error_after_the_paid_poll_raises_tagged(
+        self, use_async: bool, status: int
+    ) -> None:
+        kp = Keypair()
+        gw = FakeVideoGateway(str(kp.pubkey()), pending=0)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET" and "PAYMENT-SIGNATURE" in request.headers:
+                gw.paid_polls.append(request)
+                return httpx.Response(status, text="<html>edge error</html>")
+            return gw(request)
+
+        client: Any = (_make_async_client if use_async else _make_client)(handler, keypair=kp)
+        try:
+            with pytest.raises(APIError) as info:
+                call = client._request_image_with_payment(
+                    "/v1/videos/generations", dict(_VIDEO_BODY), **_VIDEO_KW
+                )
+                if use_async:
+                    await call
+        finally:
+            if use_async:
+                await client._client.aclose()
+
+        assert info.value.status_code == status
+        assert _is_tagged_settled(info.value)
+        assert client._session_calls == 0 and client._session_total_usd == 0
+
+
+@pytest.mark.usefixtures("_fast_audio_polls")
+class TestMusicFallbackRefusal:
+    @pytest.mark.parametrize("use_async", [False, True])
+    async def test_a_refused_fallback_payment_is_tagged_paid(self, use_async: bool) -> None:
+        # The track was paid at POST; the proof is refused and the fallback's
+        # verify-only payment poll is rejected (the wallet just spent its USDC).
+        kp = Keypair()
+        gw = FakePaidAtPostGateway(
+            "audio", "audio", str(kp.pubkey()), done=_MUSIC_DONE, refuse_proofs=True
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET" and "PAYMENT-SIGNATURE" in request.headers:
+                gw.paid_polls.append(request)
+                return _json(
+                    402,
+                    {"error": "Payment verification failed", "details": "insufficient_funds"},
+                )
+            return gw(request)
+
+        client: Any = (_make_async_client if use_async else _make_client)(handler, keypair=kp)
+        try:
+            with pytest.raises(PaymentError) as info:
+                call = client.music("lo-fi beats")
+                if use_async:
+                    await call
+        finally:
+            if use_async:
+                await client._client.aclose()
+
+        assert _is_tagged_settled(info.value)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+async def test_a_completion_payment_signed_at_the_deadline_is_still_sent(
+    use_async: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The budget expires while the completion challenge is being signed: the
+    # signed payment must still go out and deliver the clip.
+    kp = Keypair()
+    gw = FakeVideoGateway(str(kp.pubkey()), pending=0)
+    real_monotonic = time.monotonic
+    clock = {"skew": 0.0}
+    # Only ever jumps forward, so the event loop's timers stay sane.
+    monkeypatch.setattr(time, "monotonic", lambda: real_monotonic() + clock["skew"])
+
+    def slow_sign(challenge: dict[str, str]) -> SimpleNamespace:
+        if challenge["challenge"].startswith("completion"):
+            clock["skew"] += 3600.0  # well past any budget
+        return _payload_for(challenge)
+
+    client: Any = (_make_async_client if use_async else _make_client)(gw, keypair=kp)
+    if use_async:
+        client._x402_client.create_payment_payload = mock.AsyncMock(side_effect=slow_sign)
+    else:
+        client._x402_client.create_payment_payload.side_effect = slow_sign
+    try:
+        call = client._request_image_with_payment(
+            "/v1/videos/generations", dict(_VIDEO_BODY), **_VIDEO_KW
+        )
+        data = await call if use_async else call
+    finally:
+        if use_async:
+            await client._client.aclose()
+
+    assert data["data"][0]["url"] == "https://cdn/v.mp4"
+    assert len(gw.paid_polls) == 1
+    assert client._session_calls == 1
