@@ -136,16 +136,17 @@ def _create_signer(private_key: str) -> KeypairSigner:
     try:
         return KeypairSigner.from_base58(private_key)
     except (ValueError, Exception):
-        # Fallback: might be a 32-byte seed (agentcash, etc.)
-        import base58 as b58
+        # Fallback: might be a 32-byte seed (agentcash, etc.). Decoded with
+        # solders (a 32-byte base58 string parses as a Pubkey) rather than the
+        # `base58` package, which is not a declared dependency: a clean install
+        # refused every seed-only key as invalid.
         from solders.keypair import Keypair
+        from solders.pubkey import Pubkey
 
-        decoded = b58.b58decode(private_key)
-        if len(decoded) == 32:
-            kp = Keypair.from_seed(decoded)
-            full_key = b58.b58encode(bytes(kp)).decode()
-            return KeypairSigner.from_base58(full_key)
-        raise
+        # Anything that is not 32 bytes of base58 raises; the caller turns it
+        # into "Invalid Solana private key".
+        seed = bytes(Pubkey.from_string(private_key.strip()))
+        return KeypairSigner.from_base58(str(Keypair.from_seed(seed)))
 
 
 DEFAULT_MAX_TOKENS = 1024
