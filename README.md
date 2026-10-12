@@ -437,7 +437,8 @@ One call, no separate pay step.
 
 #### Pay the actual cost: x402 `upto` (Base)
 
-By default (`payment_scheme="auto"`) a chat call whose 402 also offers the x402
+Upto is **opt-in**: build the client with `payment_scheme="auto"` (or set
+`BLOCKRUN_PAYMENT_SCHEME=auto`), and a chat call whose 402 also offers the x402
 `upto` scheme pays with a Permit2 signature for a **ceiling** instead of an
 `exact` EIP-3009 transfer for a fixed quote. The gateway then settles the
 **actual** cost after the call — never more than the ceiling — so discounts it
@@ -446,8 +447,9 @@ only learns afterwards, such as prompt-cache hits, reach you.
 Upto is not always cheaper. The `exact` quote prices output at a tenth of your
 `max_tokens`; under upto you pay for the output you actually got. A short or
 cache-hit answer costs less than exact, a long one costs more (up to the
-ceiling, which prices the full `max_tokens`). If you need the fixed quote, pass
-`payment_scheme="exact"`. The gateway lists `exact` first; upto is taken only
+ceiling, which prices the full `max_tokens`), and a stream counts its full
+ceiling against your spend limits. That is why the default stays `"exact"`, the
+fixed quote. With `"auto"`, the gateway lists `exact` first; upto is taken only
 when all of these hold:
 
 - the 402 offers an EVM `upto` requirement with `extra.facilitatorAddress`, for
@@ -474,13 +476,16 @@ USDC permit nonce — a second permit over the same nonce would revert on-chain.
 So concurrent or not-yet-settled calls that would need a permit pay `exact`
 (the SDK watches the on-chain nonce, and gives up on a permit at its deadline;
 concurrent calls in one client claim the permit slot before reading the chain).
-Calls where Permit2 can already pull the ceiling are unaffected. These guards
+A call that Permit2 can already pull for without a permit also pays `exact`
+while a permit is in flight, and a permit waits while such a call is
+unsettled: a landing permit resets the allowance the other call would pull.
+These guards
 are per process: several processes paying from one wallet can still collide
 (a call fails; nobody is overcharged), so run one paying process per wallet or
 use `exact` there.
 
 ```python
-LLMClient(payment_scheme="exact")   # opt out; or BLOCKRUN_PAYMENT_SCHEME=exact
+LLMClient(payment_scheme="auto")   # opt in; or BLOCKRUN_PAYMENT_SCHEME=auto
 ```
 
 The signed ceiling is an upper bound, not a charge. `ChatResponse.payment_scheme`

@@ -198,13 +198,18 @@ def verify_failed() -> httpx.Response:
     )
 
 
+# Upto is opt-in, so these helpers build a client that opted in. A test of the
+# default passes payment_scheme=None explicitly, which resolves it as a caller
+# who never set it would.
 def sync_client(gw: Gateway, **kwargs: Any) -> LLMClient:
+    kwargs.setdefault("payment_scheme", "auto")
     client = LLMClient(private_key=TEST_PRIVATE_KEY, **kwargs)
     client._client = httpx.Client(transport=httpx.MockTransport(gw))
     return client
 
 
 def async_client(gw: Gateway, **kwargs: Any) -> AsyncLLMClient:
+    kwargs.setdefault("payment_scheme", "auto")
     client = AsyncLLMClient(private_key=TEST_PRIVATE_KEY, **kwargs)
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(gw))
     return client
@@ -220,6 +225,7 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.delenv(upto.PAYMENT_SCHEME_ENV, raising=False)
     upto._PERMITS_IN_FLIGHT.clear()
     upto._PERMIT_PREFLIGHT.clear()
+    upto._NO_PERMIT_IN_FLIGHT.clear()
 
     def no_network(*_a: Any, **_kw: Any) -> Any:
         raise AssertionError("unmocked chain read")
@@ -229,6 +235,7 @@ def _isolate(tmp_path, monkeypatch):
     yield
     upto._PERMITS_IN_FLIGHT.clear()
     upto._PERMIT_PREFLIGHT.clear()
+    upto._NO_PERMIT_IN_FLIGHT.clear()
 
 
 class Chain:
@@ -250,7 +257,7 @@ class Chain:
         if self.fail:
             raise upto.UptoUnavailable("every RPC failed")
         assert owner == TEST_ACCOUNT.address
-        need = option.gas_sponsoring and self.allowance < option.amount
+        need = upto._needs_permit_nonce(option, self.allowance, owner)  # the real rule
         return UptoChainState(self.balance, self.allowance, self.nonce if need else None)
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> Chain:
@@ -502,7 +509,12 @@ class TestPlan:
 
 
 class TestResolveScheme:
-    def test_default_auto(self):
+    def test_default_exact(self):
+        """Upto can settle above the exact quote, so no upgrade switches to it silently."""
+        assert resolve_payment_scheme(None) == "exact"
+
+    def test_env_opts_in(self, monkeypatch):
+        monkeypatch.setenv(upto.PAYMENT_SCHEME_ENV, "auto")
         assert resolve_payment_scheme(None) == "auto"
 
     def test_env(self, monkeypatch):
@@ -602,9 +614,34 @@ class TestClientSelection:
         monkeypatch.setenv(upto.PAYMENT_SCHEME_ENV, "exact")
         chain = Chain().install(monkeypatch)
         gw = Gateway(payment_required(sponsoring=True))
-        sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        sync_client(gw, payment_scheme=None).chat_completion("deepseek/deepseek-chat", MESSAGES)
         assert gw.schemes == ["exact"]
         assert chain.reads == 0
+
+    def test_default_client_never_signs_upto(self, monkeypatch):
+        """A caller who sets nothing pays exact even when upto would be usable."""
+        chain = Chain().install(monkeypatch)
+        gw = Gateway(payment_required(sponsoring=True))
+        sync_client(gw, payment_scheme=None).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["exact"]
+        assert chain.reads == 0
+
+    @pytest.mark.asyncio
+    async def test_default_async_client_never_signs_upto(self, monkeypatch):
+        chain = Chain().install(monkeypatch)
+        gw = Gateway(payment_required(sponsoring=True))
+        await async_client(gw, payment_scheme=None).chat_completion(
+            "deepseek/deepseek-chat", MESSAGES
+        )
+        assert gw.schemes == ["exact"]
+        assert chain.reads == 0
+
+    def test_env_auto_opts_in(self, monkeypatch):
+        monkeypatch.setenv(upto.PAYMENT_SCHEME_ENV, "auto")
+        Chain().install(monkeypatch)
+        gw = Gateway(payment_required(sponsoring=True))
+        sync_client(gw, payment_scheme=None).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["upto"]
 
     def test_insufficient_balance_falls_back(self, monkeypatch):
         Chain(balance=int(UPTO_CEILING) - 1).install(monkeypatch)
@@ -678,15 +715,53 @@ class TestClientSelection:
         assert gw.schemes == ["upto", "exact", "upto"]
         assert gw.signed[2]["extensions"]["eip2612GasSponsoring"]["info"]["nonce"] == "5"
 
-    def test_allowance_covering_ceiling_needs_no_permit_even_in_flight(self, monkeypatch):
+    def test_no_permit_upto_waits_out_a_permit_in_flight(self, monkeypatch):
+        """The in-flight permit, when it lands, SETS the allowance to its own
+        ceiling and its call spends it, so a no-permit payment relying on the
+        allowance seen now could settle against nothing: the gateway would
+        serve it unpaid. Pay exact until the permit is seen landed."""
         chain = Chain(allowance=0, nonce=5).install(monkeypatch)
         gw = Gateway(payment_required(sponsoring=True))
         client = sync_client(gw)
         client.chat_completion("deepseek/deepseek-chat", MESSAGES)  # permit over nonce 5
         chain.allowance = int(UPTO_CEILING)  # e.g. an approval made elsewhere
         client.chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["upto", "exact"]
+
+    def test_no_permit_upto_once_the_permit_landed(self, monkeypatch):
+        chain = Chain(allowance=0, nonce=5).install(monkeypatch)
+        gw = Gateway(payment_required(sponsoring=True))
+        client = sync_client(gw)
+        client.chat_completion("deepseek/deepseek-chat", MESSAGES)  # permit over nonce 5
+        chain.allowance = int(UPTO_CEILING)
+        chain.nonce = 6  # the permit was consumed
+        client.chat_completion("deepseek/deepseek-chat", MESSAGES)
         assert gw.schemes == ["upto", "upto"]
         assert "signature" not in gw.signed[1]["extensions"]["eip2612GasSponsoring"]["info"]
+        assert upto._PERMITS_IN_FLIGHT == {}
+
+    def test_no_permit_payment_in_flight_blocks_a_permit(self):
+        """The reverse order: a permit signed while a no-permit payment is
+        unsettled would reset the allowance that payment is about to pull."""
+        far = int(upto._now()) + 300
+        hold = upto._claim_no_permit("eip155:8453", TEST_ACCOUNT.address, None, far, True)
+        assert hold is not None
+        assert not upto._claim_permit_slot("eip155:8453", TEST_ACCOUNT.address, 5, far)
+        upto.release_no_permit_hold("eip155:8453", TEST_ACCOUNT.address, hold)
+        assert upto._claim_permit_slot("eip155:8453", TEST_ACCOUNT.address, 5, far)
+
+    def test_expired_holds_lapse(self):
+        past = int(upto._now()) - 1
+        assert upto._claim_no_permit("eip155:8453", TEST_ACCOUNT.address, None, past, True)
+        assert upto._claim_permit_slot("eip155:8453", TEST_ACCOUNT.address, 5, past)
+        assert upto._claim_no_permit("eip155:8453", TEST_ACCOUNT.address, None, past, True)
+
+    def test_settled_call_releases_its_hold(self, monkeypatch):
+        Chain(allowance=10**9).install(monkeypatch)
+        gw = Gateway(payment_required(sponsoring=True))
+        sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
+        assert gw.schemes == ["upto"]
+        assert upto._NO_PERMIT_IN_FLIGHT == {}
 
     def test_permit_guard_is_per_wallet_and_network(self):
         far = int(upto._now()) + 300
@@ -775,13 +850,14 @@ class TestConcurrentPermits:
         assert sorted(gw.schemes) == ["exact", "exact", "upto"]
         assert upto._PERMIT_PREFLIGHT == set()
 
-    def test_marker_holder_elsewhere_still_allows_upto_without_permit(self, monkeypatch):
+    def test_marker_holder_elsewhere_sends_upto_without_permit_to_exact(self, monkeypatch):
+        """The marker's holder may be about to sign a permit, which would reset
+        the allowance this call would pull."""
         Chain(allowance=10**9).install(monkeypatch)
         assert upto._reserve_preflight("eip155:8453", TEST_ACCOUNT.address)
         gw = Gateway(payment_required(sponsoring=True))
         sync_client(gw).chat_completion("deepseek/deepseek-chat", MESSAGES)
-        assert gw.schemes == ["upto"]
-        assert "signature" not in gw.signed[0]["extensions"]["eip2612GasSponsoring"]["info"]
+        assert gw.schemes == ["exact"]
 
     def test_marker_holder_elsewhere_and_no_allowance_is_exact(self, monkeypatch):
         chain = Chain(allowance=0, nonce=6).install(monkeypatch)

@@ -101,7 +101,11 @@ def decode_settlement_header(header_value: str | None) -> dict[str, Any] | None:
         or data.get("transactionHash")
         or data.get("signature")
     )
-    amount = data.get("amount") or data.get("value")
+    # `is None`, not `or`: an upto call can settle 0 (an empty answer), and a
+    # falsy 0 would fall through to "missing", booking the signed ceiling.
+    amount = data.get("amount")
+    if amount is None:
+        amount = data.get("value")
     return {
         "tx_hash": tx_hash,
         "amount_micro_usdc": str(amount) if amount is not None else None,

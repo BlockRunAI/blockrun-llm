@@ -14,8 +14,9 @@ Upto is NOT always cheaper than exact. BlockRun's exact quote prices output at a
 fraction of ``max_tokens`` (``OUTPUT_QUOTE_FACTOR``, 0.1 today), so a response
 that runs long settles for more under upto than exact would have charged; a
 short or cache-hit response settles for less. Upto is bounded by its ceiling
-(the full ``max_tokens``), never by the exact quote. Pass
-``payment_scheme="exact"`` to keep paying the fixed quote. Upto is taken when:
+(the full ``max_tokens``), never by the exact quote. So upto is OPT-IN: a
+client pays ``exact`` unless it is built with ``payment_scheme="auto"`` (or
+``BLOCKRUN_PAYMENT_SCHEME=auto``). With "auto", upto is taken when:
 
 * It is taken only when the 402 offers an EVM upto option carrying
   ``extra.facilitatorAddress`` for a network in :data:`EVM_NETWORKS`, and
@@ -34,7 +35,7 @@ the preflight marker) are per PROCESS. Several processes paying from one wallet
 can each sign a permit over the same USDC nonce, and all but one revert; nor is
 the wallet's balance checked against the SUM of concurrent ceilings. Either
 case fails a call rather than overcharging; run one paying process per wallet,
-or pass ``payment_scheme="exact"``, to avoid it.
+or leave ``payment_scheme`` at "exact", to avoid it.
 
 Semantics match the official ``@x402/evm`` 2.28.0 client (``UptoEvmScheme``,
 ``createUptoPermit2Payload``, ``trySignEip2612PermitExtension``); the unit tests
@@ -83,8 +84,8 @@ EIP2612_GAS_SPONSORING_KEY = "eip2612GasSponsoring"
 # and CDP /verify rejects a MaxUint256 permit.
 EIP2612_GAS_SPONSORING_VERSION = "1"
 
-# `payment_scheme` values a client accepts. "auto" prefers upto when the rule
-# above allows it; "exact" never signs upto.
+# `payment_scheme` values a client accepts. "exact" (the default) never signs
+# upto; "auto" prefers upto when the rule above allows it.
 PAYMENT_SCHEMES = ("auto", "exact")
 PAYMENT_SCHEME_ENV = "BLOCKRUN_PAYMENT_SCHEME"
 
@@ -136,13 +137,13 @@ class UptoUnavailable(Exception):
 
 
 def resolve_payment_scheme(value: str | None) -> str:
-    """The client's ``payment_scheme``: the argument, else ``BLOCKRUN_PAYMENT_SCHEME``, else "auto".
+    """The client's ``payment_scheme``: the argument, else ``BLOCKRUN_PAYMENT_SCHEME``, else "exact".
 
     Raises:
         ValueError: For anything other than "auto" or "exact".
     """
     raw = value if value is not None else os.environ.get(PAYMENT_SCHEME_ENV)
-    scheme = (raw or "auto").strip().lower()
+    scheme = (raw or "exact").strip().lower()
     if scheme not in PAYMENT_SCHEMES:
         source = "payment_scheme" if value is not None else PAYMENT_SCHEME_ENV
         raise ValueError(f'{source} must be one of {", ".join(PAYMENT_SCHEMES)}; got "{raw}"')
@@ -307,8 +308,14 @@ def _nonce_call(option: UptoOption, owner: str) -> tuple[str, str]:
     return option.usdc, _SEL_NONCES + _word(owner)
 
 
-def _needs_permit_nonce(option: UptoOption, allowance: int) -> bool:
-    return option.gas_sponsoring and allowance < option.amount
+def _needs_permit_nonce(option: UptoOption, allowance: int, owner: str) -> bool:
+    """Read the USDC nonce when a permit may be signed, and also whenever this
+    process has a sponsored permit on record for the wallet: the nonce is what
+    tells a landed permit from one still in flight (see _claim_no_permit)."""
+    if option.gas_sponsoring and allowance < option.amount:
+        return True
+    with _PERMITS_LOCK:
+        return (option.network, owner.lower()) in _PERMITS_IN_FLIGHT
 
 
 def _read_state_sync(
@@ -322,7 +329,9 @@ def _read_state_sync(
     (b_to, b_data), (a_to, a_data) = _state_calls(option, owner)
     balance = call(b_to, b_data)
     allowance = call(a_to, a_data)
-    nonce = call(*_nonce_call(option, owner)) if _needs_permit_nonce(option, allowance) else None
+    nonce = (
+        call(*_nonce_call(option, owner)) if _needs_permit_nonce(option, allowance, owner) else None
+    )
     return UptoChainState(balance, allowance, nonce)
 
 
@@ -338,7 +347,9 @@ async def _read_state_async(
     balance = await call(b_to, b_data)
     allowance = await call(a_to, a_data)
     nonce = (
-        await call(*_nonce_call(option, owner)) if _needs_permit_nonce(option, allowance) else None
+        await call(*_nonce_call(option, owner))
+        if _needs_permit_nonce(option, allowance, owner)
+        else None
     )
     return UptoChainState(balance, allowance, nonce)
 
@@ -404,19 +415,86 @@ def _now() -> float:
     return time.time()
 
 
+# Upto payments signed WITHOUT a permit, not yet seen settled:
+# (network, owner) → {hold id: deadline}. Such a payment spends Permit2's
+# existing allowance. A sponsored permit, when it lands, SETS that allowance to
+# its own ceiling (EIP-2612 approve, not add) and its call then spends it — so
+# a no-permit payment and a sponsored permit in flight together can leave the
+# no-permit one with nothing to pull: its settlement reverts and the gateway
+# served it unpaid. Either one in flight therefore sends the other to exact.
+# A hold is released when its call books a settled transfer or is rejected;
+# otherwise it lapses at the payment's deadline.
+_NO_PERMIT_IN_FLIGHT: dict[tuple[str, str], dict[int, int]] = {}
+_NO_PERMIT_IDS = iter(range(1, 1 << 62))
+
+
+def _permit_live(key: tuple[str, str], onchain_nonce: int | None, now: float) -> bool:
+    """Under _PERMITS_LOCK: is a sponsored permit for ``key`` possibly unlanded?
+    Without a nonce read it counts as live until its deadline."""
+    pending = _PERMITS_IN_FLIGHT.get(key)
+    if pending is None:
+        return False
+    signed_nonce, pending_deadline = pending
+    if now >= pending_deadline or (onchain_nonce is not None and onchain_nonce > signed_nonce):
+        del _PERMITS_IN_FLIGHT[key]
+        return False
+    return True
+
+
+def _no_permit_live(key: tuple[str, str], now: float) -> bool:
+    """Under _PERMITS_LOCK: is a no-permit upto payment for ``key`` unsettled?"""
+    holds = _NO_PERMIT_IN_FLIGHT.get(key)
+    if not holds:
+        return False
+    for hold_id, deadline in list(holds.items()):
+        if now >= deadline:
+            del holds[hold_id]
+    if not holds:
+        del _NO_PERMIT_IN_FLIGHT[key]
+        return False
+    return True
+
+
 def _claim_permit_slot(network: str, owner: str, onchain_nonce: int, deadline: int) -> bool:
-    """Atomically: if no permit is in flight for this wallet+network, record one
-    over ``onchain_nonce`` (valid until ``deadline``) and return True."""
+    """Atomically: if no permit and no no-permit upto payment is in flight for
+    this wallet+network, record a permit over ``onchain_nonce`` (valid until
+    ``deadline``) and return True."""
     key = (network, owner.lower())
     now = _now()
     with _PERMITS_LOCK:
-        pending = _PERMITS_IN_FLIGHT.get(key)
-        if pending is not None:
-            signed_nonce, pending_deadline = pending
-            if onchain_nonce <= signed_nonce and now < pending_deadline:
-                return False
+        if _permit_live(key, onchain_nonce, now) or _no_permit_live(key, now):
+            return False
         _PERMITS_IN_FLIGHT[key] = (onchain_nonce, deadline)
         return True
+
+
+def _claim_no_permit(
+    network: str, owner: str, onchain_nonce: int | None, deadline: int, own_preflight: bool
+) -> int | None:
+    """Atomically: unless a sponsored permit may still land for this
+    wallet+network, or another call holds the permit preflight (it may be about
+    to sign one), record a no-permit upto payment and return its hold id."""
+    key = (network, owner.lower())
+    now = _now()
+    with _PERMITS_LOCK:
+        if _permit_live(key, onchain_nonce, now):
+            return None
+        if key in _PERMIT_PREFLIGHT and not own_preflight:
+            return None
+        hold_id = next(_NO_PERMIT_IDS)
+        _NO_PERMIT_IN_FLIGHT.setdefault(key, {})[hold_id] = deadline
+        return hold_id
+
+
+def release_no_permit_hold(network: str, owner: str, hold_id: int) -> None:
+    """Forget a no-permit upto payment: it settled, or will never be sent."""
+    key = (network, owner.lower())
+    with _PERMITS_LOCK:
+        holds = _NO_PERMIT_IN_FLIGHT.get(key)
+        if holds is not None:
+            holds.pop(hold_id, None)
+            if not holds:
+                del _NO_PERMIT_IN_FLIGHT[key]
 
 
 def _release_permit_slot(network: str, owner: str, signed_nonce: int) -> None:
@@ -678,6 +756,9 @@ class UptoPayment:
     header: str  # base64 PAYMENT-SIGNATURE
     amount: int  # signed ceiling, micro-USDC
     permit_attached: bool
+    # No-permit payments only: the _NO_PERMIT_IN_FLIGHT hold to release once
+    # the call is seen settled (release_no_permit_hold).
+    hold_id: int | None = None
 
     @property
     def ceiling_usd(self) -> float:
@@ -701,15 +782,30 @@ def _sign_planned(
         logger.debug("x402 upto: another call holds the permit preflight; using exact")
         return None
     if not needs_permit:
-        # Permit2 can already pull the ceiling: no permit, whatever is in flight.
-        header = create_upto_payment_payload(
-            account,
-            option,
-            resource_url=resource_url,
-            resource_description=resource_description,
-            extensions=extensions,
+        # Permit2 can already pull the ceiling — unless a sponsored permit may
+        # still land and reset that allowance (see _NO_PERMIT_IN_FLIGHT).
+        hold_id = _claim_no_permit(
+            option.network,
+            account.address,
+            state.permit_nonce,
+            int(_now()) + option.max_timeout_seconds,
+            own_preflight=may_permit,
         )
-        return UptoPayment(header, option.amount, permit_attached=False)
+        if hold_id is None:
+            logger.debug("x402 upto: a sponsored permit may reset the allowance; using exact")
+            return None
+        try:
+            header = create_upto_payment_payload(
+                account,
+                option,
+                resource_url=resource_url,
+                resource_description=resource_description,
+                extensions=extensions,
+            )
+        except Exception:
+            release_no_permit_hold(option.network, account.address, hold_id)
+            raise
+        return UptoPayment(header, option.amount, permit_attached=False, hold_id=hold_id)
 
     assert state.permit_nonce is not None  # plan_upto returns True only with one
     now = int(_now())
@@ -842,6 +938,7 @@ __all__ = [
     "permit2_witness_typed_data",
     "plan_upto",
     "read_upto_chain_state",
+    "release_no_permit_hold",
     "resolve_payment_scheme",
     "settled_upto_amount",
     "try_upto_payment",

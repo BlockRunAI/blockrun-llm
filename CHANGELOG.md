@@ -49,12 +49,24 @@ All notable changes to blockrun-llm will be documented in this file.
   Signing matches the official `@x402/evm` 2.28.0 client byte for byte: the
   tests pin a vector it generated (`scripts/gen-upto-vector.mjs`).
 
-  Opt out with `payment_scheme="exact"` or `BLOCKRUN_PAYMENT_SCHEME=exact`.
+  A no-permit upto payment and a sponsored permit are never in flight together
+  for one wallet: a landing permit SETS Permit2's allowance to its own ceiling
+  and its call spends it, which could leave the other payment nothing to pull
+  (its settlement would revert after the gateway served it). Whichever comes
+  second pays exact, until the permit is seen landed (USDC nonce moved) or the
+  no-permit payment is seen settled (a transaction hash in `PAYMENT-RESPONSE`),
+  or its deadline passes.
+
+  **Opt-in.** The default stays `payment_scheme="exact"`: upto can settle above
+  the exact quote and streams count their full ceiling against spend limits, so
+  no upgrade switches a caller to it silently. Opt in with
+  `payment_scheme="auto"` or `BLOCKRUN_PAYMENT_SCHEME=auto`.
 - **A ceiling is not a charge.** `ChatResponse.payment_scheme` /
   `cost_is_ceiling` (also on stream chunks), `get_spending()["ceiling_usd"]`,
   a `cost_basis` field on cost-log rows (`upto_settled` / `upto_ceiling`) and a
   `(upto ceiling)` marker in `transactions.log`. An upto call books the settled
-  amount when `PAYMENT-RESPONSE` reports one, else the ceiling, labeled. Spend
+  amount when `PAYMENT-RESPONSE` reports one (a settled 0 included), else the
+  ceiling, labeled. Spend
   limits count the ceiling in full.
 
 ### Changed

@@ -119,6 +119,7 @@ from .x402_upto import (
     atry_upto_payment,
     find_upto_option,
     offers_upto,
+    release_no_permit_hold,
     resolve_payment_scheme,
     settled_upto_amount,
     try_upto_payment,
@@ -380,6 +381,9 @@ class _ChatPayment(NamedTuple):
     # requirement instead if the gateway rejects the upto payment.
     network: str | None = None
     exact_fallback: Callable[[], _ChatPayment] | None = None
+    # upto without a permit: frees its in-flight hold (x402_upto
+    # _NO_PERMIT_IN_FLIGHT) once the call is seen settled or is rejected.
+    release: Callable[[], None] | None = None
 
 
 def _rejection_body(response: httpx.Response) -> dict[str, Any] | None:
@@ -528,6 +532,8 @@ def _exact_after_upto_rejection(client: Any, payment: _ChatPayment) -> _ChatPaym
     delivered — a 2xx or a stream in progress is never retried.
     """
     assert payment.exact_fallback is not None
+    if payment.release is not None:
+        payment.release()  # rejected before serving: this upto never settles
     if client.account is not None and payment.network:
         client._upto_rejected[(client.account.address.lower(), payment.network)] = time.monotonic()
     sys.stderr.write(
@@ -589,7 +595,7 @@ def _upto_offer(
 ) -> tuple[UptoOption, dict[str, Any]] | None:
     """The upto offer worth trying, with ``try_upto_payment``'s keyword
     arguments — or ``None``, meaning sign exact exactly as before."""
-    if getattr(client, "_payment_scheme", "auto") != "auto" or client.account is None:
+    if getattr(client, "_payment_scheme", "exact") != "auto" or client.account is None:
         return None
     option = find_upto_option(payment_required)
     if option is None:
@@ -623,6 +629,8 @@ def _upto_chat_payment(
     signed: UptoPayment,
 ) -> _ChatPayment:
     _warn_if_clamped(body, (details.get("resource") or {}).get("description"))
+    hold_id = signed.hold_id
+    owner = client.account.address
     return _ChatPayment(
         _payment_headers(signed.header),
         signed.ceiling_usd,
@@ -631,6 +639,11 @@ def _upto_chat_payment(
         network=option.network,
         exact_fallback=lambda: _exact_chat_payment(
             client, body, payment_required, price_info, details, upto_refused=True
+        ),
+        release=(
+            (lambda: release_no_permit_hold(option.network, owner, hold_id))
+            if hold_id is not None
+            else None
         ),
     )
 
@@ -726,6 +739,9 @@ def _booked_cost(
     """
     if payment.scheme != "upto":
         return payment.cost_usd, None
+    if payment.release is not None and settlement and settlement.get("tx_hash"):
+        # The transfer is on chain, so a later permit can no longer strand it.
+        payment.release()
     settled = settled_upto_amount(settlement, payment.amount_micro)
     if settled is not None:
         return settled / 1e6, "upto_settled"
@@ -812,7 +828,7 @@ class LLMClient:
                            ``transactions.jsonl`` (model, input, output, cost_usd,
                            tx_hash, on-chain amount, payer, payee, network) and
                            writes a pretty-printed JSON file next to it.
-            payment_scheme: ``"auto"`` (default) or ``"exact"``. With ``"auto"``, a chat
+            payment_scheme: ``"exact"`` (default) or ``"auto"`` (opt-in). With ``"auto"``, a chat
                            call whose 402 also offers x402 ``upto`` pays with a Permit2
                            ceiling and is settled at the ACTUAL cost after the call
                            (prompt-cache discounts included) — but only when the wallet
@@ -822,7 +838,8 @@ class LLMClient:
                            exact quote, which prices output at a tenth of
                            ``max_tokens``; it is never more than the ceiling (the full
                            ``max_tokens``). ``"exact"`` never signs upto and pays the
-                           fixed quote. ``None`` honors ``BLOCKRUN_PAYMENT_SCHEME``.
+                           fixed quote. ``None`` honors ``BLOCKRUN_PAYMENT_SCHEME``,
+                           else ``"exact"``.
 
         Raises:
             ValueError: If no wallet is configured. For agent use, call setup_agent_wallet() first.
@@ -3095,7 +3112,7 @@ class AsyncLLMClient:
                            ``./log/``; pass a string/Path for a custom dir; ``None``
                            honors the ``BLOCKRUN_TX_LOG`` env var. See ``LLMClient``
                            for the full record schema.
-            payment_scheme: ``"auto"`` (default) or ``"exact"``. With ``"auto"``, a chat
+            payment_scheme: ``"exact"`` (default) or ``"auto"`` (opt-in). With ``"auto"``, a chat
                            call whose 402 also offers x402 ``upto`` pays with a Permit2
                            ceiling and is settled at the ACTUAL cost after the call
                            (prompt-cache discounts included) — but only when the wallet
@@ -3105,7 +3122,8 @@ class AsyncLLMClient:
                            exact quote, which prices output at a tenth of
                            ``max_tokens``; it is never more than the ceiling (the full
                            ``max_tokens``). ``"exact"`` never signs upto and pays the
-                           fixed quote. ``None`` honors ``BLOCKRUN_PAYMENT_SCHEME``.
+                           fixed quote. ``None`` honors ``BLOCKRUN_PAYMENT_SCHEME``,
+                           else ``"exact"``.
 
         Raises:
             ValueError: If no wallet is configured
