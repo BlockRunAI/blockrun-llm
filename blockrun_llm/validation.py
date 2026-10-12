@@ -195,6 +195,212 @@ def validate_video_input_type(input_type: str | None) -> None:
         )
 
 
+# Per-model Seedance capabilities. Mirrors the gateway registry and the MCP's
+# table (blockrun-mcp src/tools/video.ts), named rather than pattern-matched so
+# a guard and its message can never drift apart.
+SEEDANCE_25 = "bytedance/seedance-2.5"
+SEEDANCE_15_PRO = "bytedance/seedance-1.5-pro"
+# Reference IMAGES and the per-model count ceiling the gateway enforces.
+SEEDANCE_REFERENCE_IMAGE_LIMIT: dict[str, int] = {
+    "bytedance/seedance-2.0": 9,
+    "bytedance/seedance-2.0-fast": 9,
+    "bytedance/seedance-2.0-mini": 9,
+    SEEDANCE_25: 30,
+}
+# Reference VIDEO/AUDIO clips (supportsReferenceMedia). 2.5 takes them since
+# 2026-09-26. The gateway bills each clip at its model's ceiling whatever the
+# real length (REFERENCE_CEILING_SECONDS in its models.ts): 15.2s on the 2.0
+# family, 30.2s on 2.5.
+SEEDANCE_REFERENCE_MEDIA_MODELS = frozenset(
+    {
+        "bytedance/seedance-2.0",
+        "bytedance/seedance-2.0-fast",
+        "bytedance/seedance-2.0-mini",
+        SEEDANCE_25,
+    }
+)
+# bitrate_mode is a 2.x control: the same four models, named on their own so
+# it does not move whenever the clip list does.
+SEEDANCE_BITRATE_MODE_MODELS = frozenset(
+    {
+        "bytedance/seedance-2.0",
+        "bytedance/seedance-2.0-fast",
+        "bytedance/seedance-2.0-mini",
+        SEEDANCE_25,
+    }
+)
+SEEDANCE_MAX_REFERENCE_CLIPS = 3
+SEEDANCE_BITRATE_MODES = ("standard", "high")
+SEEDANCE_OUTPUT_FORMATS = ("mp4", "mov")
+_REFERENCE_CLIP_KEYS = frozenset({"url", "role"})
+
+
+def _is_http_url(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(("https://", "http://"))
+
+
+def validate_video_request(
+    model: str,
+    *,
+    api_key_mode: bool,
+    solana_wallet: bool = False,
+    image_url: str | None = None,
+    last_frame_url: str | None = None,
+    reference_image_urls: list[str] | None = None,
+    reference_videos: list[dict[str, str]] | None = None,
+    reference_audios: list[dict[str, str]] | None = None,
+    real_face_asset_id: str | None = None,
+    bitrate_mode: str | None = None,
+    output_format: str | None = None,
+    camera_fixed: bool | None = None,
+    safety_identifier: str | None = None,
+) -> None:
+    """
+    Refuse a video request the gateway would refuse, before anything is sent.
+
+    Shared by ``VideoClient.generate`` (Base) and ``SolanaLLMClient.video``
+    (sync and async), so the rails can never disagree about what they accept.
+    On the wallet rails most of these would come back as a 400 before quoting;
+    on the account rail there is no quote step at all (the key is billed at
+    submit), so a refusal here is the only gate that runs before money moves.
+
+    Args:
+        model: The resolved model id (defaults already applied).
+        api_key_mode: True when the client pays with a ``brk_`` API key.
+        solana_wallet: True for the Solana wallet rail (sol.blockrun.ai).
+        Remaining args mirror the video kwargs; None (or an empty list) omits.
+
+    Raises:
+        ValueError: On any combination the gateway would refuse.
+    """
+    has_refs = bool(reference_image_urls or reference_videos or reference_audios)
+    has_clips = bool(reference_videos or reference_audios)
+
+    # The rail fact dominates every other reference guard: both wallet
+    # gateways answer any reference_* field with a 400 before quoting
+    # (blockrun#728, blockrun-sol#374), so a per-model message would point the
+    # caller at a fix that still cannot work.
+    if has_refs and not api_key_mode:
+        raise ValueError(
+            "Reference media (reference_image_urls / reference_videos / "
+            "reference_audios) is served only by the BlockRun account rail "
+            "(api.blockrun.ai); the Base and Solana wallet gateways refuse it. "
+            "Set BLOCKRUN_API_KEY to use the account rail, or use image_url / "
+            "last_frame_url frame seeding, which works on the wallet rails."
+        )
+    if has_refs and (image_url or last_frame_url or real_face_asset_id):
+        raise ValueError(
+            "Reference inputs are mutually exclusive with image_url, last_frame_url, "
+            "and real_face_asset_id; pass character or style images as "
+            "reference_image_urls instead."
+        )
+
+    if image_url and real_face_asset_id:
+        raise ValueError(
+            "image_url and real_face_asset_id are mutually exclusive; pass at most one."
+        )
+    if last_frame_url and not image_url:
+        raise ValueError(
+            "last_frame_url requires image_url: image_url seeds the FIRST frame and "
+            "last_frame_url the FINAL frame — send both."
+        )
+    if last_frame_url and real_face_asset_id:
+        raise ValueError(
+            "last_frame_url and real_face_asset_id are mutually exclusive; "
+            "first-and-last-frame uses image_url + last_frame_url."
+        )
+    # sol.blockrun.ai is a separate deploy that has not taken 2.5 into its
+    # first-and-last-frame list: it 400s where Base quotes the same body
+    # (probed 2026-09-29). Same refusal as blockrun-mcp 0.53.1.
+    if last_frame_url and solana_wallet and model == SEEDANCE_25:
+        raise ValueError(
+            f"{SEEDANCE_25} first-and-last-frame (last_frame_url) is not served by the "
+            "Solana gateway yet. Use it on Base (VideoClient) or the account rail "
+            "(BLOCKRUN_API_KEY), or pick seedance-1.5-pro / 2.0 / 2.0-fast / 2.0-mini."
+        )
+
+    if reference_image_urls:
+        limit = SEEDANCE_REFERENCE_IMAGE_LIMIT.get(model)
+        if limit is None:
+            raise ValueError(
+                f"Model {model} does not accept reference images (reference_image_urls). "
+                f"Supported: {', '.join(SEEDANCE_REFERENCE_IMAGE_LIMIT)}."
+            )
+        if len(reference_image_urls) > limit:
+            raise ValueError(
+                f"reference_image_urls accepts at most {limit} images on {model}; "
+                f"got {len(reference_image_urls)}."
+            )
+        if not all(_is_http_url(u) for u in reference_image_urls):
+            raise ValueError("reference_image_urls must all be http(s) URLs.")
+
+    if has_clips and model not in SEEDANCE_REFERENCE_MEDIA_MODELS:
+        raise ValueError(
+            f"Model {model} does not accept reference video or audio clips. "
+            f"Supported: {', '.join(sorted(SEEDANCE_REFERENCE_MEDIA_MODELS))}."
+        )
+    for field, clips in (
+        ("reference_videos", reference_videos),
+        ("reference_audios", reference_audios),
+    ):
+        if not clips:
+            continue
+        if len(clips) > SEEDANCE_MAX_REFERENCE_CLIPS:
+            raise ValueError(
+                f"{field} accepts at most {SEEDANCE_MAX_REFERENCE_CLIPS} clips; got {len(clips)}."
+            )
+        for clip in clips:
+            if (
+                not isinstance(clip, dict)
+                or not _is_http_url(clip.get("url"))
+                or not set(clip) <= _REFERENCE_CLIP_KEYS
+                or clip.get("role", "reference") != "reference"
+            ):
+                raise ValueError(
+                    f"{field} entries must be {{'url': 'https://…'}} with an optional "
+                    "'role': 'reference' and no other keys."
+                )
+    if reference_audios and not (reference_image_urls or reference_videos):
+        raise ValueError(
+            "reference_audios requires a reference image or video — combine it with "
+            "reference_image_urls or reference_videos."
+        )
+
+    if bitrate_mode is not None:
+        if bitrate_mode not in SEEDANCE_BITRATE_MODES:
+            raise ValueError(
+                f"bitrate_mode must be one of {', '.join(SEEDANCE_BITRATE_MODES)}; "
+                f"got {bitrate_mode!r}."
+            )
+        if model not in SEEDANCE_BITRATE_MODE_MODELS:
+            raise ValueError(
+                f"bitrate_mode requires a Seedance 2.x model; got {model}. "
+                f"Supported: {', '.join(sorted(SEEDANCE_BITRATE_MODE_MODELS))}."
+            )
+    if output_format is not None:
+        if output_format not in SEEDANCE_OUTPUT_FORMATS:
+            raise ValueError(
+                f"output_format must be one of {', '.join(SEEDANCE_OUTPUT_FORMATS)}; "
+                f"got {output_format!r}."
+            )
+        if model != SEEDANCE_25:
+            raise ValueError(
+                f"output_format requires {SEEDANCE_25}; got {model}. Every other model returns MP4."
+            )
+    if camera_fixed is not None and model != SEEDANCE_15_PRO:
+        raise ValueError(f"camera_fixed requires {SEEDANCE_15_PRO}; got {model}.")
+    if safety_identifier is not None and not model.startswith("bytedance/seedance-"):
+        raise ValueError(f"safety_identifier requires a Seedance model; got {model}.")
+
+    if real_face_asset_id is not None and not real_face_asset_id.startswith("ta_"):
+        raise ValueError(
+            "real_face_asset_id must start with 'ta_' "
+            "(a Virtual Portrait or RealFace asset id, e.g. 'ta_abc123xyz' — "
+            "enroll via PortraitClient / POST /v1/portrait/enroll or "
+            "RealFaceClient / POST /v1/realface/enroll)"
+        )
+
+
 def validate_image_quality(quality: str | None) -> None:
     """
     Validate the optional `quality` knob on Solana image generation/editing.

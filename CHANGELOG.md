@@ -76,6 +76,120 @@ All notable changes to blockrun-llm will be documented in this file.
   transfer.
 - `get_balance()` reads its USDC contract and RPC list from `EVM_NETWORKS`.
 
+## 1.19.0 — 2026-10-11
+
+### Changed
+- **Solana media polls prove job ownership instead of signing a payment.**
+  `SolanaLLMClient` / `AsyncSolanaLLMClient` poll `video()`, slow `image()` /
+  `image_edit()` and slow `music()` jobs with an ed25519 signature by the
+  submitting wallet (`x-poll-wallet` / `x-poll-timestamp` / `x-poll-signature`
+  over `blockrun-poll:v1:<kind>:<job id>:<unix seconds>`), signed fresh per
+  poll. A video signs exactly one payment, from the 402 its finished-but-unpaid
+  poll returns; images and music never pay on a poll. A refused proof falls back
+  once, per job, to the per-poll payment signature, with a warning on the
+  `blockrun_llm.solana_client` logger. Wallet rail on sol.blockrun.ai only; the
+  account rail and Base are unchanged.
+
+### Fixed
+- **Slow `music()` tracks on the Solana wallet rail are polled to completion.**
+  The paid POST's `202 + poll_url` stub was returned as the result and failed
+  `MusicResponse` validation after the track had been paid for.
+- **Solana `image()`, `image_edit()`, `video()` and `video_from_content()`
+  enforce `max_cost_per_call` and `max_session_cost`.** They are checked before
+  the submit payment is signed, and again before a video's completion payment
+  is signed. Before this, these calls ignored both limits.
+- **A video's completion payment that may have settled is never treated as
+  free.** If the paid poll is lost in transit, polling resumes and reads the
+  job's settlement record instead of abandoning the clip. A Retry-After on a
+  paid poll the gateway could not settle yet is honoured. An error or timeout
+  after the payment went out says it may still settle and is tagged as paid,
+  so no fallback chain buys a second job.
+- **A completion challenge is not a delivered clip.** Under ownership polling,
+  only a 200 delivers. A 5xx on the paid poll is no longer returned as the
+  video and booked to the session. A clip that an earlier poll or call already
+  paid for is logged at zero cost.
+- **A raw paid POST's challenge is kept per thread and per asyncio task.**
+  Concurrent music calls on one shared client can no longer poll, or fall back
+  to paying, against another call's challenge, and a cached answer no longer
+  inherits a previous call's challenge.
+
+## 1.18.1 — 2026-10-02
+
+### Fixed
+- **A 502/503 on the account rail is no longer replayed, so it can no longer
+  bill twice.** With an API key there is no unsigned probe: the first request
+  carries the key and is the billed one. The raw paid helpers still retried it
+  once on a 502/503 (and the stream probe up to three times on any 5xx), so a
+  call the gateway had already accepted could be charged again.
+  - Affected: `search`, `exa` / `exa_search` / `exa_contents` /
+    `exa_find_similar` / `exa_answer`, `pm` / `pm_query`, `defi`, `dex`,
+    `modal`, `rpc` / `rpc_batch`, `price` / `price_history` / `list_symbols`,
+    `portrait_enroll`, `realface_enroll`, `chat` / `chat_completion` and
+    `chat_completion_stream` on `SolanaLLMClient`, plus the same surfaces
+    (`search`, Exa, `pm`, `defi`, `dex`, `modal`, `image_edit`, chat and
+    streaming) on the Base `LLMClient`. Sync and async.
+  - Any 5xx on the account rail now raises `APIError` at once, keeping its
+    status code and `Retry-After`, with a message saying the request may
+    already have been accepted and billed and that retrying may bill it
+    again. The Solana `image()` / `video()` / audio submit, which already
+    skipped the replay, now says the same.
+  - The wallet rail is unchanged: its first request is an unsigned probe that
+    costs nothing, so a 502/503 there is still retried once.
+
+## 1.18.0 — 2026-10-02
+
+### Added
+- **Seedance reference media and output controls** on `VideoClient.generate`,
+  `SolanaLLMClient.video` and `AsyncSolanaLLMClient.video`:
+  - `reference_videos` and `reference_audios` (up to 3 each) on seedance-2.0 /
+    2.0-fast / 2.0-mini / 2.5.
+  - Up to 30 `reference_image_urls` on seedance-2.5.
+  - `bitrate_mode`, `output_format`, `camera_fixed` and `safety_identifier`.
+  - `VideoClip.last_frame_url` / `last_frame_backed_up`.
+
+  Reference media is served only on the account rail (`BLOCKRUN_API_KEY`).
+  Reference clips are billed at the model's reference ceiling each (15.2s on
+  the 2.0 family, 30.2s on 2.5), so they can multiply a render's price. See `docs/seedance-capabilities.md`. Contributed
+  by @KillerQueen-Z (#70).
+
+### Changed
+- **Seedance requests are checked per model before anything is sent.** The
+  check is shared by the Base and Solana clients and mirrors the MCP's table.
+  Reference fields on a wallet rail, reference images or clips on models that
+  do not take them, audio without an image or video, `output_format` off
+  2.5, `bitrate_mode` off 2.x, `camera_fixed` off 1.5-pro, and seedance-2.5
+  first-and-last-frame on the Solana wallet gateway all raise `ValueError`
+  locally.
+
+  These previously failed as a gateway 400. On the account rail, which has no
+  quote step, they could reach a billed submit. Reference fields on the
+  wallet rails also used to be forwarded and then refused by the gateway;
+  they now fail fast with a pointer to the account rail.
+
+### Fixed
+- **`SolanaLLMClient.video()` / `image()` with an API key no longer bill and
+  then crash.**
+  - On the account rail the first POST is the billed submit. Its 202 job stub
+    was returned as the result, so `VideoResponse` raised a validation error
+    after the charge, with no job id. The job is now polled to completion,
+    unsigned.
+  - A 502/503 on that POST is no longer replayed, because a replay could bill
+    the job twice.
+  - A timeout now says credit was reserved at accept (charged only on
+    completion), and the error carries the `poll_url` so the job can still be
+    fetched.
+  - Both the sync and async clients are fixed.
+- **Solana `music()`, `speech()` and `sound_effect()` with an API key** get
+  the same treatment, sync and async: no 5xx replay of the billed submit, and
+  a 202 job is polled unsigned to completion instead of failing
+  `MusicResponse` validation after the charge.
+- **An API key is never sent to a foreign `poll_url` origin.** `VideoClient`
+  and the shared image/music poller returned an absolute `poll_url` before
+  the origin pin ran, so a response naming another host received
+  `Authorization: Bearer brk_...`. Every poll URL is now pinned; a refusal
+  raises `PollOriginRefusedError` (an `APIError`, and a `ValueError` as the
+  Solana account rail raised before) carrying the job id and `poll_url`.
+
 ## 1.17.1 — 2026-09-30
 
 ### Fixed

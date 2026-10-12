@@ -1,6 +1,6 @@
 # BlockRun LLM SDK (Python)
 
-Python SDK for <!-- br:models.chatVisible -->82<!-- /br:models.chatVisible --> LLMs plus image/video/music/speech generation, standalone search, multi-chain RPC, and Pyth-backed market data — paid two ways: a BlockRun API key drawing on prepaid account credit, or USDC micropayments via x402 where the wallet signature is the authentication and the key never leaves your machine.
+Python SDK for <!-- br:models.chatVisible -->88<!-- /br:models.chatVisible --> LLMs plus image/video/music/speech generation, standalone search, multi-chain RPC, and Pyth-backed market data — paid two ways: a BlockRun API key drawing on prepaid account credit, or USDC micropayments via x402 where the wallet signature is the authentication and the key never leaves your machine.
 
 ## Commands
 
@@ -23,6 +23,7 @@ blockrun_llm/
 ├── wallet.py                # EVM wallet management
 ├── solana_wallet.py         # Solana wallet management
 ├── x402.py                  # x402 payment protocol
+├── poll_auth.py             # Solana media-poll ownership proofs (x-poll-* headers)
 ├── router_core/             # Port of @blockrun/router-core (shared with the TS SDK + gateway)
 ├── router_adapter.py        # Host glue: catalog ids, payment floors, free profile
 ├── router.py                # Back-compat shim over router_core
