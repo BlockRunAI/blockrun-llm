@@ -2,7 +2,7 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
-## Unreleased
+## 1.20.0 — 2026-10-11
 
 ### Added
 - **x402 `upto` (Permit2) on Base: pay the actual cost, not the quote.** Under
