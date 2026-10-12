@@ -300,6 +300,7 @@ class PriceClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
+            scheme=details.get("scheme"),
             network=details.get("network", "eip155:8453"),
             resource_url=resource.get("url", url),
             resource_description=resource.get("description", "BlockRun Price Data"),

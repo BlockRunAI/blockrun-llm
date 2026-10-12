@@ -48,6 +48,14 @@ EVM_NETWORKS: dict[str, dict] = {
             "chainId": BASE_CHAIN_ID,
             "verifyingContract": USDC_BASE,
         },
+        # Public read-only RPCs, tried in order. Used for USDC balance reads
+        # (``get_balance``) and the upto scheme's Permit2 allowance / EIP-2612
+        # nonce reads — never to send a transaction.
+        "rpcs": (
+            "https://base.publicnode.com",
+            "https://mainnet.base.org",
+            "https://base.meowrpc.com",
+        ),
     },
     "eip155:5042": {
         "name": "Arc",
@@ -59,6 +67,10 @@ EVM_NETWORKS: dict[str, dict] = {
             "chainId": ARC_CHAIN_ID,
             "verifyingContract": USDC_ARC,
         },
+        # No public RPC is pinned for Arc yet, so the upto scheme (which must
+        # read Permit2 allowance before signing) never engages there: every
+        # Arc payment stays `exact`.
+        "rpcs": (),
     },
     "eip155:84532": {
         "name": "Base Sepolia",
@@ -70,6 +82,10 @@ EVM_NETWORKS: dict[str, dict] = {
             "chainId": BASE_SEPOLIA_CHAIN_ID,
             "verifyingContract": USDC_BASE_SEPOLIA,
         },
+        "rpcs": (
+            "https://sepolia.base.org",
+            "https://base-sepolia-rpc.publicnode.com",
+        ),
     },
 }
 # The pre-CAIP alias this SDK accepted for the testnet.
@@ -122,6 +138,16 @@ def get_usdc_domain_name(network: str) -> str:
     return evm_network(network)["domain"]["name"]
 
 
+def signature_hex(signed: Any) -> str:
+    """0x-prefixed hex of an eth-account signature, whichever hexbytes is installed.
+
+    ``HexBytes.hex()`` dropped its ``0x`` prefix in hexbytes 1.0, so the prefix
+    is added only when it is missing.
+    """
+    raw = str(signed.signature.hex())
+    return raw if raw.startswith("0x") else "0x" + raw
+
+
 def create_nonce() -> str:
     """Generate a random bytes32 nonce."""
     return "0x" + secrets.token_hex(32)
@@ -138,6 +164,7 @@ def create_payment_payload(
     extra: dict[str, str] | None = None,
     extensions: dict[str, Any] | None = None,
     asset: str | None = None,
+    scheme: str | None = "exact",
 ) -> str:
     """
     Create a signed x402 v2 payment payload.
@@ -155,10 +182,20 @@ def create_payment_payload(
         max_timeout_seconds: Max timeout for the payment (default: 300)
         extra: The 402's `extra`. Accepted for compatibility; the domain comes from EVM_NETWORKS.
         asset: The 402's `asset`. Checked against the network's USDC; a mismatch raises ValueError.
+        scheme: The scheme of the requirement being paid (``details["scheme"]``).
+            This signs an EIP-3009 transfer, which is the ``exact`` scheme only;
+            anything else (e.g. an ``upto`` ceiling) raises ValueError, since it
+            would authorize that ceiling as a fixed transfer. ``None`` (a v1
+            requirement without a scheme) is ``exact``.
 
     Returns:
         Base64-encoded signed payment payload
     """
+    if scheme is not None and scheme != "exact":
+        raise ValueError(
+            f"x402 scheme {scheme!r} cannot be signed as an EIP-3009 (exact) transfer; "
+            "nothing was signed"
+        )
     # Current timestamp
     now = int(time.time())
     valid_after = now - 600  # 10 minutes before (allows for clock skew)
@@ -223,11 +260,7 @@ def create_payment_payload(
             "extra": {"name": domain["name"], "version": domain["version"]},
         },
         "payload": {
-            "signature": (
-                "0x" + signed.signature.hex()
-                if not signed.signature.hex().startswith("0x")
-                else signed.signature.hex()
-            ),
+            "signature": signature_hex(signed),
             "authorization": {
                 "from": account.address,
                 "to": recipient,
@@ -262,7 +295,9 @@ def parse_payment_required(header_value: str) -> dict[str, Any]:
         raise ValueError("Failed to parse payment required header: invalid format")
 
 
-def extract_payment_details(payment_required: dict[str, Any]) -> dict[str, Any]:
+def extract_payment_details(
+    payment_required: dict[str, Any], *, allow_upto: bool = False
+) -> dict[str, Any]:
     """
     Extract payment details from parsed payment required response.
 
@@ -270,16 +305,38 @@ def extract_payment_details(payment_required: dict[str, Any]) -> dict[str, Any]:
 
     Args:
         payment_required: Parsed payment required dict
+        allow_upto: Return the ``upto`` requirement when it is the only one
+            offered, instead of raising. Only for a caller that can pay upto
+            (chat, via :mod:`blockrun_llm.x402_upto`) and checks ``scheme``
+            before signing anything exact.
 
     Returns:
         Dict with amount, recipient, network, asset, and extra info
+
+    Raises:
+        ValueError: No options, no amount, or (unless ``allow_upto``) only
+            ``upto`` options, which an EIP-3009 signer must never sign: it
+            would authorize the whole upto ceiling as a fixed transfer.
     """
     accepts = payment_required.get("accepts", [])
     if not accepts:
         raise ValueError("No payment options in payment required response")
 
-    # Take the first option
-    option = accepts[0]
+    # The first option this signer can pay with EIP-3009. A gateway that also
+    # offers `upto` (Permit2) lists `exact` first, but nothing obliges it to:
+    # an upto requirement signed as an EIP-3009 authorization is a signature
+    # the facilitator rejects. Upto is chosen separately, in x402_upto.
+    option = next(
+        (o for o in accepts if isinstance(o, dict) and o.get("scheme", "exact") != "upto"),
+        None,
+    )
+    if option is None:
+        if not allow_upto:
+            raise ValueError(
+                "This 402 offers only the x402 'upto' scheme, which this endpoint's "
+                "signer cannot pay; nothing was signed"
+            )
+        option = accepts[0]
 
     # Support both v1 (maxAmountRequired) and v2 (amount) formats
     amount = option.get("amount") or option.get("maxAmountRequired")

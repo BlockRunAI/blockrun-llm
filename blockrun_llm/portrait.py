@@ -282,6 +282,7 @@ class PortraitClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
+            scheme=details.get("scheme"),
             network=details.get("network", "eip155:8453"),
             resource_url=validate_resource_url(resource.get("url", url), self.api_url),
             resource_description=resource.get(

@@ -58,6 +58,8 @@ response = llm.chat(
 )
 print(response.message.content)
 print(response.additional_kwargs.get("cost_usd"))  # USD charged, where the SDK reports it (Base)
+# Under x402 upto, cost_usd may be the signed ceiling, not the charge:
+print(response.additional_kwargs.get("cost_is_ceiling"))
 
 for chunk in llm.stream_complete("Write a haiku about USDC."):
     print(chunk.delta, end="", flush=True)

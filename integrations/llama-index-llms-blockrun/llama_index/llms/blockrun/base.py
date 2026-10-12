@@ -2,8 +2,10 @@
 
 BlockRun is an OpenAI-compatible gateway where every call pays for itself in
 USDC over x402. There is no API key: the gateway answers an unpaid request with
-HTTP 402 and a price, the client signs a payment for exactly that amount with a
-local wallet, and the request is retried with the signature attached.
+HTTP 402 and a price, the client signs a payment with a local wallet, and the
+request is retried with the signature attached. That payment is either the
+quoted amount (x402 ``exact``) or, on Base when the gateway offers it, a
+ceiling the gateway settles at the actual cost (x402 ``upto``).
 
 That signing step is why this is a package rather than an ``OpenAILike``
 snippet. ``OpenAILike(api_base=..., api_key="fake")`` reaches the gateway and
@@ -518,7 +520,10 @@ def _check_solana_params(params: Iterable[str]) -> None:
 
 
 def _response_kwargs(
-    usage: Any, cost_usd: float | None = None, citations: list[str] | None = None
+    usage: Any,
+    cost_usd: float | None = None,
+    citations: list[str] | None = None,
+    source: Any = None,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if usage is not None:
@@ -527,6 +532,13 @@ def _response_kwargs(
         out["total_tokens"] = usage.total_tokens
     if cost_usd is not None:
         out["cost_usd"] = cost_usd
+        # Under x402 upto, cost_usd can be the signed CEILING rather than the
+        # settled charge (always, for streams). Carry the SDK's label so a
+        # caller never reports an upper bound as money spent.
+        scheme = getattr(source, "payment_scheme", None)
+        if scheme is not None:
+            out["payment_scheme"] = scheme
+            out["cost_is_ceiling"] = bool(getattr(source, "cost_is_ceiling", False))
     if citations:
         out["citations"] = citations
     return out
@@ -551,7 +563,10 @@ def _to_chat_response(response: Any) -> ChatResponse:
         message=ChatMessage(role=MessageRole.ASSISTANT, blocks=blocks),
         raw=response,
         additional_kwargs=_response_kwargs(
-            response.usage, getattr(response, "cost_usd", None), response.citations
+            response.usage,
+            getattr(response, "cost_usd", None),
+            response.citations,
+            source=response,
         ),
     )
 
@@ -598,7 +613,7 @@ class _StreamAccumulator:
         # The Base SDK attaches the real x402 charge to every chunk; read it
         # with getattr because it is an extra attribute, not a declared field.
         additional = _response_kwargs(
-            chunk.usage, getattr(chunk, "cost_usd", None), chunk.citations
+            chunk.usage, getattr(chunk, "cost_usd", None), chunk.citations, source=chunk
         )
         if reasoning_delta:
             additional["thinking_delta"] = reasoning_delta

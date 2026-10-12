@@ -343,6 +343,7 @@ class VoiceClient:
             account=self.account,
             recipient=details["recipient"],
             amount=details["amount"],
+            scheme=details.get("scheme"),
             network=details.get("network", "eip155:8453"),
             resource_url=resource.get("url", f"{self.api_url}/v1/voice/call"),
             resource_description=resource.get("description", "BlockRun Voice Call"),

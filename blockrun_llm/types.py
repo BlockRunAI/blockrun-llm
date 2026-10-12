@@ -144,6 +144,13 @@ class ChatResponse(BaseModel):
     # returned an X-PAYMENT-RESPONSE header.
     cost_usd: Optional[float] = None
     settlement: Optional[Dict[str, Any]] = None
+    # Which x402 scheme paid for this call: "exact" (the quote is what settles)
+    # or "upto" (a signed ceiling; the gateway settles the actual cost, prompt-
+    # cache discounts included). ``cost_is_ceiling`` is True when ``cost_usd``
+    # is that CEILING because the gateway reported no settled amount — an upper
+    # bound, not the confirmed charge. Both None for free / cached calls.
+    payment_scheme: Optional[str] = None
+    cost_is_ceiling: Optional[bool] = None
 
     class Config:
         extra = "allow"

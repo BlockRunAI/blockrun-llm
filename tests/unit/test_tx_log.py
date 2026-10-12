@@ -114,6 +114,14 @@ def test_decode_solana_settlement_uses_signature():
     assert settlement["amount_micro_usdc"] == "500"
 
 
+def test_decode_keeps_a_zero_settled_amount():
+    """An upto call can settle 0; a falsy 0 must not read as "no amount"."""
+    settlement = decode_settlement_header(_b64({"transaction": "0xabc", "amount": 0}))
+    assert settlement["amount_micro_usdc"] == "0"
+    settlement = decode_settlement_header(_b64({"transaction": "0xabc", "amount": 0, "value": 900}))
+    assert settlement["amount_micro_usdc"] == "0"
+
+
 def test_decode_returns_none_for_missing_or_garbage():
     assert decode_settlement_header(None) is None
     assert decode_settlement_header("not-base64") is None
