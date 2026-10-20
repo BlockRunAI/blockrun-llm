@@ -679,10 +679,12 @@ The <!-- br:models.free -->7<!-- /br:models.free --> free models are listed unde
 use `routing_profile="free"`.
 
 ### Testnet Models (Base Sepolia)
-| Model | Price |
-|-------|-------|
-| `openai/gpt-oss-20b` | $0.001/request |
-| `openai/gpt-oss-120b` | $0.002/request |
+Live per-model prices: [blockrun.ai/pricing](https://blockrun.ai/pricing) (agents: `GET https://blockrun.ai/api/v1/models`). Prices are not copied here, so this page never goes stale on a reprice.
+
+| Model |
+| ------- |
+| `openai/gpt-oss-20b` |
+| `openai/gpt-oss-120b` |
 
 *Testnet models use flat pricing (no token counting) for simplicity.*
 
@@ -709,16 +711,16 @@ automatically.
 
 ### Image Generation
 
-| Model | Price |
-|-------|-------|
-| `openai/dall-e-3` | $0.04/image |
-| `openai/gpt-image-1` | $0.02/image |
-| `openai/gpt-image-2` | $0.06/image (reasoning-driven, multilingual text rendering, character consistency) |
-| `google/nano-banana` | $0.05/image |
-| `google/nano-banana-pro` | $0.10/image |
-| `xai/grok-imagine-image` | $0.02/image |
-| `xai/grok-imagine-image-pro` | $0.07/image |
-| `zai/cogview-4` | $0.015/image |
+| Model | Notes |
+| ------- | --- |
+| `openai/dall-e-3` |  |
+| `openai/gpt-image-1` |  |
+| `openai/gpt-image-2` | reasoning-driven, multilingual text rendering, character consistency |
+| `google/nano-banana` |  |
+| `google/nano-banana-pro` |  |
+| `xai/grok-imagine-image` |  |
+| `xai/grok-imagine-image-pro` |  |
+| `zai/cogview-4` |  |
 
 Image editing (`client.edit` / `client.image_edit`) hits the `/v1/images/image2image` endpoint and supports `openai/gpt-image-1`, `openai/gpt-image-2`, `google/nano-banana`, and `google/nano-banana-pro`. Pass a list of source images to fuse multiple inputs (openai/* up to 4, google/* up to 3).
 
@@ -736,12 +738,12 @@ no `quality` field and would silently ignore the value, so passing it there
 raises `TypeError` rather than quietly doing nothing.
 
 ### Video Generation
-| Model | Price | Default 5s 720p |
-|-------|-------|-----------------|
-| `xai/grok-imagine-video` | $0.050/sec | 8s ≈ $0.40 |
-| `bytedance/seedance-1.5-pro` | $4.32 / M tok (flat) | ≈ $0.46 |
-| `bytedance/seedance-2.0-fast` | $11.20 / M text · $6.60 / M image | ≈ $1.19 t2v / $0.70 i2v |
-| `bytedance/seedance-2.0` | $14.00 / M text · $8.60 / M image | ≈ $1.49 t2v / $0.91 i2v |
+| Model | Default 5s 720p | Notes |
+| ------- | ----------------- | --- |
+| `xai/grok-imagine-video` | 8s ≈ $0.40 |  |
+| `bytedance/seedance-1.5-pro` | ≈ $0.46 | flat |
+| `bytedance/seedance-2.0-fast` | ≈ $1.19 t2v / $0.70 i2v |  |
+| `bytedance/seedance-2.0` | ≈ $1.49 t2v / $0.91 i2v |  |
 
 Seedance is billed by token360 in tokens (~20,256 tok/sec at 720p). Drop
 `resolution="480p"` for ~half the cost, or bump to `1080p` / `4K`.
@@ -819,13 +821,13 @@ BlockRun Voice (ElevenLabs) — OpenAI-compatible TTS plus cinematic sound
 effects. TTS price scales with character count: `(chars / 1000) × model
 rate`, minimum $0.001/request. Synthesis is synchronous (<1s for Flash).
 
-| Model | Price | Max Input | Notes |
-|-------|-------|-----------|-------|
-| `elevenlabs/flash-v2.5` | $0.05/1k chars | 40k chars | ~75ms latency, 32 languages (default) |
-| `elevenlabs/turbo-v2.5` | $0.05/1k chars | 40k chars | ~250ms latency, balanced quality |
-| `elevenlabs/multilingual-v2` | $0.10/1k chars | 10k chars | Long-form narration, audiobooks |
-| `elevenlabs/v3` | $0.10/1k chars | 5k chars | Max expressiveness, 70+ languages |
-| `elevenlabs/sound-effects` | $0.05/generation | 1k chars | Sound effects up to 22s |
+| Model | Max Input | Notes |
+| ------- | ----------- | ------- |
+| `elevenlabs/flash-v2.5` | 40k chars | ~75ms latency, 32 languages (default) |
+| `elevenlabs/turbo-v2.5` | 40k chars | ~250ms latency, balanced quality |
+| `elevenlabs/multilingual-v2` | 10k chars | Long-form narration, audiobooks |
+| `elevenlabs/v3` | 5k chars | Max expressiveness, 70+ languages |
+| `elevenlabs/sound-effects` | 1k chars | Sound effects up to 22s |
 
 ```python
 from blockrun_llm import SpeechClient
