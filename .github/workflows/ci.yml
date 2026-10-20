@@ -9,7 +9,8 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # ubuntu-latest moved to 26.04 (2026-10-20), which has no Python 3.9 build.
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python-version: ['3.9', '3.11', '3.12']

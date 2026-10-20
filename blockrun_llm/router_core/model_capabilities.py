@@ -8,7 +8,7 @@ Keeping a small built-in snapshot makes the core safe and useful when a
 product catalog is temporarily unavailable, without importing product code.
 
 GENERATED upstream by ``scripts/sync-model-capabilities.mjs`` from the public
-catalog (GET https://blockrun.ai/api/v1/models) on 2026-10-02; ``supports_tools``
+catalog (GET https://blockrun.ai/api/v1/models) on 2026-10-20; ``supports_tools``
 comes from a live function-calling probe. Re-sync from ``model-capabilities.ts``
 rather than editing by hand — a hand edit is lost on the next sync.
 """
@@ -28,11 +28,10 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": True,
         },
-        # supportsTools: not probed — fails closed
         "anthropic/claude-fable-5.1": {
             "context_window": 1_000_000,
             "max_output_tokens": 128_000,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_vision": True,
         },
         # override: The public catalog's `categories` omit "vision" for this Anthropic model even
@@ -69,11 +68,10 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": True,
         },
-        # supportsTools: not probed — fails closed
         "anthropic/claude-opus-5.5": {
             "context_window": 1_000_000,
             "max_output_tokens": 128_000,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_vision": True,
         },
         "anthropic/claude-sonnet-4.5": {
@@ -98,11 +96,10 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": True,
         },
-        # supportsTools: not probed — fails closed
         "anthropic/claude-sonnet-5.5": {
             "context_window": 1_000_000,
             "max_output_tokens": 128_000,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_vision": True,
         },
         # supportsTools: not probed — fails closed
@@ -124,7 +121,6 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": False,
         },
-        # supportsTools: not probed — fails closed
         "deepseek/deepseek-v4-flash-vision-exp": {
             "context_window": 1_048_576,
             "max_output_tokens": 65_536,
@@ -135,6 +131,13 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "context_window": 1_048_576,
             "max_output_tokens": 65_536,
             "supports_tools": True,
+            "supports_vision": False,
+        },
+        # supportsTools: not probed — fails closed
+        "deepseek/deepseek-v4.1-flash": {
+            "context_window": 1_048_576,
+            "max_output_tokens": 65_536,
+            "supports_tools": False,
             "supports_vision": False,
         },
         "google/gemini-2.5-flash": {
@@ -191,11 +194,10 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": True,
         },
-        # supportsTools: not probed — fails closed
         "google/gemini-3.8-flash": {
             "context_window": 1_048_576,
             "max_output_tokens": 65_536,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_vision": True,
         },
         "minimax/minimax-m2.7": {
@@ -210,6 +212,13 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": False,
         },
+        # supportsTools: not probed — fails closed
+        "mistral/mistral-large-4": {
+            "context_window": 524_288,
+            "max_output_tokens": 262_144,
+            "supports_tools": False,
+            "supports_vision": True,
+        },
         "moonshot/kimi-k3": {
             "context_window": 1_048_576,
             "max_output_tokens": 65_536,
@@ -222,6 +231,13 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "max_output_tokens": 16_384,
             "supports_tools": False,
             "supports_vision": True,
+        },
+        # supportsTools: not probed — fails closed
+        "nvidia/muse-glimmer-30b": {
+            "context_window": 131_072,
+            "max_output_tokens": 16_384,
+            "supports_tools": False,
+            "supports_vision": False,
         },
         # override: The catalog tags this model "vision", but a correctly sized probe does not
         # hold up (ClawRouter, 2026-08-31): a 64x64 solid-red PNG was named correctly 1 of 4
@@ -292,11 +308,10 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": False,
         },
-        # supportsTools: not probed — fails closed
         "openai/gpt-5.1": {
             "context_window": 400_000,
             "max_output_tokens": 128_000,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_vision": True,
         },
         "openai/gpt-5.2": {
@@ -398,22 +413,26 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": True,
         },
-        # supportsTools: not probed — fails closed
         "openai/gpt-6-astra": {
             "context_window": 1_050_000,
             "max_output_tokens": 128_000,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_vision": True,
         },
-        # supportsTools: not probed — fails closed
         "openai/gpt-6-luna": {
             "context_window": 1_050_000,
             "max_output_tokens": 128_000,
-            "supports_tools": False,
+            "supports_tools": True,
+            "supports_vision": True,
+        },
+        "openai/gpt-6-sol": {
+            "context_window": 1_050_000,
+            "max_output_tokens": 128_000,
+            "supports_tools": True,
             "supports_vision": True,
         },
         # supportsTools: not probed — fails closed
-        "openai/gpt-6-sol": {
+        "openai/gpt-6.1-sol": {
             "context_window": 1_050_000,
             "max_output_tokens": 128_000,
             "supports_tools": False,
@@ -444,6 +463,13 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_vision": False,
         },
         # supportsTools: not probed — fails closed
+        "poolside/laguna-s-2.1": {
+            "context_window": 1_048_576,
+            "max_output_tokens": 131_072,
+            "supports_tools": False,
+            "supports_vision": False,
+        },
+        # supportsTools: not probed — fails closed
         "poolside/laguna-xs-2.1": {
             "context_window": 131_072,
             "max_output_tokens": 16_384,
@@ -468,12 +494,25 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": False,
         },
-        # supportsTools: not probed — fails closed
         "qwen/qwen3.8-flash": {
             "context_window": 1_000_000,
             "max_output_tokens": 131_072,
             "supports_tools": False,
             "supports_vision": True,
+        },
+        # supportsTools: not probed — fails closed
+        "qwen/qwen3.8-max": {
+            "context_window": 1_000_000,
+            "max_output_tokens": 131_072,
+            "supports_tools": False,
+            "supports_vision": False,
+        },
+        # supportsTools: not probed — fails closed
+        "tencent/hy4-preview": {
+            "context_window": 1_048_576,
+            "max_output_tokens": 64_000,
+            "supports_tools": False,
+            "supports_vision": False,
         },
         "xai/grok-4.3": {
             "context_window": 1_000_000,
@@ -487,18 +526,16 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": True,
         },
-        # supportsTools: not probed — fails closed
         "xai/grok-4.6": {
             "context_window": 500_000,
             "max_output_tokens": 16_384,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_vision": True,
         },
-        # supportsTools: not probed — fails closed
         "xai/grok-4.7": {
             "context_window": 500_000,
             "max_output_tokens": 16_384,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_vision": True,
         },
         "xai/grok-build-0.1": {
@@ -507,11 +544,10 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": False,
         },
-        # supportsTools: not probed — fails closed
         "xiaomi/mimo-v2.5": {
             "context_window": 1_048_576,
             "max_output_tokens": 131_072,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_vision": True,
         },
         "xiaomi/mimo-v2.5-pro": {

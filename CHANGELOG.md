@@ -2,6 +2,44 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## Unreleased
+
+### Changed
+- **Router Core re-synced to upstream `2cd5a10`** (was `e38958b`, five
+  upstream commits behind; the TypeScript SDK bundles `65a92c8`, which differs
+  from `2cd5a10` only in the capability snapshot). Auto routing now reads only
+  the user turn for stakes, latency and language cues, and structured output
+  is taken only from `requires_structured_output` (`response_format`): a
+  system prompt that lists tool schemas or says "be quick" no longer lifts a
+  request off the cheapest tier. CJK input is sized at about one token per
+  character (`router_core.estimate_tokens`, also the default for
+  `router.classify_by_rules`), so a long Chinese document reaches the
+  long-context models instead of overflowing a smaller window. Keyword scoring
+  matches whole words ("classic" is no longer code, "history" is no longer
+  creative, "prefix" is no longer agentic) while keeping ordinary inflections,
+  ASCII German/Romance endings, Cyrillic stems and CJK substrings. A stack
+  trace or CamelCase error class (`TypeError`, `NullPointerException`) now
+  floors a debug or code-edit turn at MEDIUM. A stale speed probe fades toward
+  neutral instead of toward zero, and a model with no catalog price no longer
+  reports 100% savings.
+
+- **Tool routing admits eleven newly probe-verified models as availability
+  fallbacks:** Claude Fable 5.1 / Opus 5.5 / Sonnet 5.5, Gemini 3.8 Flash,
+  GPT-5.1, GPT-6 Astra / Luna / Sol, Grok 4.6 / 4.7 and MiMo V2.5 now carry
+  `supports_tools=True` (all eleven were fail-closed here before). They join a
+  tool-required turn's chain after the configured and benchmark-backed models,
+  only when the live catalog prices them, cheapest first outside `premium`.
+  Primary selection is unchanged.
+
+- **Capability snapshot regenerated from the 2026-10-20 catalog: 89 text
+  models** (was 82). New: DeepSeek V4.1 Flash, GPT-6.1 Sol, Mistral Large 4,
+  Muse Glimmer 30B, Laguna S 2.1, Qwen 3.8 Max and Hunyuan 4 Preview, all
+  without probe evidence yet, so they serve plain chat but never a
+  tool-required turn. DeepSeek V4 Flash Vision Experimental and Qwen 3.8 Flash
+  failed the function-call probe and stay fail-closed. The cross-language
+  decision snapshot (`tests/unit/router_core_decisions.snapshot.json`) is
+  re-copied from upstream, and the port reproduces all 88 decisions exactly.
+
 ## 1.20.0 — 2026-10-11
 
 ### Added

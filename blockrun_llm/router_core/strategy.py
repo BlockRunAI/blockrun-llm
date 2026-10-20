@@ -10,14 +10,14 @@ Default: RulesStrategy — identical to the original inline route() logic, <1ms.
 from __future__ import annotations
 
 import copy
-import math
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
-from ._js import as_utc, js_regex, parse_date, to_fixed
+from ._js import as_utc, parse_date, to_fixed
 from .rules import classify_by_rules
 from .selector import select_model
+from .tokens import estimate_tokens, sample_for_scan, scan_limit
 from .types import (
     TIER_RANK,
     Profile,
@@ -27,8 +27,6 @@ from .types import (
     Tier,
     TierConfig,
 )
-
-_STRUCTURED_OUTPUT = js_regex(r"json|structured|schema", ignorecase=True)
 
 
 class RouterStrategy(Protocol):
@@ -43,20 +41,6 @@ class RouterStrategy(Protocol):
         max_output_tokens: int,
         options: RouterOptions,
     ) -> RoutingDecision: ...
-
-
-def sample_prompt(value: str, scan_limit: int) -> str:
-    """Sample both ends of a long prompt, keeping instructions at either edge."""
-    if len(value) <= scan_limit:
-        return value
-    prefix_length = math.ceil(scan_limit / 2)
-    suffix_length = scan_limit - prefix_length
-    suffix = value[-suffix_length:] if suffix_length else value
-    return f"{value[:prefix_length]}\n{suffix}"
-
-
-def scan_limit_for(options: RouterOptions) -> int:
-    return max(1, min(8_000, options["config"]["classifier"]["prompt_truncation_chars"]))
 
 
 def apply_unavailable_models(
@@ -149,12 +133,11 @@ class RulesStrategy:
         config = options["config"]
         model_pricing = options["model_pricing"]
 
-        # Estimate input tokens (~4 chars per token)
         full_text = f"{system_prompt or ''} {prompt}"
-        estimated_tokens = math.ceil(len(full_text) / 4)
-        scan_limit = scan_limit_for(options)
-        scanned_prompt = sample_prompt(prompt, scan_limit)
-        scanned_system_prompt = sample_prompt(system_prompt, scan_limit) if system_prompt else None
+        estimated_tokens = estimate_tokens(full_text)
+        limit = scan_limit(config["classifier"]["prompt_truncation_chars"])
+        scanned_prompt = sample_for_scan(prompt, limit)
+        scanned_system_prompt = sample_for_scan(system_prompt, limit) if system_prompt else None
 
         # --- Rule-based classification (runs first to get agentic_score) ---
         rule_result = classify_by_rules(
@@ -245,12 +228,11 @@ class RulesStrategy:
             decision["profile"] = profile
             return decision
 
-        # Structured output detection
-        has_structured_output = options.get("requires_structured_output") is True or (
-            bool(_STRUCTURED_OUTPUT.search(scanned_system_prompt))
-            if scanned_system_prompt
-            else False
-        )
+        # Structured output is a protocol fact the host states (``response_format``
+        # → requires_structured_output). It used to be inferred from the system
+        # prompt as well, but agent hosts describe their tool schemas there on
+        # every turn, which upgraded every one of their requests off SIMPLE.
+        has_structured_output = options.get("requires_structured_output") is True
 
         tier: Tier
         signals = ", ".join(rule_result.get("signals", []))

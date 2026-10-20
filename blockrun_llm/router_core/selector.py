@@ -105,7 +105,11 @@ def select_model(
         "reasoning": reasoning,
         "cost_estimate": cost_estimate,
         "baseline_cost": baseline_cost,
-        "savings": _savings(cost_estimate, baseline_cost, routing_profile),
+        # A model the host has no price for costs an unknown amount, not
+        # nothing; reporting its savings as 100% would be a fabricated figure.
+        "savings": (
+            0.0 if pricing is None else _savings(cost_estimate, baseline_cost, routing_profile)
+        ),
     }
     if agentic_score is not None:
         decision["agentic_score"] = agentic_score

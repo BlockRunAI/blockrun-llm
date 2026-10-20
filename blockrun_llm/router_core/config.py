@@ -2,8 +2,9 @@
 Default Routing Config
 
 Python port of ``@blockrun/router-core`` ``config.ts`` (upstream commit
-``e38958b``, 2026-09-29 — the same pin the TypeScript SDK
-bundles). V3.5: every tier rung is a public catalog id.
+``2cd5a10``; the file is unchanged since ``e38958b``, 2026-09-29, so it is the
+same table the TypeScript SDK bundles). V3.5: every tier rung is a public
+catalog id.
 
 All routing parameters as a module constant. Hosts override by passing their
 own ``RoutingConfig`` in ``RouterOptions["config"]``.

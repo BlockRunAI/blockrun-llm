@@ -2,9 +2,10 @@
 Parity tests for the Router Core port.
 
 Every case here is a 1:1 port of an upstream ``@blockrun/router-core`` vitest
-case (``portfolio.test.ts``, ``selector.test.ts``, ``strategy.test.ts``,
+case (``model-capabilities.test.ts``, ``portfolio.test.ts``, ``rules.test.ts``,
+``selector.test.ts``, ``strategy.test.ts``, ``tokens.test.ts``,
 ``tool-intent.test.ts``, ``unavailable-models.test.ts`` at commit
-``5ee7c23``). They are the regression guard
+``2cd5a10``). They are the regression guard
 that the Python port keeps choosing the same models as the TypeScript SDK —
 when upstream is re-synced, re-port these alongside the source.
 """
@@ -17,10 +18,13 @@ from datetime import datetime, timezone
 import pytest
 
 from blockrun_llm.router_core import (
+    DEFAULT_MODEL_CAPABILITIES,
     DEFAULT_ROUTING_CONFIG,
     RulesStrategy,
     apply_unavailable_models,
     calculate_model_cost,
+    classify_by_rules,
+    estimate_tokens,
     filter_by_exclude_list,
     filter_by_tool_calling,
     filter_candidates_by_capacity,
@@ -30,6 +34,7 @@ from blockrun_llm.router_core import (
     route,
 )
 from blockrun_llm.router_core.selector import select_model
+from blockrun_llm.router_core.tokens import sample_for_scan
 
 
 def _price(input_price: float, output_price: float) -> dict[str, float]:
@@ -59,6 +64,17 @@ PORTFOLIO_PRICING = {
     "openai/gpt-4o-mini": _price(0.15, 0.6),
     "deepseek/deepseek-chat": _price(0.2, 0.4),
     "free/seed-oss-36b": _price(0, 0),
+    "anthropic/claude-fable-5.1": _price(10, 50),
+    "anthropic/claude-opus-5.5": _price(5, 25),
+    "anthropic/claude-sonnet-5.5": _price(3, 15),
+    "google/gemini-3.8-flash": _price(1, 5),
+    "openai/gpt-5.1": _price(1, 8),
+    "openai/gpt-6-astra": _price(5, 25),
+    "openai/gpt-6-luna": _price(0.2, 1.2),
+    "openai/gpt-6-sol": _price(1.75, 14),
+    "xai/grok-4.6": _price(2, 10),
+    "xai/grok-4.7": _price(2.5, 12),
+    "xiaomi/mimo-v2.5": _price(0.5, 2),
 }
 
 STRATEGY_PRICING = {
@@ -221,6 +237,72 @@ class TestPortfolioStrategy:
         assert decision["task_type"] == "tool_agent"
         assert decision["model"] == "anthropic/claude-sonnet-5"
         assert "google/gemini-3.5-flash" in decision["candidates"]
+
+    def test_keeps_newly_tool_verified_catalog_models_as_fallbacks_without_promoting_them(self):
+        decision = _portfolio(
+            "Use lookup_order for order B-42.",
+            256,
+            routing_profile="auto",
+            has_tools=True,
+            requires_tools=True,
+            tool_count=1,
+            unavailable_models=["openai/gpt-6-astra"],
+        )
+
+        assert decision["task_type"] == "tool_agent"
+        assert decision["model"] == "anthropic/claude-sonnet-5"
+        for model in (
+            "anthropic/claude-fable-5.1",
+            "anthropic/claude-opus-5.5",
+            "anthropic/claude-sonnet-5.5",
+            "google/gemini-3.8-flash",
+            "openai/gpt-5.1",
+            "openai/gpt-6-luna",
+            "openai/gpt-6-sol",
+            "xai/grok-4.6",
+            "xai/grok-4.7",
+            "xiaomi/mimo-v2.5",
+        ):
+            assert model in decision["candidates"]
+        assert "openai/gpt-6-astra" not in decision["candidates"]
+
+    def test_does_not_add_tool_only_availability_fallbacks_to_an_ordinary_chat_request(self):
+        decision = _portfolio("What is the capital of France?", 256)
+
+        assert decision["task_type"] == "chat"
+        assert "openai/gpt-6-luna" not in decision["candidates"]
+        assert "anthropic/claude-sonnet-5.5" not in decision["candidates"]
+
+    @pytest.mark.parametrize(
+        ("routing_profile", "first_new_model"),
+        [
+            ("eco", "openai/gpt-6-luna"),
+            ("auto", "openai/gpt-6-luna"),
+            ("premium", "anthropic/claude-fable-5.1"),
+        ],
+    )
+    def test_recovers_a_tool_turn_when_the_established_tool_chain_is_unavailable(
+        self, routing_profile, first_new_model
+    ):
+        options = {
+            "routing_profile": routing_profile,
+            "has_tools": True,
+            "requires_tools": True,
+            "tool_count": 1,
+        }
+        initial = _portfolio("Use lookup_order for order B-42.", 256, **options)
+        candidates = initial.get("candidates") or []
+        first_new_index = candidates.index(first_new_model) if first_new_model in candidates else -1
+
+        assert first_new_index > 0
+        decision = _portfolio(
+            "Use lookup_order for order B-42.",
+            256,
+            **options,
+            unavailable_models=candidates[:first_new_index],
+        )
+
+        assert decision["model"] == first_new_model
 
     def test_keeps_deep_multi_clue_web_research_on_sonnet_5(self):
         decision = _portfolio(
@@ -881,6 +963,139 @@ class TestPortfolioStrategy:
         assert "anthropic/claude-sonnet-5" not in decision["candidates"]
 
 
+class TestPortfolioSignalHygiene:
+    def test_estimates_cjk_input_by_character_so_a_long_chinese_document_is_long_context(self):
+        # 200k Chinese characters is far more than 80k tokens on every
+        # production tokenizer; a chars/4 estimate reports 50k and misses both
+        # the long-context task type and the capacity filter.
+        document = "这是一段很长的中文合同文本，需要总结其中的关键条款。" * 8_000
+        decision = _portfolio(f"总结下面的合同：\n{document}", 1024)
+
+        assert decision["task_type"] == "long_context"
+        assert decision["tier"] == "COMPLEX"
+
+    def test_ignores_stakes_and_latency_cues_that_only_appear_in_the_system_prompt(self):
+        options = {
+            "config": DEFAULT_ROUTING_CONFIG,
+            "model_pricing": PORTFOLIO_PRICING,
+            "has_tools": True,
+            "requires_tools": True,
+            "tool_count": 1,
+            "tool_names": ["web_search"],
+            "now": datetime(2026, 7, 21, tzinfo=timezone.utc),
+        }
+        prompt = "search the web for the latest news on solar panels"
+        bare = route(prompt, None, 1024, options)
+        framed = route(
+            prompt,
+            "Follow security best practices for this production deployment. Be quick.",
+            1024,
+            options,
+        )
+
+        assert framed["candidate_scores"] == bare["candidate_scores"]
+
+    def test_detects_the_request_language_from_the_user_prompt_not_the_system_prompt(self):
+        prompt = "Extract orderId, quantity and status from: order A-17, qty 3, shipped. JSON only."
+        options = {"config": DEFAULT_ROUTING_CONFIG, "model_pricing": PORTFOLIO_PRICING}
+        bare = route(prompt, None, 256, options)
+        zh_system = route(prompt, "你是一个乐于助人的助手。", 256, options)
+
+        assert bare["task_type"] == "extraction"
+        assert zh_system["model"] == bare["model"]
+        assert zh_system["candidates"] == bare["candidates"]
+
+    def test_decays_a_stale_speed_observation_toward_neutral_not_toward_zero(self):
+        # A model with an old probe must not score below a model nobody has
+        # measured (which gets the neutral 0.5). Both models share the
+        # extraction affinity band, so both are scored.
+        equal_cost_pricing = {
+            "google/gemini-2.5-flash": _price(1, 1),
+            "openai/gpt-4o-mini": _price(1, 1),
+        }
+        two_candidate_config = {
+            **DEFAULT_ROUTING_CONFIG,
+            "tiers": {
+                tier: {"primary": "google/gemini-2.5-flash", "fallback": ["openai/gpt-4o-mini"]}
+                for tier in DEFAULT_ROUTING_CONFIG["tiers"]
+            },
+        }
+        decision = route(
+            "Extract the fields as JSON",
+            None,
+            512,
+            {
+                "config": two_candidate_config,
+                "model_pricing": equal_cost_pricing,
+                "now": datetime(2026, 7, 21, tzinfo=timezone.utc),
+                "model_performance": {
+                    "openai/gpt-4o-mini": {
+                        "measured_at": "2025-07-21T00:00:00Z",  # a year old: freshness ~0
+                        "latency_ms": 600,
+                        "output_tokens_per_second": 250,
+                    },
+                    "google/gemini-2.5-flash": {
+                        "measured_at": "not-measured",  # no usable observation: neutral
+                        "latency_ms": 0,
+                        "output_tokens_per_second": 0,
+                    },
+                },
+            },
+        )
+
+        rows = {row["model"]: row for row in decision.get("candidate_scores") or []}
+        assert decision["task_type"] == "extraction"
+        assert rows["openai/gpt-4o-mini"]["speed"] == pytest.approx(0.5, abs=0.005)
+        assert rows["google/gemini-2.5-flash"]["speed"] == pytest.approx(0.5, abs=0.005)
+
+
+class TestPortfolioCodeTaskTierFloor:
+    def test_keeps_a_stack_trace_off_the_simple_chain_even_when_the_rules_score_is_low(self):
+        # Word-boundary keyword matching removed the accidental `def`/`define`
+        # hits inside "undefined" that used to lift this prompt to MEDIUM. The
+        # portfolio classifier still knows it is a debug task, and the SIMPLE
+        # chain is curated for trivia and translation, not for reading a trace.
+        decision = _portfolio(
+            "debug: TypeError: Cannot read properties of undefined (reading 'map') "
+            "at UserList.render",
+            1024,
+        )
+
+        assert decision["task_type"] == "debug"
+        assert decision["tier"] == "MEDIUM"
+
+
+class TestPortfolioCodeTaskFloorGating:
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "Rewrite this sentence: The weather is nice today.",
+            "What does margin of error mean?",
+        ],
+    )
+    def test_leaves_prose_that_merely_says_rewrite_or_error_on_the_simple_chain(self, prompt):
+        assert _portfolio(prompt, 256)["tier"] == "SIMPLE"
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "What is Python?",
+            "Translate this sentence into French: I like Python.",
+            "Translate into French: Please make an exception.",
+        ],
+    )
+    def test_does_not_treat_a_bare_programming_language_mention_as_code_evidence(self, prompt):
+        assert _portfolio(prompt, 256)["tier"] == "SIMPLE"
+
+    def test_treats_a_camelcase_error_class_as_code_evidence(self):
+        decision = _portfolio(
+            "NullPointerException at OrderService.java:88 when the cart is empty, why?", 256
+        )
+
+        assert decision["task_type"] == "debug"
+        assert decision["tier"] == "MEDIUM"
+
+
 # ─── selector.test.ts ───
 
 SELECTOR_TIER_CONFIGS = {
@@ -913,6 +1128,18 @@ class TestSelector:
 
         assert decision["baseline_cost"] > 0
         assert decision["savings"] > 0
+
+    def test_select_model_does_not_claim_savings_for_a_model_whose_price_is_unknown(self):
+        unpriced = {
+            **SELECTOR_TIER_CONFIGS,
+            "SIMPLE": {"primary": "vendor/unlisted-model", "fallback": []},
+        }
+        decision = select_model(
+            "SIMPLE", 0.95, "rules", "test", unpriced, SELECTOR_PRICING, 1000, 1000
+        )
+
+        assert decision["baseline_cost"] > 0
+        assert decision["savings"] == 0
 
     def test_calculate_model_cost_uses_opus_4_7_as_the_baseline(self):
         costs = calculate_model_cost("moonshot/kimi-k2.5", SELECTOR_PRICING, 1000, 1000)
@@ -1199,6 +1426,24 @@ class TestPortfolioDefault:
         assert decision["task_type"] == "reasoning_math"
 
 
+class TestRulesStrategySignalHygiene:
+    def test_does_not_read_a_structured_output_requirement_out_of_the_system_prompt(self):
+        # Agent hosts describe their tool schemas in the system prompt on every
+        # turn; that text is not evidence that this request needs structured
+        # output. Hosts state the requirement through `requires_structured_output`.
+        strategy = RulesStrategy()
+        with_schema_prompt = strategy.route(
+            "hello",
+            "You are a helpful assistant. Tools are described below as a JSON schema.",
+            100,
+            BASE_OPTIONS,
+        )
+        bare = strategy.route("hello", None, 100, BASE_OPTIONS)
+
+        assert with_schema_prompt["tier"] == bare["tier"]
+        assert "structured output" not in with_schema_prompt["reasoning"]
+
+
 # ─── tool-intent.test.ts ───
 
 
@@ -1377,3 +1622,141 @@ class TestUnavailableModels:
             self._options(unavailable_models=chain),
         )
         assert len(decision["model"]) > 0
+
+
+# ─── model-capabilities.test.ts ───
+
+
+class TestGeneratedModelCapabilitySnapshot:
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "anthropic/claude-fable-5.1",
+            "anthropic/claude-opus-5.5",
+            "anthropic/claude-sonnet-5.5",
+            "google/gemini-3.8-flash",
+            "openai/gpt-5.1",
+            "openai/gpt-6-astra",
+            "openai/gpt-6-luna",
+            "openai/gpt-6-sol",
+            "xai/grok-4.6",
+            "xai/grok-4.7",
+            "xiaomi/mimo-v2.5",
+        ],
+    )
+    def test_accepts_a_live_probed_tool_call(self, model):
+        assert DEFAULT_MODEL_CAPABILITIES[model]["supports_tools"] is True
+
+    @pytest.mark.parametrize(
+        "model", ["deepseek/deepseek-v4-flash-vision-exp", "qwen/qwen3.8-flash"]
+    )
+    def test_keeps_a_model_out_of_tool_required_routes_after_an_invalid_tool_response(self, model):
+        assert DEFAULT_MODEL_CAPABILITIES[model]["supports_tools"] is False
+
+
+# ─── rules.test.ts ───
+
+SCORING = DEFAULT_ROUTING_CONFIG["scoring"]
+
+
+def _signals_for(prompt: str) -> list[str]:
+    return classify_by_rules(prompt, None, math.ceil(len(prompt) / 4), SCORING)["signals"]
+
+
+def _has_signal(signals: list[str], fragment: str) -> bool:
+    return any(fragment in signal for signal in signals)
+
+
+class TestClassifyByRulesKeywordMatching:
+    def test_does_not_count_a_keyword_that_only_appears_inside_a_longer_word(self):
+        # "classic" is not `class`, "history" is not `story`, "credit" is not
+        # `edit`, "pipeline" is not `pip`, "prefix" is not `fix`.
+        assert not _has_signal(_signals_for("I need a recipe for a classic dinner party"), "code")
+        assert not _has_signal(_signals_for("Tell me the history of the Roman Empire"), "creative")
+        assert not _has_signal(
+            _signals_for("Why does my credit card pipeline report a prefix mismatch?"), "agentic"
+        )
+
+    def test_still_matches_ordinary_english_inflections_of_a_keyword(self):
+        assert _has_signal(_signals_for("I imported the classes and defined two functions"), "code")
+        assert _has_signal(
+            _signals_for("Keep editing until the tests pass, then deploying"), "agentic"
+        )
+
+    def test_keeps_substring_matching_for_cjk_keywords_which_have_no_word_boundaries(self):
+        assert _has_signal(_signals_for("请帮我定义一个函数来处理输入"), "code")
+
+    def test_keeps_inflections_of_the_ascii_keywords_of_other_european_languages(self):
+        # `beweis` and `mathematisch` are German reasoning markers spelled in
+        # ASCII; the end boundary must not require English morphology of them.
+        result = classify_by_rules("Beweise den mathematischen Satz.", None, 8, SCORING)
+
+        assert result["tier"] == "REASONING"
+
+    def test_matches_doubled_consonant_english_inflections(self):
+        result = classify_by_rules("Keep debugging and editing until it works.", None, 11, SCORING)
+
+        assert result["agentic_score"] == 0.6
+
+    def test_does_not_let_a_short_keyword_plus_a_suffix_spell_a_different_word(self):
+        # "pipes" is not `pip`, "defer" is not `def`, "important" is not
+        # `import`, "basic" is not `asic`, "semantic" is not `sem`.
+        prompt = "It is important to defer the basic semantic check for the pipes"
+        result = classify_by_rules(prompt, None, 16, SCORING)
+
+        assert [
+            signal
+            for signal in result["signals"]
+            if any(label in signal for label in ("code", "agentic", "domain", "negation"))
+        ] == []
+        assert _has_signal(_signals_for("Apply the fixes and rerun"), "agentic")
+
+    def test_treats_a_cjk_character_next_to_a_latin_keyword_as_a_word_boundary(self):
+        # Mixed-script prompts carry no spaces between scripts.
+        result = classify_by_rules("请step by step证明这个结论。", None, 8, SCORING)
+
+        assert _has_signal(result["signals"], "step by step")
+        assert result["tier"] == "REASONING"
+
+    def test_keeps_stem_matching_for_cyrillic_keywords(self):
+        # "оптимизаци" is a deliberate stem that must still hit "оптимизацию".
+        assert _has_signal(
+            _signals_for("Проведи оптимизацию алгоритма для базы данных"), "technical"
+        )
+
+
+# ─── tokens.test.ts ───
+
+
+class TestEstimateTokens:
+    def test_keeps_the_four_characters_per_token_estimate_for_latin_text(self):
+        text = "The quick brown fox jumps over the lazy dog." * 10  # 440 chars
+
+        assert estimate_tokens(text) == 110
+
+    def test_counts_a_cjk_character_as_roughly_one_token_not_a_quarter_of_one(self):
+        text = "这是一段需要总结的中文合同文本。" * 100  # 1600 chars
+
+        assert 1400 <= estimate_tokens(text) <= 1700
+
+    def test_adds_the_two_estimates_for_mixed_text(self):
+        latin = "a" * 400  # 100 tokens
+        cjk = "中" * 100  # ~100 tokens
+
+        assert estimate_tokens(latin + cjk) == 200
+
+    def test_returns_zero_for_empty_text(self):
+        assert estimate_tokens("") == 0
+
+
+class TestSampleForScan:
+    def test_returns_short_text_unchanged(self):
+        assert sample_for_scan("hello", 10) == "hello"
+
+    def test_keeps_both_ends_of_a_long_text_so_the_instruction_survives(self):
+        text = f"HEAD {'x' * 100} TAIL"
+        sampled = sample_for_scan(text, 20)
+
+        assert sampled.startswith("HEAD")
+        assert sampled.endswith("TAIL")
+        assert len(sampled) <= 21
