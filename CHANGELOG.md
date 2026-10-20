@@ -2,12 +2,12 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
-## Unreleased
+## 1.21.0 — 2026-10-20
 
 ### Changed
 - **Router Core re-synced to upstream `2cd5a10`** (was `e38958b`, five
-  upstream commits behind; the TypeScript SDK bundles `65a92c8`, which differs
-  from `2cd5a10` only in the capability snapshot). Auto routing now reads only
+  upstream commits behind; the TypeScript SDK bundles the same `2cd5a10` as of
+  3.24.3). Auto routing now reads only
   the user turn for stakes, latency and language cues, and structured output
   is taken only from `requires_structured_output` (`response_format`): a
   system prompt that lists tool schemas or says "be quick" no longer lifts a
