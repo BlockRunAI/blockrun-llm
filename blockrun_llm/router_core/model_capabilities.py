@@ -200,6 +200,13 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": True,
         },
+        # supportsTools: not probed — fails closed
+        "google/gemini-4-argon": {
+            "context_window": 1_048_576,
+            "max_output_tokens": 65_536,
+            "supports_tools": False,
+            "supports_vision": True,
+        },
         "minimax/minimax-m2.7": {
             "context_window": 204_800,
             "max_output_tokens": 16_384,

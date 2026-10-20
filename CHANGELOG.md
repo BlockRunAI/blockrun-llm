@@ -2,6 +2,20 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.21.1 — 2026-10-20
+
+### Changed
+- **Router Core re-synced to upstream `3aca0e1`** (was `2cd5a10`; the
+  TypeScript SDK moves to the same commit in 3.24.4). The only upstream change
+  is a `google/gemini-4-argon` capability entry — 1M context, 65,536 max
+  output, vision, `supports_tools` False until a paid tool probe verifies it,
+  so tool requests fail closed. The 88-decision parity fixture is re-copied
+  and byte-identical, so no routing decision changes.
+
+### Docs
+- README model list adds `google/gemini-4-argon` (Gemini 4 Argon, live on Base
+  and Solana since 2026-10-20). Catalog only: no routing tier picks it.
+
 ## 1.21.0 — 2026-10-20
 
 ### Changed

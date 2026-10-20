@@ -5,7 +5,7 @@ Every case here is a 1:1 port of an upstream ``@blockrun/router-core`` vitest
 case (``model-capabilities.test.ts``, ``portfolio.test.ts``, ``rules.test.ts``,
 ``selector.test.ts``, ``strategy.test.ts``, ``tokens.test.ts``,
 ``tool-intent.test.ts``, ``unavailable-models.test.ts`` at commit
-``2cd5a10``). They are the regression guard
+``3aca0e1``). They are the regression guard
 that the Python port keeps choosing the same models as the TypeScript SDK —
 when upstream is re-synced, re-port these alongside the source.
 """
