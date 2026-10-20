@@ -137,7 +137,7 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
         "deepseek/deepseek-v4.1-flash": {
             "context_window": 1_048_576,
             "max_output_tokens": 65_536,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_vision": False,
         },
         "google/gemini-2.5-flash": {
@@ -198,6 +198,12 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "context_window": 1_048_576,
             "max_output_tokens": 65_536,
             "supports_tools": True,
+            "supports_vision": True,
+        },
+        "google/gemini-4-argon": {
+            "context_window": 1_048_576,
+            "max_output_tokens": 65_536,
+            "supports_tools": False,
             "supports_vision": True,
         },
         "minimax/minimax-m2.7": {
@@ -435,7 +441,7 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
         "openai/gpt-6.1-sol": {
             "context_window": 1_050_000,
             "max_output_tokens": 128_000,
-            "supports_tools": False,
+            "supports_tools": True,
             "supports_vision": True,
         },
         "openai/o1": {

@@ -2,7 +2,7 @@
 Default Routing Config
 
 Python port of ``@blockrun/router-core`` ``config.ts`` (upstream commit
-``2cd5a10``; the file is unchanged since ``e38958b``, 2026-09-29, so it is the
+``8773a99``; the file is unchanged since ``e38958b``, 2026-09-29, so it is the
 same table the TypeScript SDK bundles). V3.5: every tier rung is a public
 catalog id.
 
