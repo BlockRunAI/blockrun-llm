@@ -2,6 +2,17 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## 1.21.1 — 2026-10-20
+
+### Changed
+- **Router Core re-synced to upstream `8773a99`.** A live probe confirmed
+  well-formed tool calls from `deepseek/deepseek-v4.1-flash` and
+  `openai/gpt-6.1-sol`, so both are now tool-capable and join the verified
+  tool fallbacks behind the configured chains. `google/gemini-4-argon` gets a
+  capability row (vision, not yet probed for tools, so it fails closed). The
+  port reproduces upstream's 88-request decision snapshot exactly, and no
+  primary changes.
+
 ## 1.21.0 — 2026-10-20
 
 ### Changed
