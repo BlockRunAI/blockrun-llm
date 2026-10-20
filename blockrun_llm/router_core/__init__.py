@@ -2,7 +2,7 @@
 Router Core — deterministic, constraint-first model routing.
 
 Python port of `@blockrun/router-core <https://github.com/BlockRunAI/router-core>`_
-(upstream commit ``e38958b``), the same routing engine the TypeScript SDK and
+(upstream commit ``2cd5a10``), the same routing engine the TypeScript SDK and
 the BlockRun gateway use. The package is deliberately product-neutral: task
 classification, hard capability filtering, portfolio scoring, ordered
 fallbacks, and routing configuration. It contains no wallet, gateway client,
@@ -51,6 +51,7 @@ from .strategy import (
     get_strategy,
     register_strategy,
 )
+from .tokens import estimate_tokens
 from .tool_intent import infer_tool_requirement
 from .types import (
     Capacity,
@@ -108,6 +109,7 @@ __all__ = [
     "calculate_model_cost",
     "classify_by_rules",
     "classify_task",
+    "estimate_tokens",
     "filter_by_exclude_list",
     "filter_by_tool_calling",
     "filter_by_vision",

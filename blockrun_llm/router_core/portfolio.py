@@ -19,7 +19,8 @@ from ._js import as_utc, js_bool, js_regex, parse_date
 from .model_capabilities import DEFAULT_MODEL_CAPABILITIES
 from .model_profiles import HISTORICAL_MODEL_PROFILES, LIVE_MODEL_PROFILES
 from .selector import get_fallback_chain, select_model
-from .strategy import RulesStrategy, sample_prompt, scan_limit_for
+from .strategy import RulesStrategy
+from .tokens import estimate_tokens, sample_for_scan, scan_limit
 from .tool_intent import infer_tool_requirement
 from .types import (
     CandidateScore,
@@ -85,6 +86,8 @@ class TaskFeatures:
     terminal_tool_signal: bool
     terminal_safety_sensitive: bool
     implicit_terminal_code: bool
+    #: A code artifact or coding action is present, not merely a language name.
+    code_artifact: bool
 
 
 # ─── Compiled request features (ported 1:1 from the TypeScript regexes) ───
@@ -157,6 +160,12 @@ _CODE_CONSTRUCT_SIGNAL = js_regex(
 _NATIVE_CODE_SIGNAL = js_regex(
     r"\b(?:programmed|written|implemented?|code)\s+(?:in|using)\s+(?:c\+\+|c|rust|go)\b",
     ignorecase=True,
+)
+# A CamelCase error class (TypeError, NullPointerException) is a runtime
+# artifact, not prose about errors; case-sensitive on purpose.
+_ERROR_CLASS_SIGNAL = js_regex(r"\b[A-Z][A-Za-z]*(?:Error|Exception)\b")
+_CODE_ARTIFACT_SIGNAL = js_regex(
+    r"```|\b(?:stack trace|traceback)\b|\.(?:ts|tsx|js|py|go|rs)\b", ignorecase=True
 )
 _AIRLINE_TOOL = js_regex(r"(?:flight|reservation|airport|baggage|passenger)")
 _RETAIL_TOOL = js_regex(r"(?:order|product|item|return|exchange|address)")
@@ -374,13 +383,15 @@ def _likely_needs_parallel_tool_calls(
 def classify_task(prompt: str, system_prompt: str | None, options: RouterOptions) -> TaskFeatures:
     """Extract the request-side features the portfolio scorer ranks against."""
     full_text = f"{system_prompt or ''} {prompt}"
-    estimated_input_tokens = math.ceil(len(full_text) / 4)
-    # Feature regexes need request shape and intent, not the entire document.
-    # Sample both ends so a long pasted artifact keeps the task instruction at
-    # either boundary, while the full length still drives capacity decisions.
-    scan_limit = scan_limit_for(options)
-    scanned_prompt = sample_prompt(prompt, scan_limit)
-    scanned_system_prompt = sample_prompt(system_prompt or "", scan_limit)
+    estimated_input_tokens = estimate_tokens(full_text)
+    limit = scan_limit(options["config"]["classifier"]["prompt_truncation_chars"])
+    scanned_prompt = sample_for_scan(prompt, limit)
+    scanned_system_prompt = sample_for_scan(system_prompt or "", limit)
+    # Only the deep-web-research clue detectors below read the system prompt,
+    # and they are gated on a web-research tool surface. Every other feature
+    # reads the user turn: a host's standing instructions ("be quick", "follow
+    # security best practices", a Mandarin persona) describe the assistant, not
+    # this request, and must not move its scoring or language band.
     scanned_full_text = f"{scanned_system_prompt} {scanned_prompt}"
     text = scanned_prompt.lower()
 
@@ -391,7 +402,21 @@ def classify_task(prompt: str, system_prompt: str | None, options: RouterOptions
     # redirect an entire tool session to the code-agent portfolio.
     code_construct_signal = bool(_CODE_CONSTRUCT_SIGNAL.search(scanned_prompt))
     native_code_signal = bool(_NATIVE_CODE_SIGNAL.search(scanned_prompt))
-    has_code = explicit_code_signal or code_construct_signal or native_code_signal
+    # A CamelCase error class is a runtime artifact (see _ERROR_CLASS_SIGNAL).
+    error_class_signal = bool(_ERROR_CLASS_SIGNAL.search(scanned_prompt))
+    has_code = (
+        explicit_code_signal or code_construct_signal or native_code_signal or error_class_signal
+    )
+    # Stronger than has_code: an actual code artifact or coding action, never a
+    # bare language name ("What is Python?" is trivia, not a code task) and
+    # never the English word "exception" on its own ("please make an
+    # exception"); a thrown exception shows up as a CamelCase class above.
+    code_artifact = (
+        bool(_CODE_ARTIFACT_SIGNAL.search(scanned_prompt))
+        or code_construct_signal
+        or native_code_signal
+        or error_class_signal
+    )
 
     tools_available = options.get("has_tools", False)
     requires_tools = options.get("requires_tools")
@@ -503,8 +528,8 @@ def classify_task(prompt: str, system_prompt: str | None, options: RouterOptions
 
     needs_vision = options.get("has_vision", False)
     needs_structured_output = options.get("requires_structured_output", False)
-    latency_sensitive = bool(_LATENCY_SENSITIVE.search(scanned_full_text))
-    high_stakes = bool(_HIGH_STAKES.search(scanned_full_text))
+    latency_sensitive = bool(_LATENCY_SENSITIVE.search(scanned_prompt))
+    high_stakes = bool(_HIGH_STAKES.search(scanned_prompt))
 
     # Terminal tasks often describe the desired artifact rather than naming a
     # programming language. Treat only small, deterministic local build/file
@@ -569,7 +594,7 @@ def classify_task(prompt: str, system_prompt: str | None, options: RouterOptions
         and len(prompt) <= 1_000
         and simple_terminal_artifact
     )
-    language = "zh" if _HAN.search(scanned_full_text) else "other"
+    language = "zh" if _HAN.search(scanned_prompt) else "other"
     multiple_choice_signals = len(_MULTIPLE_CHOICE.findall(scanned_prompt))
     numeric_signals = len(_NUMERIC.findall(scanned_prompt))
     compact_math_problem = (
@@ -598,7 +623,7 @@ def classify_task(prompt: str, system_prompt: str | None, options: RouterOptions
         task_type = "reasoning_mcq"
     elif compact_math_problem:
         task_type = "reasoning_math"
-    elif _DEBUG_TASK.search(text):
+    elif error_class_signal or _DEBUG_TASK.search(text):
         task_type = "debug"
     elif has_code or _CODE_EDIT_TASK.search(text):
         task_type = "code_edit"
@@ -626,6 +651,7 @@ def classify_task(prompt: str, system_prompt: str | None, options: RouterOptions
         terminal_tool_signal=terminal_tool_signal,
         terminal_safety_sensitive=terminal_safety_sensitive,
         implicit_terminal_code=implicit_terminal_code,
+        code_artifact=code_artifact,
     )
 
 
@@ -1063,6 +1089,29 @@ def evidence_candidates(task: TaskType) -> list[str]:
     return []
 
 
+#: Recently added catalog models with a verified structured function call.
+#:
+#: Tool compliance is enough to make these models safe availability fallbacks,
+#: but it is not evidence that they should displace a trajectory-benchmarked
+#: primary. Keep them after the configured and benchmark-backed chains until a
+#: full agent evaluation earns a task-specific affinity above the neutral 0.68
+#: floor. ``is_eligible`` still applies every host capability override, context
+#: limit, vision constraint, and unavailable-model guard before they are used.
+VERIFIED_TOOL_FALLBACKS: tuple[str, ...] = (
+    "anthropic/claude-fable-5.1",
+    "anthropic/claude-opus-5.5",
+    "anthropic/claude-sonnet-5.5",
+    "google/gemini-3.8-flash",
+    "openai/gpt-5.1",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-luna",
+    "openai/gpt-6-sol",
+    "xai/grok-4.6",
+    "xai/grok-4.7",
+    "xiaomi/mimo-v2.5",
+)
+
+
 def is_eligible(
     model_id: str,
     features: TaskFeatures,
@@ -1168,6 +1217,11 @@ class PortfolioStrategy:
 
     name = "portfolio"
 
+    def __init__(self) -> None:
+        # Rules set the capability tier; the strategy is stateless, so one
+        # instance serves every request.
+        self._rules = RulesStrategy()
+
     def route(
         self,
         prompt: str,
@@ -1178,33 +1232,73 @@ class PortfolioStrategy:
         features = classify_task(prompt, system_prompt, options)
         rules_options: RouterOptions = dict(options)  # type: ignore[assignment]
         rules_options["requires_tools"] = features.needs_tools
-        base = RulesStrategy().route(prompt, system_prompt, max_output_tokens, rules_options)
+        base = self._rules.route(prompt, system_prompt, max_output_tokens, rules_options)
         tier_configs = base.get("tier_configs")
         if not tier_configs:
             return base
 
-        target_tier: Tier = (
-            "REASONING"
-            if features.task_type in ("reasoning_mcq", "reasoning_math")
-            and base["tier"] in ("SIMPLE", "MEDIUM")
-            else base["tier"]
-        )
+        # The rules score sets the capability tier, but two task types carry a
+        # floor of their own: a compact reasoning problem belongs on the
+        # reasoning chain however short it is, and a code edit or stack trace
+        # belongs at least on the MEDIUM chain — the SIMPLE chain is curated for
+        # trivia and translation and has no model with code affinity. The code
+        # floor requires a code artifact or coding action: `debug` and
+        # `code_edit` are also assigned from bare verbs ("rewrite this
+        # sentence", "margin of error") and bare language names ("What is
+        # Python?"), and that prose must stay on the cheap chain.
+        target_tier: Tier
+        if features.task_type in ("reasoning_mcq", "reasoning_math") and base["tier"] in (
+            "SIMPLE",
+            "MEDIUM",
+        ):
+            target_tier = "REASONING"
+        elif (
+            features.task_type in ("debug", "code_edit")
+            and features.code_artifact
+            and base["tier"] == "SIMPLE"
+        ):
+            target_tier = "MEDIUM"
+        else:
+            target_tier = base["tier"]
         tier_config = tier_configs.get(target_tier)
         configured_candidates = get_fallback_chain(target_tier, tier_configs) if tier_config else []
         # Evidence candidates join the configured chain, but the host's
         # unavailable set applies to both: the configured side arrives filtered
         # through RulesStrategy, and a dead evidence model must not re-enter here.
         unavailable = set(options.get("unavailable_models") or ())
+        # `model_pricing` is the host's live catalog view. Do not introduce a
+        # built-in fallback that the current gateway does not advertise. These
+        # models carry no task evidence, so outside Premium the cheapest one is
+        # the first recovery hop; otherwise an outage of the curated chain would
+        # jump an Eco turn straight to the most expensive model in the list.
+        model_pricing = options["model_pricing"]
+        verified_tool_fallbacks = (
+            [model for model in VERIFIED_TOOL_FALLBACKS if model in model_pricing]
+            if features.needs_tools
+            else []
+        )
+        if options.get("routing_profile") != "premium":
+            verified_tool_fallbacks.sort(
+                key=lambda model: estimated_cost(
+                    model, options, features.estimated_input_tokens, max_output_tokens
+                )
+            )
         chain = [
             model
             for model in dict.fromkeys(
-                [*configured_candidates, *evidence_candidates(features.task_type)]
+                [
+                    *configured_candidates,
+                    *evidence_candidates(features.task_type),
+                    *verified_tool_fallbacks,
+                ]
             )
             if isinstance(model, str) and model and model not in unavailable
         ]
         eligible = [
             model for model in chain if is_eligible(model, features, max_output_tokens, options)
         ]
+        eligible_set = set(eligible)
+        # When nothing is eligible the whole chain competes, scored as incapable.
         eligible_candidates = eligible if eligible else chain
         if not eligible_candidates:
             return base
@@ -1279,9 +1373,7 @@ class PortfolioStrategy:
                 if math.isfinite(cost) and max_cost > min_cost
                 else 0.5
             )
-            capability_score = (
-                1.0 if is_eligible(model, features, max_output_tokens, options) else 0.0
-            )
+            capability_score = 1.0 if model in eligible_set else 0.0
             profile = profile_score(model, options, now)
             # Fresh observations can refine affinity. Historical observations
             # fade quickly and never replace task-level RouterBench evidence.
@@ -1292,8 +1384,20 @@ class PortfolioStrategy:
                 observed_quality = (
                     model_affinity * (1 - profile.freshness) + profile.quality * profile.freshness
                 )
-            observed_speed = profile.speed * profile.freshness if profile else 0.5
-            observed_tail_speed = profile.tail_speed * profile.freshness if profile else 0.5
+            # Every observed dimension fades toward its neutral prior as the
+            # observation ages, exactly like reliability below. Fading speed
+            # toward zero instead ranked any model with a stale probe below a
+            # model nobody had measured, which the latter's 0.5 silently won.
+            observed_speed = (
+                profile.speed * profile.freshness + 0.5 * (1 - profile.freshness)
+                if profile
+                else 0.5
+            )
+            observed_tail_speed = (
+                profile.tail_speed * profile.freshness + 0.5 * (1 - profile.freshness)
+                if profile
+                else 0.5
+            )
             observed_reliability = (
                 profile.reliability * profile.freshness + (1 - profile.freshness)
                 if profile

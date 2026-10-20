@@ -36,7 +36,7 @@ from .router_adapter import (
     ResolvedRoutingDecision,
     route_with_catalog,
 )
-from .router_core import DEFAULT_ROUTING_CONFIG
+from .router_core import DEFAULT_ROUTING_CONFIG, estimate_tokens
 from .router_core import classify_by_rules as _classify_by_rules
 from .router_core.types import ModelPricing, ScoringResult, Tier, TierConfig
 from .types import RoutingProfile
@@ -66,12 +66,11 @@ def classify_by_rules(
 ) -> ScoringResult:
     """Classify a prompt into a tier with the shared 15-dimension scorer.
 
-    ``estimated_tokens`` defaults to the ~4-chars-per-token estimate the router
-    itself uses.
+    ``estimated_tokens`` defaults to the estimate the router itself uses (about
+    four characters per token, one per CJK character).
     """
     if estimated_tokens is None:
-        full_text = f"{system_prompt or ''} {prompt}"
-        estimated_tokens = -(-len(full_text) // 4)  # ceil
+        estimated_tokens = estimate_tokens(f"{system_prompt or ''} {prompt}")
     return _classify_by_rules(
         prompt, system_prompt, estimated_tokens, DEFAULT_ROUTING_CONFIG["scoring"]
     )
