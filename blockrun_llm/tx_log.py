@@ -77,6 +77,57 @@ def read_settlement_header(headers: Any) -> str | None:
     return None
 
 
+# A gateway can serve a paid request WITHOUT settling it and say so on the 200:
+#   X-Settlement-Skipped: empty-result | unexecuted | free-fallback | ...
+#   X-Payment-Waived:     empty-result   (sol and base pm routes)
+# Either marker means no money moved for this call, so every booking site
+# (session totals, _last_call_cost, cost log, tx log) must record $0.
+#
+# ``X-Payment-Settled: false`` ALONE is deliberately NOT a marker: it means
+# settlement had not landed when the response was written. The call is still
+# owed and may settle a moment later; booking it as free would under-count
+# real spend and let a session spend limit be exceeded.
+_SETTLEMENT_SKIPPED_HEADER = "X-Settlement-Skipped"
+_PAYMENT_WAIVED_HEADER = "X-Payment-Waived"
+
+
+def _header_value(headers: Any, name: str) -> str | None:
+    """Case-insensitive header lookup over httpx.Headers or a plain mapping."""
+    try:
+        value = headers.get(name)
+        if value is not None:
+            return str(value)
+        # A plain dict is case-sensitive; httpx.Headers is not.
+        lowered = name.lower()
+        for key, val in headers.items():
+            if isinstance(key, str) and key.lower() == lowered:
+                return None if val is None else str(val)
+    except Exception:
+        return None
+    return None
+
+
+def settlement_skipped(headers: Any) -> bool:
+    """True when the gateway served this paid response without settling it.
+
+    ``X-Settlement-Skipped`` with any non-empty value, or ``X-Payment-Waived``
+    present at all; lookup is case-insensitive. Never raises: a header object
+    that misbehaves reads as "not skipped", which books the quote (the
+    behaviour before this marker existed).
+    """
+    if headers is None:
+        return False
+    skipped = _header_value(headers, _SETTLEMENT_SKIPPED_HEADER)
+    if skipped is not None and skipped.strip():
+        return True
+    return _header_value(headers, _PAYMENT_WAIVED_HEADER) is not None
+
+
+def booked_cost_usd(headers: Any, cost_usd: float) -> float:
+    """What to book for a paid 2xx: ``cost_usd``, or 0.0 when settlement was skipped."""
+    return 0.0 if settlement_skipped(headers) else cost_usd
+
+
 def decode_settlement_header(header_value: str | None) -> dict[str, Any] | None:
     """Decode a ``PAYMENT-RESPONSE`` header into a settlement dict.
 

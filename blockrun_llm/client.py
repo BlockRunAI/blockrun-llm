@@ -71,9 +71,11 @@ from .router_adapter import (
 from .tx_log import (
     TransactionLogger,
     _resolve_log_dir,
+    booked_cost_usd,
     decode_settlement_header,
     paid_request_error_prefix,
     read_settlement_header,
+    settlement_skipped,
 )
 from .types import (
     APIError,
@@ -728,15 +730,22 @@ def _exact_chat_payment(
 
 
 def _booked_cost(
-    payment: _ChatPayment, settlement: dict[str, Any] | None
+    payment: _ChatPayment, settlement: dict[str, Any] | None, *, skipped: bool = False
 ) -> tuple[float, str | None]:
     """What to record as spent for a paid call, and on what basis.
 
+    skipped → 0.0, basis ``"settlement_skipped"``: the gateway served the call
+    without settling it (``X-Settlement-Skipped`` / ``X-Payment-Waived``, see
+    :func:`blockrun_llm.tx_log.settlement_skipped`), so no money moved.
     exact → the quote, basis ``None`` (records unchanged from earlier releases).
     upto  → the settled amount when ``PAYMENT-RESPONSE`` reports one
     (``"upto_settled"``); otherwise the signed ceiling, labeled
     ``"upto_ceiling"`` — an upper bound, not a confirmed charge.
     """
+    if skipped:
+        if payment.release is not None:
+            payment.release()  # served without settling: this upto never settles
+        return 0.0, "settlement_skipped"
     if payment.scheme != "upto":
         return payment.cost_usd, None
     if payment.release is not None and settlement and settlement.get("tx_hash"):
@@ -1169,10 +1178,14 @@ class LLMClient:
         }
 
     def _book_paid_call(
-        self, payment: _ChatPayment, settlement: dict[str, Any] | None
+        self,
+        payment: _ChatPayment,
+        settlement: dict[str, Any] | None,
+        *,
+        skipped: bool = False,
     ) -> tuple[float, str | None]:
         """Record a paid call in the session totals; returns ``_booked_cost``'s pair."""
-        cost_usd, basis = _booked_cost(payment, settlement)
+        cost_usd, basis = _booked_cost(payment, settlement, skipped=skipped)
         self._session_calls += 1
         self._session_total_usd += cost_usd
         if basis == "upto_ceiling":
@@ -1649,7 +1662,9 @@ class LLMClient:
                         # whatever amount that header carries.
                         settlement = self._capture_settlement(resp2)
                         cost_usd, basis = self._book_paid_call(
-                            payment, None if payment.scheme == "upto" else settlement
+                            payment,
+                            None if payment.scheme == "upto" else settlement,
+                            skipped=settlement_skipped(resp2.headers),
                         )
                     yield from self._iter_and_archive(
                         resp2,
@@ -2002,7 +2017,9 @@ class LLMClient:
         # Update session spending. For upto this is the settled amount when
         # PAYMENT-RESPONSE reports one, else the signed ceiling, labeled.
         settlement = self._capture_settlement(retry_response)
-        cost_usd, cost_basis = self._book_paid_call(payment, settlement)
+        cost_usd, cost_basis = self._book_paid_call(
+            payment, settlement, skipped=settlement_skipped(retry_response.headers)
+        )
 
         # Attach the real x402 charge (and on-chain settlement) to THIS response
         # object so callers get a per-call, race-free cost. Use the value
@@ -2186,6 +2203,9 @@ class LLMClient:
                 retry_after=retry_after_of(retry_response),
             )
 
+        # A response served without settling (X-Settlement-Skipped /
+        # X-Payment-Waived) moved no money: book $0, not the quote.
+        cost_usd = booked_cost_usd(retry_response.headers, cost_usd)
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
@@ -2339,6 +2359,9 @@ class LLMClient:
                 retry_after=retry_after_of(retry_response),
             )
 
+        # A response served without settling (X-Settlement-Skipped /
+        # X-Payment-Waived) moved no money: book $0, not the quote.
+        cost_usd = booked_cost_usd(retry_response.headers, cost_usd)
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
@@ -3677,7 +3700,9 @@ class AsyncLLMClient:
                         # pre-settle header's amount.
                         settlement = self._capture_settlement(resp2)
                         cost_usd, basis = _booked_cost(
-                            payment, None if payment.scheme == "upto" else settlement
+                            payment,
+                            None if payment.scheme == "upto" else settlement,
+                            skipped=settlement_skipped(resp2.headers),
                         )
                         self._last_call_cost = cost_usd
                     async for chunk in self._aiter_and_archive(
@@ -3963,7 +3988,9 @@ class AsyncLLMClient:
         # Book the call: the quote for exact; for upto the settled amount when
         # PAYMENT-RESPONSE reports one, else the signed ceiling, labeled.
         settlement = self._capture_settlement(retry_response)
-        cost_usd, cost_basis = _booked_cost(payment, settlement)
+        cost_usd, cost_basis = _booked_cost(
+            payment, settlement, skipped=settlement_skipped(retry_response.headers)
+        )
         self._last_call_cost = cost_usd
 
         response_data = retry_response.json()
@@ -4129,7 +4156,8 @@ class AsyncLLMClient:
                 retry_after=retry_after_of(retry_response),
             )
 
-        cost_usd = float(details.get("amount", 0)) / 1e6
+        # Served without settling (X-Settlement-Skipped / X-Payment-Waived): $0.
+        cost_usd = booked_cost_usd(retry_response.headers, float(details.get("amount", 0)) / 1e6)
         self._last_call_cost = cost_usd
         self._capture_settlement(retry_response)
 
@@ -4266,7 +4294,8 @@ class AsyncLLMClient:
                 retry_after=retry_after_of(retry_response),
             )
 
-        cost_usd = float(details.get("amount", 0)) / 1e6
+        # Served without settling (X-Settlement-Skipped / X-Payment-Waived): $0.
+        cost_usd = booked_cost_usd(retry_response.headers, float(details.get("amount", 0)) / 1e6)
         self._last_call_cost = cost_usd
         self._capture_settlement(retry_response)
 

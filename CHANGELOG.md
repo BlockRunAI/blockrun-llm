@@ -2,6 +2,25 @@
 
 All notable changes to blockrun-llm will be documented in this file.
 
+## Unreleased
+
+### Fixed
+- **A paid call the gateway served without settling now books $0.** The
+  gateways answer some paid requests without moving money and say so on the
+  200: `X-Settlement-Skipped` (`empty-result` on an empty sol `/v1/pm` result,
+  `unexecuted` on an unexecuted sol `/v1/rpc` call, `free-fallback` on a chat
+  free fallback) or `X-Payment-Waived` (sol and Base pm routes). The SDK
+  ignored both and booked the full quote, so `get_spending()`, the
+  `max_session_cost` budget, `_last_call_cost`, the cost log and the
+  transaction log overstated spend. New `blockrun_llm.tx_log.settlement_skipped`
+  (case-insensitive) now gates every booking site on `LLMClient`,
+  `AsyncLLMClient`, `SolanaLLMClient` and `AsyncSolanaLLMClient`: chat, chat
+  streams, raw POST/GET (pm, rpc, search, exa, ...), inline and
+  settle-at-submit images, and video completion polls. EVM chat records
+  `cost_basis: "settlement_skipped"`. `X-Payment-Settled: false` on its own is
+  not a skip marker (settlement had not landed yet, the call is still owed)
+  and keeps booking the full quote.
+
 ## 1.21.1 — 2026-10-20
 
 ### Changed
