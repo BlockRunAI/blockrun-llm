@@ -157,7 +157,9 @@ def save_to_cache(
     ``cost_basis`` labels a cost that is not a plain exact charge: an x402 upto
     call records ``"upto_settled"`` (the gateway reported the settled amount)
     or ``"upto_ceiling"`` (``cost_usd`` is the signed ceiling — an upper bound,
-    not a confirmed charge). ``None`` (exact) writes the same rows as before.
+    not a confirmed charge). ``"settlement_skipped"`` marks a chat call the
+    gateway served without settling (``cost_usd`` is 0.0). ``None`` (exact)
+    writes the same rows as before.
 
     1. Hash-keyed cache file (for TTL-based dedup)
     2. Human-readable data file (browsable archive of every paid call)
@@ -239,7 +241,8 @@ def _append_cost_log(
 
         {ts, endpoint, cost_usd, model, wallet, network, client_kind, cost_basis}
 
-    ``cost_basis`` is present only for x402 upto calls (see ``save_to_cache``).
+    ``cost_basis`` is present only for x402 upto calls and EVM chat calls served
+    without settlement (see ``save_to_cache``).
 
     Older rows that only carry ``{ts, endpoint, cost_usd}`` are still readable
     — missing fields surface as ``None`` in summary / export views.

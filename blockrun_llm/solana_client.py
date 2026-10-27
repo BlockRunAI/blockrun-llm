@@ -69,6 +69,7 @@ from .solana_wallet import get_solana_public_key
 from .tx_log import (
     TransactionLogger,
     _resolve_log_dir,
+    booked_cost_usd,
     decode_settlement_header,
     paid_request_error_prefix,
     read_settlement_header,
@@ -1409,6 +1410,9 @@ class SolanaLLMClient:
                 ) as resp2:
                     if resp2.status_code == 200:
                         if cost_usd > 0:
+                            # Served without settling (X-Settlement-Skipped / X-Payment-Waived):
+                            # no money moved, so book $0, not the quote.
+                            cost_usd = booked_cost_usd(resp2.headers, cost_usd)
                             self._session_calls += 1
                             self._session_total_usd += cost_usd
                             self._last_call_cost = cost_usd
@@ -1710,6 +1714,9 @@ class SolanaLLMClient:
             )
 
         cost_usd = float(payment_payload.accepted.amount) / 1e6
+        # Served without settling (X-Settlement-Skipped / X-Payment-Waived):
+        # no money moved, so book $0, not the quote.
+        cost_usd = booked_cost_usd(retry_response.headers, cost_usd)
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
@@ -1886,6 +1893,9 @@ class SolanaLLMClient:
             )
 
         cost_usd = float(payment_payload.accepted.amount) / 1e6
+        # Served without settling (X-Settlement-Skipped / X-Payment-Waived):
+        # no money moved, so book $0, not the quote.
+        cost_usd = booked_cost_usd(retry_response.headers, cost_usd)
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
@@ -2034,6 +2044,9 @@ class SolanaLLMClient:
             )
 
         cost_usd = float(payment_payload.accepted.amount) / 1e6
+        # Served without settling (X-Settlement-Skipped / X-Payment-Waived):
+        # no money moved, so book $0, not the quote.
+        cost_usd = booked_cost_usd(retry_response.headers, cost_usd)
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
@@ -2223,6 +2236,9 @@ class SolanaLLMClient:
 
             if submit_resp.status_code == 200:
                 # Fast path — image was produced inline.
+                # Served without settling (X-Settlement-Skipped / X-Payment-Waived):
+                # no money moved, so book $0, not the quote.
+                cost_usd = booked_cost_usd(submit_resp.headers, cost_usd)
                 self._session_calls += 1
                 self._session_total_usd += cost_usd
                 self._last_call_cost = cost_usd
@@ -2243,6 +2259,12 @@ class SolanaLLMClient:
                     sanitize_error_response(error_body),
                     retry_after=retry_after_of(submit_resp),
                 )
+
+        # A settle-at-submit route that accepted the job without settling it
+        # (X-Settlement-Skipped / X-Payment-Waived) moved no money: the poll
+        # loop books and logs cost_usd for such a job, so it must be $0.
+        if settled_at_submit:
+            cost_usd = booked_cost_usd(submit_resp.headers, cost_usd)
 
         # Step 4: slow path — poll until completed (or budget exhausted).
         try:
@@ -2638,6 +2660,9 @@ class SolanaLLMClient:
                 # booked to this session.
                 paid_by_this_call = completion_paid or not ownership
                 if not charged_at_submit and paid_by_this_call:
+                    # Completed without settling (X-Settlement-Skipped /
+                    # X-Payment-Waived): no money moved, book and log $0.
+                    cost_usd = booked_cost_usd(poll_resp.headers, cost_usd)
                     self._session_calls += 1
                     self._session_total_usd += cost_usd
                     self._last_call_cost = cost_usd
@@ -4513,6 +4538,9 @@ class AsyncSolanaLLMClient:
                 ) as resp2:
                     if resp2.status_code == 200:
                         if cost_usd > 0:
+                            # Served without settling (X-Settlement-Skipped / X-Payment-Waived):
+                            # no money moved, so book $0, not the quote.
+                            cost_usd = booked_cost_usd(resp2.headers, cost_usd)
                             self._session_calls += 1
                             self._session_total_usd += cost_usd
                             self._last_call_cost = cost_usd
@@ -4763,6 +4791,9 @@ class AsyncSolanaLLMClient:
                 retry_after=retry_after_of(retry_response),
             )
 
+        # Served without settling (X-Settlement-Skipped / X-Payment-Waived):
+        # no money moved, so book $0, not the quote.
+        cost_usd = booked_cost_usd(retry_response.headers, cost_usd)
         self._session_calls += 1
         self._session_total_usd += cost_usd
         self._last_call_cost = cost_usd
@@ -4860,6 +4891,9 @@ class AsyncSolanaLLMClient:
                     sanitize_error_response(error_body),
                     retry_after=retry_after_of(retry_response),
                 )
+            # Served without settling (X-Settlement-Skipped / X-Payment-Waived):
+            # no money moved, so book $0, not the quote.
+            cost_usd = booked_cost_usd(retry_response.headers, cost_usd)
             self._session_calls += 1
             self._session_total_usd += cost_usd
             self._last_call_cost = cost_usd
@@ -4963,6 +4997,9 @@ class AsyncSolanaLLMClient:
                     sanitize_error_response(error_body),
                     retry_after=retry_after_of(retry_response),
                 )
+            # Served without settling (X-Settlement-Skipped / X-Payment-Waived):
+            # no money moved, so book $0, not the quote.
+            cost_usd = booked_cost_usd(retry_response.headers, cost_usd)
             self._session_calls += 1
             self._session_total_usd += cost_usd
             self._last_call_cost = cost_usd
@@ -5783,6 +5820,9 @@ class AsyncSolanaLLMClient:
 
             if submit_resp.status_code == 200:
                 # Fast path — image produced inline.
+                # Served without settling (X-Settlement-Skipped / X-Payment-Waived):
+                # no money moved, so book $0, not the quote.
+                cost_usd = booked_cost_usd(submit_resp.headers, cost_usd)
                 self._session_calls += 1
                 self._session_total_usd += cost_usd
                 self._last_call_cost = cost_usd
@@ -5803,6 +5843,12 @@ class AsyncSolanaLLMClient:
                     sanitize_error_response(error_body),
                     retry_after=retry_after_of(submit_resp),
                 )
+
+        # A settle-at-submit route that accepted the job without settling it
+        # (X-Settlement-Skipped / X-Payment-Waived) moved no money: the poll
+        # loop books and logs cost_usd for such a job, so it must be $0.
+        if settled_at_submit:
+            cost_usd = booked_cost_usd(submit_resp.headers, cost_usd)
 
         # Step 4: slow path — poll until completed (or budget exhausted).
         try:
@@ -6202,6 +6248,9 @@ class AsyncSolanaLLMClient:
                 # booked to this session.
                 paid_by_this_call = completion_paid or not ownership
                 if not charged_at_submit and paid_by_this_call:
+                    # Completed without settling (X-Settlement-Skipped /
+                    # X-Payment-Waived): no money moved, book and log $0.
+                    cost_usd = booked_cost_usd(poll_resp.headers, cost_usd)
                     self._session_calls += 1
                     self._session_total_usd += cost_usd
                     self._last_call_cost = cost_usd
