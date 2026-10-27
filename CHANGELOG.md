@@ -4,6 +4,8 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+## 1.21.2 — 2026-10-27
+
 ### Fixed
 - **A paid call the gateway served without settling now books $0.** The
   gateways answer some paid requests without moving money and say so on the
