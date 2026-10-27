@@ -22,6 +22,8 @@ must keep booking the full quote.
 
 from __future__ import annotations
 
+import base64
+import json
 import warnings
 from typing import Any
 from unittest import mock
@@ -36,6 +38,12 @@ from blockrun_llm.types import SpendLimitError
 from ..helpers import TEST_PRIVATE_KEY, build_chat_response, build_payment_required_response
 
 MESSAGES = [{"role": "user", "content": "hi"}]
+
+
+def _b64(value: Any) -> str:
+    return base64.b64encode(json.dumps(value).encode()).decode()
+
+
 QUOTE_USD = 1.0  # build_payment_required_response / the Solana fake payload: 1 USDC
 
 # What sol.blockrun.ai sends on an empty pm search (the full marker set).
@@ -94,6 +102,73 @@ class TestSettlementSkippedHelper:
     def test_never_raises(self) -> None:
         assert settlement_skipped(None) is False
         assert settlement_skipped(object()) is False
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            # A value that says it was NOT skipped.
+            {"X-Settlement-Skipped": "false"},
+            {"X-Settlement-Skipped": "0", "X-Payment-Waived": "none"},
+            # Settlement evidence beats the marker.
+            {
+                "X-Settlement-Skipped": "free-fallback",
+                "PAYMENT-RESPONSE": _b64({"success": True, "transaction": "0xpaid"}),
+            },
+            {
+                "X-Payment-Waived": "empty-result",
+                "PAYMENT-RESPONSE": _b64({"success": True, "signature": "5sig"}),
+            },
+            {
+                "X-Payment-Waived": "empty-result",
+                "PAYMENT-RESPONSE": _b64(
+                    {"success": True, "transaction": "", "extra": {"chargedAmount": "4000"}}
+                ),
+            },
+            {
+                "X-Settlement-Skipped": "unexecuted",
+                "PAYMENT-RESPONSE": _b64({"success": True, "transaction": "", "amount": "4000"}),
+            },
+            {"X-Settlement-Skipped": "unexecuted", "X-Payment-Receipt": "0xpaid"},
+        ],
+    )
+    def test_evidence_or_negative_value_books(
+        self, headers: dict[str, str], capsys: pytest.CaptureFixture
+    ) -> None:
+        assert settlement_skipped(headers) is False
+        assert settlement_skipped(httpx.Headers(headers)) is False
+        assert booked_cost_usd(headers, 0.25) == 0.25
+
+    def test_conflict_is_written_to_stderr(self, capsys: pytest.CaptureFixture) -> None:
+        headers = {
+            "X-Settlement-Skipped": "free-fallback",
+            "PAYMENT-RESPONSE": _b64({"success": True, "transaction": "0xpaid"}),
+        }
+        assert settlement_skipped(headers) is False
+        err = capsys.readouterr().err
+        assert "skipped settlement ('free-fallback')" in err
+        assert "booked as charged" in err
+
+    @pytest.mark.parametrize(
+        "headers",
+        [
+            # blockrun.ai's free fallback: a receipt with an empty transaction and no amount.
+            {
+                "X-Settlement-Skipped": "free-fallback",
+                "PAYMENT-RESPONSE": _b64({"success": True, "transaction": ""}),
+            },
+            # A failed receipt is no evidence.
+            {
+                "X-Settlement-Skipped": "unexecuted",
+                "PAYMENT-RESPONSE": _b64({"success": False, "transaction": "0xfailed"}),
+            },
+        ],
+    )
+    def test_receipt_without_evidence_stays_skipped(
+        self, headers: dict[str, str], capsys: pytest.CaptureFixture
+    ) -> None:
+        assert settlement_skipped(headers) is True
+        assert booked_cost_usd(headers, 0.25) == 0.0
+        assert capsys.readouterr().err == ""
 
 
 # ---------------------------------------------------------------------------
