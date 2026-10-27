@@ -33,6 +33,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -89,6 +90,8 @@ def read_settlement_header(headers: Any) -> str | None:
 # real spend and let a session spend limit be exceeded.
 _SETTLEMENT_SKIPPED_HEADER = "X-Settlement-Skipped"
 _PAYMENT_WAIVED_HEADER = "X-Payment-Waived"
+# Values that say settlement was NOT skipped: never a marker.
+_NOT_A_SKIP = frozenset({"false", "0", "no", "none"})
 
 
 def _header_value(headers: Any, name: str) -> str | None:
@@ -111,16 +114,71 @@ def settlement_skipped(headers: Any) -> bool:
     """True when the gateway served this paid response without settling it.
 
     ``X-Settlement-Skipped`` with any non-empty value, or ``X-Payment-Waived``
-    present at all; lookup is case-insensitive. Never raises: a header object
-    that misbehaves reads as "not skipped", which books the quote (the
+    present at all; lookup is case-insensitive. A value that says the opposite
+    (``false``, ``0``, ``no``, ``none``) is not a marker. Nor is a marker on a
+    response that proves the payment settled anyway (a receipt with a
+    transaction or a positive charge, or an ``X-Payment-Receipt`` hash): that
+    call is booked, and the conflict written to stderr. Never raises: a header
+    object that misbehaves reads as "not skipped", which books the quote (the
     behaviour before this marker existed).
     """
     if headers is None:
         return False
     skipped = _header_value(headers, _SETTLEMENT_SKIPPED_HEADER)
-    if skipped is not None and skipped.strip():
-        return True
-    return _header_value(headers, _PAYMENT_WAIVED_HEADER) is not None
+    waived = _header_value(headers, _PAYMENT_WAIVED_HEADER)
+    reason: str | None = None
+    if skipped is not None and skipped.strip() and skipped.strip().lower() not in _NOT_A_SKIP:
+        reason = skipped.strip()
+    elif waived is not None and waived.strip().lower() not in _NOT_A_SKIP:
+        reason = waived.strip() or "waived"
+    if reason is None:
+        return False
+    # Settlement evidence beats a skip marker: money that moved is booked.
+    evidence = _settlement_evidence(headers)
+    if evidence is not None:
+        sys.stderr.write(
+            f"[blockrun_llm] settlement: the gateway named a skipped settlement ({reason!r}) "
+            f"on a response that also carries {evidence}; booked as charged\n"
+        )
+        return False
+    return True
+
+
+def _positive_atomic(value: Any) -> bool:
+    try:
+        return int(str(value)) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _settlement_evidence(headers: Any) -> str | None:
+    """Proof the payment settled anyway, or None.
+
+    A ``PAYMENT-RESPONSE`` that did not fail and names a transaction or a
+    positive charge (``amount`` / ``extra.chargedAmount``), or an
+    ``X-Payment-Receipt`` transaction hash. A free-fallback receipt
+    (``{"success": true, "transaction": ""}``, no amount) is no evidence.
+    """
+    try:
+        header = _header_value(headers, "PAYMENT-RESPONSE") or _header_value(
+            headers, "X-PAYMENT-RESPONSE"
+        )
+        settlement = decode_settlement_header(header)
+        if settlement is not None and settlement.get("success") is not False:
+            if settlement.get("tx_hash"):
+                return "a settlement receipt with a transaction"
+            raw = settlement.get("raw") or {}
+            extra = raw.get("extra") if isinstance(raw.get("extra"), dict) else {}
+            if _positive_atomic(settlement.get("amount_micro_usdc")) or _positive_atomic(
+                extra.get("chargedAmount")
+            ):
+                return "a settlement receipt with a charge"
+        receipt = _header_value(headers, "X-Payment-Receipt")
+        if receipt is not None and receipt.strip():
+            return "an X-Payment-Receipt transaction"
+    except Exception:
+        return None
+    return None
 
 
 def booked_cost_usd(headers: Any, cost_usd: float) -> float:

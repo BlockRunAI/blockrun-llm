@@ -4,6 +4,18 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+- **A skip marker never hides a real charge.** A response that names a skipped
+  settlement (`X-Settlement-Skipped` / `X-Payment-Waived`) but also proves the
+  payment settled (a `PAYMENT-RESPONSE` that did not fail and names a
+  transaction or a positive `amount` / `extra.chargedAmount`, or an
+  `X-Payment-Receipt` hash) is booked as charged, and the conflict is written
+  to stderr. The gateways never send both today (blockrun.ai's free-fallback
+  receipt has an empty transaction and no amount), so today's skips still book
+  $0. Ports @blockrun/llm 3.24.9 (TS #92).
+- A marker value that says the opposite (`false`, `0`, `no`, `none`) is no
+  longer read as a skip.
+
 ## 1.21.2 — 2026-10-27
 
 ### Fixed
