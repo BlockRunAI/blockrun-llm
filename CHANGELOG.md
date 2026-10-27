@@ -4,6 +4,11 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+## 1.21.3 — 2026-10-27
+
+Also the first PyPI release of the 1.21.2 change below (1.21.2 was never
+published).
+
 ### Fixed
 - **A skip marker never hides a real charge.** A response that names a skipped
   settlement (`X-Settlement-Skipped` / `X-Payment-Waived`) but also proves the
