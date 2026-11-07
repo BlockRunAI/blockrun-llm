@@ -4,6 +4,11 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+- A failed job or request now keeps `payment_status`, `tx_hash` and `payment_note` on
+  `APIError.response`, and a failed job's message says whether the payment settled.
+  A paid job can still fail, and the error said nothing about the money, so a caller
+  could pay for it again.
+
 ## 1.21.3 — 2026-10-27
 
 Also the first PyPI release of the 1.21.2 change below (1.21.2 was never
