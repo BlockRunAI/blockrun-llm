@@ -646,6 +646,40 @@ def build_payment_rejected_error(response: Any) -> PaymentError:
     return PaymentError(msg, status_code=402, response=sanitized)
 
 
+# Whether money moved on a failed call. A paid job can still fail, and a caller
+# who only sees the error may pay for it again, so these survive sanitizing.
+_PAYMENT_FACT_FIELDS = ("payment_status", "tx_hash", "payment_note")
+
+
+def _payment_facts(error_body: dict[str, Any]) -> dict[str, str]:
+    return {
+        field: error_body[field]
+        for field in _PAYMENT_FACT_FIELDS
+        if isinstance(error_body.get(field), str)
+    }
+
+
+def payment_facts_note(error_body: Any) -> str:
+    """
+    One sentence on what a failed response says about the payment.
+
+    Empty when the response says nothing, or names a status this SDK doesn't
+    know: no statement is safer than a wrong one about money.
+    """
+    if not isinstance(error_body, dict):
+        return ""
+    status = error_body.get("payment_status")
+    if status == "settled":
+        tx_hash = error_body.get("tx_hash")
+        tx = f" (tx {tx_hash})" if isinstance(tx_hash, str) and tx_hash else ""
+        return f". Payment settled{tx}. Do not pay for this job again."
+    if status == "unknown":
+        return ". Payment state unknown. Check your wallet before paying again."
+    if status in ("not_charged", "settlement_failed"):
+        return ". No payment was taken."
+    return ""
+
+
 def sanitize_error_response(error_body: Any) -> dict[str, Any]:
     """
     Sanitize API error responses to prevent information leakage.
@@ -693,6 +727,7 @@ def sanitize_error_response(error_body: Any) -> dict[str, Any]:
             result["type"] = nested["type"]
         if isinstance(nested.get("param"), str):
             result["param"] = nested["param"]
+        result.update(_payment_facts(error_body))
         return result
 
     # Flat shape: `error` is the human-readable title; fall back to top-level `message`.
@@ -706,6 +741,7 @@ def sanitize_error_response(error_body: Any) -> dict[str, Any]:
     return {
         "message": message,
         "code": (error_body.get("code") if isinstance(error_body.get("code"), str) else None),
+        **_payment_facts(error_body),
     }
 
 

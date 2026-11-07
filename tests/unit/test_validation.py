@@ -4,6 +4,7 @@ import pytest
 
 from blockrun_llm.validation import (
     MAX_TOKENS_SANITY_LIMIT,
+    payment_facts_note,
     sanitize_error_response,
     validate_api_url,
     validate_max_tokens,
@@ -273,6 +274,47 @@ class TestValidateTopP:
 
 
 class TestSanitizeErrorResponse:
+    def test_keeps_payment_facts_and_nothing_else_new(self):
+        result = sanitize_error_response(
+            {
+                "status": "failed",
+                "error": "Video generated but could not be stored",
+                "payment_status": "settled",
+                "tx_hash": "5abcTX",
+                "payment_note": "Do not pay for it again.",
+                "poll_auth": {"charges": "never"},
+            }
+        )
+        assert result == {
+            "message": "Video generated but could not be stored",
+            "code": None,
+            "payment_status": "settled",
+            "tx_hash": "5abcTX",
+            "payment_note": "Do not pay for it again.",
+        }
+
+    def test_keeps_payment_facts_on_the_nested_shape(self):
+        result = sanitize_error_response(
+            {"error": {"message": "Failed", "code": "x"}, "payment_status": "unknown"}
+        )
+        assert result["payment_status"] == "unknown"
+
+    def test_drops_a_payment_fact_that_is_not_a_string(self):
+        result = sanitize_error_response({"error": "Failed", "tx_hash": {"a": 1}})
+        assert "tx_hash" not in result
+
+    def test_payment_note_per_status(self):
+        settled = payment_facts_note({"payment_status": "settled", "tx_hash": "5abc"})
+        assert "settled (tx 5abc)" in settled and "Do not pay" in settled
+        assert "wallet" in payment_facts_note({"payment_status": "unknown"})
+        assert "No payment" in payment_facts_note({"payment_status": "not_charged"})
+        assert "No payment" in payment_facts_note({"payment_status": "settlement_failed"})
+
+    def test_payment_note_makes_no_claim_it_cannot_support(self):
+        assert payment_facts_note({"error": "Failed"}) == ""
+        assert payment_facts_note({"payment_status": "settled_optimistic"}) == ""
+        assert payment_facts_note("not a dict") == ""
+
     def test_extract_safe_fields(self):
         """Should extract only safe error fields."""
         result = sanitize_error_response(

@@ -345,6 +345,7 @@ class FakeVideoGateway:
         first_paid_poll: int = 200,
         fail_after_pending: bool = False,
         refuse_payments: bool = False,
+        failure: tuple[int, dict] | None = None,
     ) -> None:
         self.wallet = wallet
         self.pending = pending
@@ -356,6 +357,7 @@ class FakeVideoGateway:
         self.settled = False
         self.claim_in_flight_once = first_paid_poll == 402
         self.fail_after_pending = fail_after_pending
+        self.failure = failure
         self.refuse_payments = refuse_payments
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -403,6 +405,8 @@ class FakeVideoGateway:
                 )
             if len(self.proof_polls) <= self.pending:
                 return _json(202, {"status": "in_progress", "payment_status": "not_charged"})
+            if self.failure:
+                return _json(*self.failure)
             if self.fail_after_pending:
                 return _json(
                     200,
@@ -478,6 +482,34 @@ class TestVideo:
         assert _signed_challenges(client) == ["submit-challenge"]
         assert gw.paid_polls == [] and gw.bare_polls == []
         assert client._session_calls == 0
+
+    def test_a_paid_job_that_fails_says_so_and_signs_nothing_more(self) -> None:
+        kp = Keypair()
+        gw = FakeVideoGateway(
+            str(kp.pubkey()),
+            pending=1,
+            failure=(
+                502,
+                {
+                    "status": "failed",
+                    "error": "could not be stored",
+                    "payment_status": "settled",
+                    "tx_hash": "SETTLE_TX",
+                    "payment_note": "Do not pay for it again.",
+                },
+            ),
+        )
+        client = _make_client(gw, keypair=kp)
+
+        with pytest.raises(APIError, match=r"Payment settled \(tx SETTLE_TX\)\. Do not pay") as exc:
+            client._request_image_with_payment(
+                "/v1/videos/generations", dict(_VIDEO_BODY), **_VIDEO_KW
+            )
+
+        assert exc.value.response["payment_status"] == "settled"
+        assert exc.value.response["tx_hash"] == "SETTLE_TX"
+        assert _signed_challenges(client) == ["submit-challenge"]
+        assert gw.paid_polls == [] and gw.bare_polls == []
 
     def test_settlement_in_flight_is_not_paid_twice(self) -> None:
         # The paid poll hears "settlement in progress"; the next proof poll

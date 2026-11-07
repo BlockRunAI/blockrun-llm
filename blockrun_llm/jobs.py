@@ -16,7 +16,7 @@ import httpx
 
 from .apikey import raise_for_api_key_402, resolve_poll_url
 from .types import APIError, retry_after_of
-from .validation import build_payment_rejected_error, sanitize_error_response
+from .validation import build_payment_rejected_error, payment_facts_note, sanitize_error_response
 
 
 class PollOriginRefusedError(APIError, ValueError):
@@ -108,7 +108,8 @@ def poll_until_completed(
 
         if last_status == "failed":
             raise APIError(
-                f"{label} generation failed upstream: {poll_data.get('error', 'unknown')}",
+                f"{label} generation failed upstream: {poll_data.get('error', 'unknown')}"
+                + payment_facts_note(poll_data),
                 poll_resp.status_code,
                 sanitize_error_response(poll_data if isinstance(poll_data, dict) else {}),
                 retry_after=retry_after_of(poll_resp),

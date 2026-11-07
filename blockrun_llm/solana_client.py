@@ -108,6 +108,7 @@ from .types import (
 )
 from .validation import (
     build_payment_rejected_error,
+    payment_facts_note,
     resolve_spend_limit,
     sanitize_error_response,
     validate_api_url,
@@ -2635,7 +2636,8 @@ class SolanaLLMClient:
                         " (credit reserved at accept is released, not charged)"
                         if account_job
                         else " (payment was settled at submit)" if settled_at_submit else ""
-                    ),
+                    )
+                    + payment_facts_note(poll_data),
                     poll_resp.status_code,
                     sanitize_error_response(poll_data),
                     retry_after=retry_after_of(poll_resp),
@@ -6223,7 +6225,8 @@ class AsyncSolanaLLMClient:
                         " (credit reserved at accept is released, not charged)"
                         if account_job
                         else " (payment was settled at submit)" if settled_at_submit else ""
-                    ),
+                    )
+                    + payment_facts_note(poll_data),
                     poll_resp.status_code,
                     sanitize_error_response(poll_data),
                     retry_after=retry_after_of(poll_resp),
