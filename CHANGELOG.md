@@ -4,6 +4,8 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+## 1.21.6 — 2026-11-08
+
 ### Fixed
 - **The free tier's vision rung really sees images again.**
   `nvidia/llama-3.2-11b-vision` (no longer listed) and `cohere/north-mini-code`
