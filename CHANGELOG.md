@@ -4,6 +4,20 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+- **Seedance reference media and seedance-2.5 first-and-last frame are sent on the
+  wallet rails again.** Both gateways have quoted them since 2026-10-25 (blockrun
+  #880, blockrun-sol #501/#502), but `validate_video_request` still refused them
+  locally, so `VideoClient.generate` and `SolanaLLMClient.video` raised on
+  requests the gateway would serve. Reference audio with no image or video
+  reference is still refused, as the gateway does.
+- `SearchClient.search` docs: the default sources are the gateway's `["web"]`,
+  not `["x", "web"]`, and `x` is refused on blockrun.ai.
+
+### Deprecated
+- `SurfClient` warns on construction: the gateway has answered `410
+  endpoint_retired` since 2026-09-06.
+
 ## 1.21.4 — 2026-11-07
 
 - A failed job or request now keeps `payment_status`, `tx_hash` and `payment_note` on

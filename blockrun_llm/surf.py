@@ -36,6 +36,7 @@ signatures are sent in the PAYMENT-SIGNATURE header.
 from __future__ import annotations
 
 import os
+import warnings
 from typing import Any
 
 import httpx
@@ -185,6 +186,12 @@ class SurfClient:
     """
     BlockRun Surf Client.
 
+    .. deprecated::
+        Both gateways have answered every ``/v1/surf/*`` call with ``410
+        endpoint_retired`` since 2026-09-06. Use ``LLMClient.price`` for prices
+        and ``LLMClient.pm`` for prediction markets. This client will be removed
+        in a future release.
+
     Wraps the `/v1/surf/*` partner proxy. Use SurfClient.endpoints() for discovery
     and `get()` / `post()` / `call()` to fetch data. Payment is automatic on every
     request via x402 (tier 1 / 2 / 3 → $0.001 / $0.005 / $0.020).
@@ -199,6 +206,12 @@ class SurfClient:
         api_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
     ):
+        warnings.warn(
+            "SurfClient is deprecated: the gateway retired /v1/surf/* on 2026-09-06 "
+            "(410 endpoint_retired). Use LLMClient.price or LLMClient.pm instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         from .wallet import load_wallet
 
         # Account rail first, and before any wallet variable is read: an API

@@ -9,6 +9,7 @@ test_solana_timeout_routing.py.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
@@ -937,32 +938,47 @@ class TestSolanaAccountRailVideo:
 
 
 class TestSolanaWalletVideoGuards:
-    def test_reference_media_refused_before_any_request(self) -> None:
+    """sol.blockrun.ai quotes reference media and seedance-2.5 first-and-last
+    frame since 2026-10-25 (blockrun-sol #501, #502). The SDK used to refuse both
+    locally, so a request the gateway would serve never left the client."""
+
+    def test_reference_media_is_sent(self) -> None:
         calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _VIDEO_OK))
-        with pytest.raises(ValueError, match="account rail"):
-            client.video("x", **_REFS)
-        assert calls == []
+        client.video("x", **_REFS)
+        body = json.loads(calls[0].content)
+        assert body["reference_image_urls"] == _REFS["reference_image_urls"]
+        assert body["reference_videos"] == _REFS["reference_videos"]
 
-    async def test_async_reference_media_refused_before_any_request(self) -> None:
+    async def test_async_reference_media_is_sent(self) -> None:
         calls: list[httpx.Request] = []
         client = _make_async_client(_paid_flow(calls, _VIDEO_OK))
         try:
-            with pytest.raises(ValueError, match="account rail"):
-                await client.video("x", **_REFS)
-            assert calls == []
+            await client.video("x", **_REFS)
+            assert json.loads(calls[0].content)["reference_videos"] == _REFS["reference_videos"]
         finally:
             await client._client.aclose()
 
-    def test_seedance_25_last_frame_refused_on_solana_wallet(self) -> None:
+    def test_seedance_25_last_frame_is_sent(self) -> None:
         calls: list[httpx.Request] = []
         client = _make_client(_paid_flow(calls, _VIDEO_OK))
-        with pytest.raises(ValueError, match="not served by the Solana gateway"):
+        client.video(
+            "x",
+            model="bytedance/seedance-2.5",
+            image_url="https://example.com/a.png",
+            last_frame_url="https://example.com/b.png",
+        )
+        assert json.loads(calls[0].content)["last_frame_url"] == "https://example.com/b.png"
+
+    def test_reference_audio_alone_is_still_refused(self) -> None:
+        # The gateway still 400s audio with no image or video reference.
+        calls: list[httpx.Request] = []
+        client = _make_client(_paid_flow(calls, _VIDEO_OK))
+        with pytest.raises(ValueError):
             client.video(
                 "x",
-                model="bytedance/seedance-2.5",
-                image_url="https://example.com/a.png",
-                last_frame_url="https://example.com/b.png",
+                model="bytedance/seedance-2.0",
+                reference_audios=[{"url": "https://example.com/a.mp3"}],
             )
         assert calls == []
 
