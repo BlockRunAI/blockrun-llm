@@ -34,8 +34,8 @@ CATALOG = [
     {"id": "moonshot/kimi-k2.7", "pricing": {"input": 0.95, "output": 4}},
     {"id": "nvidia/nemotron-3.5-lightning", "pricing": {"input": 0, "output": 0}},
     {"id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", "pricing": {"input": 0, "output": 0}},
-    {"id": "nvidia/llama-3.2-11b-vision", "pricing": {"input": 0, "output": 0}},
-    {"id": "cohere/north-mini-code", "pricing": {"input": 0, "output": 0}},
+    {"id": "nvidia/nemotron-3-ultra-550b", "pricing": {"input": 0, "output": 0}},
+    {"id": "nvidia/nemotron-3.5-bolt", "pricing": {"input": 0, "output": 0}},
     {"id": "poolside/laguna-xs-2.1", "pricing": {"input": 0, "output": 0}},
     # Unavailable rows must never win routing.
     {"id": "dead/model", "pricing": {"input": 0.01, "output": 0.01}, "available": False},

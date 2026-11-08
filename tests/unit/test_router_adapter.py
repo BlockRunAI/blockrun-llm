@@ -17,19 +17,28 @@ from blockrun_llm.router_adapter import (
     routing_profile_for_model,
     routing_text,
 )
-from blockrun_llm.router_core import DEFAULT_ROUTING_CONFIG
+from blockrun_llm.router_core import DEFAULT_MODEL_CAPABILITIES, DEFAULT_ROUTING_CONFIG
 from blockrun_llm.types import RoutingDecision
 
 # The free chat models that answer as themselves, not via a gateway redirect.
-# Verified with a two-pass model-echo probe on 2026-08-31 (nano-omni re-checked
-# 2026-09-29, after nemotron-3-nano-30b was delisted); keep in step with
-# router_adapter.FREE_TIERS.
+# Verified with a two-pass model-echo probe on both gateways on 2026-11-08
+# (llama-3.2-11b-vision and north-mini-code had become redirects); keep in step
+# with router_adapter.FREE_TIERS.
 FREE_MODELS = [
     "nvidia/nemotron-3.5-lightning",
     "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+    "nvidia/nemotron-3-ultra-550b",
+    "nvidia/nemotron-3.5-bolt",
+    "poolside/laguna-xs-2.1",
+]
+
+# Ids the gateway now serves with a different model. Naming one routes a
+# request to whatever the redirect points at, which defeats /exclude and, for
+# the old vision rung, sent images to a model nobody chose.
+SUBSTITUTED_FREE_IDS = [
     "nvidia/llama-3.2-11b-vision",
     "cohere/north-mini-code",
-    "poolside/laguna-xs-2.1",
+    "nvidia/nemotron-3-nano-30b",
 ]
 
 
@@ -179,20 +188,29 @@ class TestFreeProfile:
     def test_names_only_models_in_the_live_free_catalog(self):
         # FREE_MODELS above is hand-kept, so checking the table against it alone
         # passed while SIMPLE's primary was a delisted id. Pin the table to the
-        # $0 chat set /v1/models actually published (2026-09-29), and name the
-        # id that slipped through so it cannot come back.
+        # $0 chat set /v1/models actually published and available (2026-11-08),
+        # and name the ids that slipped through so they cannot come back.
         live = {
             "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
             "nvidia/nemotron-3.5-lightning",
-            "nvidia/llama-3.2-11b-vision",
             "nvidia/nemotron-3-ultra-550b",
-            "cohere/north-mini-code",
+            "nvidia/nemotron-3.5-bolt",
             "poolside/laguna-xs-2.1",
         }
         used = {m for tier in FREE_TIERS.values() for m in [tier["primary"], *tier["fallback"]]}
         assert used, "FREE_TIERS is empty"
         assert used <= live, sorted(used - live)
-        assert "nvidia/nemotron-3-nano-30b" not in used  # delisted 2026-09-08
+        for substituted in SUBSTITUTED_FREE_IDS:
+            assert substituted not in used, substituted
+
+    def test_keeps_a_verified_vision_rung_on_every_tier_that_can_take_images(self):
+        # The old vision rung was a redirect, so an image turn on the free tier
+        # reached a model that never saw the image. bolt is the probe-verified
+        # replacement and the snapshot must keep it vision-capable.
+        assert DEFAULT_MODEL_CAPABILITIES["nvidia/nemotron-3.5-bolt"]["supports_vision"] is True
+        for tier in ("SIMPLE", "MEDIUM", "COMPLEX"):
+            chain = [FREE_TIERS[tier]["primary"], *FREE_TIERS[tier]["fallback"]]
+            assert "nvidia/nemotron-3.5-bolt" in chain, tier
 
     def test_uses_the_rules_strategy_so_paid_evidence_models_cannot_leak_in(self):
         decision = route(
