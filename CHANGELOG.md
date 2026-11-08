@@ -4,6 +4,8 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+## 1.21.5 — 2026-11-07
+
 ### Fixed
 - **Seedance reference media and seedance-2.5 first-and-last frame are sent on the
   wallet rails again.** Both gateways have quoted them since 2026-10-25 (blockrun

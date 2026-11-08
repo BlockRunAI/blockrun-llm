@@ -196,7 +196,7 @@ from .wallet import (
     create_wallet as generate_wallet,  # User-friendly alias
 )
 
-__version__ = "1.21.4"
+__version__ = "1.21.5"
 __all__ = [
     "DEFAULT_API_KEY_URL",
     "ENV_API_KEY",
