@@ -14,7 +14,7 @@ table in `blockrun-mcp/src/tools/video.ts`, and both should change together.
 | --- | --- | --- | --- |
 | seedance-1.5-pro | Yes | No | No |
 | seedance-2.0 / 2.0-fast / 2.0-mini | Yes | 1–9 | 1–3 of each |
-| seedance-2.5 | Yes (not on the Solana wallet gateway yet) | 1–30 | 1–3 of each |
+| seedance-2.5 | Yes | 1–30 | 1–3 of each |
 | grok-imagine-video, sora-2 | No | No | No |
 
 - Reference audio needs at least one reference image or video in the same request.
@@ -28,8 +28,8 @@ table in `blockrun-mcp/src/tools/video.ts`, and both should change together.
 | Rail | Reference media | seedance-2.5 last frame |
 | --- | --- | --- |
 | Account (`BLOCKRUN_API_KEY`, api.blockrun.ai) | Yes | Yes |
-| Base wallet (blockrun.ai) | Refused (gateway 400s before quoting) | Yes |
-| Solana wallet (sol.blockrun.ai) | Refused (gateway 400s before quoting) | Refused (gateway 400s before quoting) |
+| Base wallet (blockrun.ai) | Yes, since 2026-10-25 | Yes |
+| Solana wallet (sol.blockrun.ai) | Yes, since 2026-10-25 | Yes, since 2026-10-25 |
 
 On the account rail, credit is reserved when the job is accepted and charged
 once, when the job completes; a failed job releases it. A job that times out in

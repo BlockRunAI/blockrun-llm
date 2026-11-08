@@ -267,7 +267,9 @@ def validate_video_request(
     Args:
         model: The resolved model id (defaults already applied).
         api_key_mode: True when the client pays with a ``brk_`` API key.
-        solana_wallet: True for the Solana wallet rail (sol.blockrun.ai).
+        solana_wallet: True for the Solana wallet rail (sol.blockrun.ai). Every
+            rail accepts the same requests since 2026-10-25 (blockrun #880,
+            blockrun-sol #501/#502); both are kept for callers.
         Remaining args mirror the video kwargs; None (or an empty list) omits.
 
     Raises:
@@ -276,18 +278,6 @@ def validate_video_request(
     has_refs = bool(reference_image_urls or reference_videos or reference_audios)
     has_clips = bool(reference_videos or reference_audios)
 
-    # The rail fact dominates every other reference guard: both wallet
-    # gateways answer any reference_* field with a 400 before quoting
-    # (blockrun#728, blockrun-sol#374), so a per-model message would point the
-    # caller at a fix that still cannot work.
-    if has_refs and not api_key_mode:
-        raise ValueError(
-            "Reference media (reference_image_urls / reference_videos / "
-            "reference_audios) is served only by the BlockRun account rail "
-            "(api.blockrun.ai); the Base and Solana wallet gateways refuse it. "
-            "Set BLOCKRUN_API_KEY to use the account rail, or use image_url / "
-            "last_frame_url frame seeding, which works on the wallet rails."
-        )
     if has_refs and (image_url or last_frame_url or real_face_asset_id):
         raise ValueError(
             "Reference inputs are mutually exclusive with image_url, last_frame_url, "
@@ -308,15 +298,6 @@ def validate_video_request(
         raise ValueError(
             "last_frame_url and real_face_asset_id are mutually exclusive; "
             "first-and-last-frame uses image_url + last_frame_url."
-        )
-    # sol.blockrun.ai is a separate deploy that has not taken 2.5 into its
-    # first-and-last-frame list: it 400s where Base quotes the same body
-    # (probed 2026-09-29). Same refusal as blockrun-mcp 0.53.1.
-    if last_frame_url and solana_wallet and model == SEEDANCE_25:
-        raise ValueError(
-            f"{SEEDANCE_25} first-and-last-frame (last_frame_url) is not served by the "
-            "Solana gateway yet. Use it on Base (VideoClient) or the account rail "
-            "(BLOCKRUN_API_KEY), or pick seedance-1.5-pro / 2.0 / 2.0-fast / 2.0-mini."
         )
 
     if reference_image_urls:

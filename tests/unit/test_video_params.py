@@ -18,8 +18,7 @@ def client():
 
 @pytest.fixture
 def account():
-    # Reference media is an account-rail capability: both wallet gateways
-    # refuse every reference_* field before quoting (blockrun#728).
+    # The per-model guards matter most here: the account rail has no quote step.
     return VideoClient(private_key="brk_live_video_params_fixture")
 
 
@@ -67,14 +66,15 @@ def test_reference_images_body(account, account_captured):
     assert "image_url" not in account_captured["body"]
 
 
-def test_reference_media_refused_on_the_wallet_rail(client, captured):
+def test_reference_media_is_sent_on_the_wallet_rail(client, captured):
+    # Both wallet gateways quote reference media since 2026-10-25 (blockrun #880).
     for refs in (
         {"reference_image_urls": ["https://example.com/r.jpg"]},
         {"reference_videos": [{"url": "https://example.com/m.mp4"}]},
     ):
-        with pytest.raises(ValueError, match="account rail"):
-            client.generate("x", model="bytedance/seedance-2.0", **refs)
-    assert captured == {}
+        client.generate("x", model="bytedance/seedance-2.0", **refs)
+        for key, value in refs.items():
+            assert captured["body"][key] == value
 
 
 def test_token360_passthroughs(client, captured):

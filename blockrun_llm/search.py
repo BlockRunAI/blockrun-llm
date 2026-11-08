@@ -8,7 +8,7 @@ Usage:
     from blockrun_llm import SearchClient
 
     client = SearchClient()
-    result = client.search("Latest news on x402 adoption", sources=["x", "web"])
+    result = client.search("Latest news on x402 adoption", sources=["web", "news"])
     print(result.summary)
     for citation in (result.citations or []):
         print(citation)
@@ -123,8 +123,10 @@ class SearchClient:
 
         Args:
             query: Search query (1-1000 chars).
-            sources: Subset of ["x", "web", "news"] (default: ["x", "web"]).
-            max_results: 1-50 (default 10). Price scales with this.
+            sources: Subset of ["web", "news"]; the gateway defaults to ["web"]. blockrun.ai
+                refuses "x" with a 400 before quoting; sol.blockrun.ai takes it at a
+                higher flat price. On Base, search X in chat on an xai/* model.
+            max_results: 1-50 (default 10). Does not change the price.
             from_date, to_date: YYYY-MM-DD filters (optional).
 
         Returns:
