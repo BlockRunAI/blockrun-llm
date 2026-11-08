@@ -4,6 +4,29 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+- **`router_core` re-synced to upstream `@blockrun/router-core` `273c2af`**
+  (was `8773a99`), which includes the 2026-11 router audit. All 88
+  cross-language snapshot decisions match the TypeScript engine.
+  - Chinese debug, refactor, extraction and proof prompts are no longer
+    classified as chat. Japanese prompts no longer get the Mandarin
+    extraction band.
+  - With tools attached, a bare language name ("java coffee prices online")
+    is no longer routed to the code-agent pool.
+  - Tool-name verbs, airline reservation ids and the multi-step signal no
+    longer fire on look-alike text ("add" in "address", "CANCEL", a sentence
+    ending in a number). Full-width `？` now counts as a question.
+  - An unpriced candidate no longer outranks priced ones on cost. NaN prices
+    and malformed `model_performance` entries no longer leak NaN into costs
+    or the ranking. `calculate_model_cost` reports no savings for an
+    unpriced model.
+  - A one-character or non-numeric `prompt_truncation_chars` no longer makes
+    the router scan the whole prompt.
+- Capability snapshot synced to the 2026-11-08 catalog. `moonshot/kimi-k3`,
+  which is still routed and served, is retained. DeepSeek chat, reasoner and
+  V4.1 Flash stay text-only until an image probe confirms the catalog's new
+  vision tag.
+
 ## 1.21.5 — 2026-11-07
 
 ### Fixed

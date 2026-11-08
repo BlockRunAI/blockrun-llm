@@ -18,7 +18,7 @@ from datetime import datetime
 from ._js import as_utc, js_bool, js_regex, parse_date
 from .model_capabilities import DEFAULT_MODEL_CAPABILITIES
 from .model_profiles import HISTORICAL_MODEL_PROFILES, LIVE_MODEL_PROFILES
-from .selector import get_fallback_chain, select_model
+from .selector import get_fallback_chain, select_model, usable_pricing
 from .strategy import RulesStrategy
 from .tokens import estimate_tokens, sample_for_scan, scan_limit
 from .tool_intent import infer_tool_requirement
@@ -118,7 +118,10 @@ _REPEATED_LOOKUP = js_regex(
     r"|天气|气象|温度|降雪|新闻|报告",
     ignorecase=True,
 )
-_MULTI_LOCATION_CONNECTOR = js_regex(r"\b(?:and also|both|y|e)\b|还有|以及|和|、", ignorecase=True)
+# Spanish/Italian/Portuguese "y"/"e" only between words, so "e.g." does not count.
+_MULTI_LOCATION_CONNECTOR = js_regex(
+    r"\b(?:and also|both)\b|\s(?:y|e)\s|还有|以及|和|、", ignorecase=True
+)
 _COMMA = js_regex(r"[,，]")
 _ASCII_COMMA = js_regex(r",")
 _DISTINCT_ORDER_PARTS = js_regex(
@@ -204,7 +207,10 @@ _CROSS_RECORD = js_regex(
     r"|另一(?:个)?(?:订单|预订|账户|地址)|其他(?:订单|预订|账户|地址)",
     ignorecase=True,
 )
-_RESERVATION_ID = js_regex(r"\b[A-Z0-9]{6}\b")
+# Reservation locators mix letters and digits (ZFA04Y, 4WQ150). Requiring both
+# keeps shouted words ("CANCEL MY FLIGHT") and plain six-digit numbers from
+# reading as two reservations.
+_RESERVATION_ID = js_regex(r"\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{6}\b")
 _CROSS_RESERVATION_BATCH = js_regex(
     r"\b(?:two|three|multiple|several)(?:\s+of\s+(?:my|our|the))?\s+(?:upcoming\s+)?"
     r"(?:reservations?|bookings?)\b"
@@ -297,6 +303,16 @@ _TERMINAL_TOKEN_CREDENTIAL = js_regex(
     ignorecase=True,
 )
 _HAN = js_regex(r"[\u3400-\u9fff]")
+# Han characters alone also spell Japanese; kana marks the prompt as not Mandarin.
+_KANA = js_regex(r"[\u3040-\u30ff]")
+# A language name alone ("java coffee prices", "python snake habitat") is not
+# code work, even on a tool turn; it joins the code-agent pool only together
+# with a coding action.
+_CODING_ACTION = js_regex(
+    r"\b(?:write|implement|refactor|debug|fix|patch|compile|build|run|test|script|program|code"
+    r"|function|class|module|repo(?:sitory)?)\b|编写|实现|重构|调试|修复|编译|脚本|代码",
+    ignorecase=True,
+)
 _MULTIPLE_CHOICE = js_regex(r"(?:^|\n)\s*[A-D][.)]\s+", ignorecase=True, multiline=True)
 _NUMERIC = js_regex(r"-?\d+(?:[.,]\d+)?")
 _MATH_MARKERS = js_regex(
@@ -304,15 +320,17 @@ _MATH_MARKERS = js_regex(
     ignorecase=True,
 )
 _TRAILING_QUESTION = js_regex(r"[?？]\s*\Z")
+# The Chinese alternatives sit outside \b: an ASCII word boundary never fires
+# between two Han characters, so inside it they could not match at all.
 _DEBUG_TASK = js_regex(
-    r"\b(?:bug|debug|error|failure|failing|regression|crash|修复|报错|错误|调试)\b", ignorecase=True
+    r"\b(?:bug|debug|error|failure|failing|regression|crash)\b|修复|报错|错误|调试", ignorecase=True
 )
 _CODE_EDIT_TASK = js_regex(
-    r"\b(?:refactor|implement|patch|edit|rewrite|重构|实现|修改)\b", ignorecase=True
+    r"\b(?:refactor|implement|patch|edit|rewrite)\b|重构|实现|修改", ignorecase=True
 )
-_EXTRACTION_TASK = js_regex(r"\b(?:extract|json|schema|csv|字段|提取)\b", ignorecase=True)
+_EXTRACTION_TASK = js_regex(r"\b(?:extract|json|schema|csv)\b|字段|提取", ignorecase=True)
 _REASONING_TASK = js_regex(
-    r"\b(?:prove|derive|theorem|formal|mathematical|reasoning|证明|推导|定理|数学)\b",
+    r"\b(?:prove|derive|theorem|formal|mathematical|reasoning)\b|证明|推导|定理|数学",
     ignorecase=True,
 )
 
@@ -350,7 +368,11 @@ def _likely_needs_parallel_tool_calls(
         token
         for name in (tool_names or [])
         for token in _TOOL_NAME_SPLIT.split(name.lower())
-        if token in _OPERATION_TOKENS and token in lowered
+        # Whole words only, with an optional inflection: a substring test read
+        # "add" out of "address", "book" out of "facebook" and "close" out of
+        # "closet" (the same failure rules.py fixed for its keyword lists).
+        if token in _OPERATION_TOKENS
+        and js_regex(rf"\b{token}(?:s|es|d|ed|ing)?\b").search(lowered)
     }
     # A single workflow naturally mentions domain nouns like order/item plus one
     # action. Upgrade only when two different visible operation verbs are
@@ -594,7 +616,7 @@ def classify_task(prompt: str, system_prompt: str | None, options: RouterOptions
         and len(prompt) <= 1_000
         and simple_terminal_artifact
     )
-    language = "zh" if _HAN.search(scanned_prompt) else "other"
+    language = "zh" if _HAN.search(scanned_prompt) and not _KANA.search(scanned_prompt) else "other"
     multiple_choice_signals = len(_MULTIPLE_CHOICE.findall(scanned_prompt))
     numeric_signals = len(_NUMERIC.findall(scanned_prompt))
     compact_math_problem = (
@@ -613,7 +635,11 @@ def classify_task(prompt: str, system_prompt: str | None, options: RouterOptions
         task_type = "vision"
     elif estimated_input_tokens > 80_000:
         task_type = "long_context"
-    elif needs_tools and (has_code or implicit_terminal_code):
+    elif needs_tools and (
+        code_artifact
+        or (has_code and _CODING_ACTION.search(scanned_prompt))
+        or implicit_terminal_code
+    ):
         task_type = "code_agent"
     elif needs_tools and likely_parallel_tool_calls and not complex_multi_tool_plan:
         task_type = "tool_agent_parallel"
@@ -1141,7 +1167,7 @@ def is_eligible(
 def estimated_cost(
     model_id: str, options: RouterOptions, input_tokens: int, output_tokens: int
 ) -> float:
-    price = options["model_pricing"].get(model_id)
+    price = usable_pricing(options["model_pricing"].get(model_id))
     if not price:
         return math.inf
     flat = price.get("flat_price")
@@ -1161,6 +1187,17 @@ class _ProfileScore:
     freshness: float
 
 
+def _valid_metric(value: object, *, optional: bool) -> bool:
+    if value is None:
+        return optional
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
+
+
 def profile_score(model_id: str, options: RouterOptions, now: datetime) -> _ProfileScore | None:
     """Weak speed/reliability priors, decayed by age and sample count."""
     host_performance = options.get("model_performance") or {}
@@ -1173,6 +1210,18 @@ def profile_score(model_id: str, options: RouterOptions, now: datetime) -> _Prof
         return None
     measured_at = parse_date(profile.get("measured_at", ""))
     if measured_at is None:
+        return None
+    # A host-injected observation with a missing or non-numeric field would turn
+    # the whole score into NaN, and NaN compares as "equal" in the sort, freezing
+    # that candidate wherever it landed. Treat it as no observation.
+    if not (
+        _valid_metric(profile.get("latency_ms"), optional=False)
+        and _valid_metric(profile.get("output_tokens_per_second"), optional=False)
+        and _valid_metric(profile.get("p95_latency_ms"), optional=True)
+        and _valid_metric(profile.get("intelligence_index"), optional=True)
+        and _valid_metric(profile.get("error_rate"), optional=True)
+        and _valid_metric(profile.get("samples"), optional=True)
+    ):
         return None
     age_days = max(0.0, (now - measured_at).total_seconds() / 86_400)
     # A 30-day half-life makes old data a tie-breaker only. Small probe runs are
@@ -1370,11 +1419,15 @@ class PortfolioStrategy:
             cost = estimated_cost(
                 model, options, features.estimated_input_tokens, max_output_tokens
             )
-            cost_score = (
-                1 - (cost - min_cost) / (max_cost - min_cost)
-                if math.isfinite(cost) and max_cost > min_cost
-                else 0.5
-            )
+            # An unpriced candidate costs an unknown amount, so it scores as the
+            # most expensive rather than a neutral 0.5 that let it outrank priced
+            # models. Pricing presence still never filters a candidate.
+            if not math.isfinite(cost):
+                cost_score = 0.0
+            elif max_cost > min_cost:
+                cost_score = 1 - (cost - min_cost) / (max_cost - min_cost)
+            else:
+                cost_score = 0.5
             capability_score = 1.0 if model in eligible_set else 0.0
             profile = profile_score(model, options, now)
             # Fresh observations can refine affinity. Historical observations

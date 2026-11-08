@@ -8,7 +8,7 @@ Keeping a small built-in snapshot makes the core safe and useful when a
 product catalog is temporarily unavailable, without importing product code.
 
 GENERATED upstream by ``scripts/sync-model-capabilities.mjs`` from the public
-catalog (GET https://blockrun.ai/api/v1/models) on 2026-10-20; ``supports_tools``
+catalog (GET https://blockrun.ai/api/v1/models) on 2026-11-08; ``supports_tools``
 comes from a live function-calling probe. Re-sync from ``model-capabilities.ts``
 rather than editing by hand — a hand edit is lost on the next sync.
 """
@@ -35,9 +35,9 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_vision": True,
         },
         # override: The public catalog's `categories` omit "vision" for this Anthropic model even
-        # though the gateway accepts image input for it (the prior hand-maintained snapshot had
-        # it, and Anthropic's model card lists it). Without this the vision filter would silently
-        # drop it — reported against the catalog; remove once the categories carry vision.
+        # though the gateway accepts image input for it (the prior hand-maintained snapshot had it,
+        # and Anthropic's model card lists it). Without this the vision filter would silently drop it
+        # — reported against the catalog; remove once the categories carry vision.
         "anthropic/claude-haiku-4.5": {
             "context_window": 200_000,
             "max_output_tokens": 64_000,
@@ -81,9 +81,9 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_vision": True,
         },
         # override: The public catalog's `categories` omit "vision" for this Anthropic model even
-        # though the gateway accepts image input for it (the prior hand-maintained snapshot had
-        # it, and Anthropic's model card lists it). Without this the vision filter would silently
-        # drop it — reported against the catalog; remove once the categories carry vision.
+        # though the gateway accepts image input for it (the prior hand-maintained snapshot had it,
+        # and Anthropic's model card lists it). Without this the vision filter would silently drop it
+        # — reported against the catalog; remove once the categories carry vision.
         "anthropic/claude-sonnet-4.6": {
             "context_window": 1_000_000,
             "max_output_tokens": 128_000,
@@ -109,12 +109,24 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": False,
             "supports_vision": False,
         },
+        # override: The 2026-11-08 catalog began tagging deepseek/deepseek-chat "vision" (it was text-
+        # only through 2026-10-20), and DeepSeek still ships image input as a separate experimental id
+        # (deepseek/deepseek-v4-flash-vision-exp). No image probe has confirmed the tag. Routing an
+        # image turn to a model that silently drops the image returns a confident 200 the caller
+        # cannot branch on, so this fails closed until a correctly sized image probe passes on both
+        # chains; then remove this entry.
         "deepseek/deepseek-chat": {
             "context_window": 1_048_576,
             "max_output_tokens": 65_536,
             "supports_tools": True,
             "supports_vision": False,
         },
+        # override: The 2026-11-08 catalog began tagging deepseek/deepseek-reasoner "vision" (it was
+        # text-only through 2026-10-20), and DeepSeek still ships image input as a separate
+        # experimental id (deepseek/deepseek-v4-flash-vision-exp). No image probe has confirmed the
+        # tag. Routing an image turn to a model that silently drops the image returns a confident 200
+        # the caller cannot branch on, so this fails closed until a correctly sized image probe passes
+        # on both chains; then remove this entry.
         "deepseek/deepseek-reasoner": {
             "context_window": 1_048_576,
             "max_output_tokens": 65_536,
@@ -133,7 +145,12 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": False,
         },
-        # supportsTools: not probed — fails closed
+        # override: The 2026-11-08 catalog began tagging deepseek/deepseek-v4.1-flash "vision" (it was
+        # text-only through 2026-10-20), and DeepSeek still ships image input as a separate
+        # experimental id (deepseek/deepseek-v4-flash-vision-exp). No image probe has confirmed the
+        # tag. Routing an image turn to a model that silently drops the image returns a confident 200
+        # the caller cannot branch on, so this fails closed until a correctly sized image probe passes
+        # on both chains; then remove this entry.
         "deepseek/deepseek-v4.1-flash": {
             "context_window": 1_048_576,
             "max_output_tokens": 65_536,
@@ -200,6 +217,7 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": True,
         },
+        # supportsTools: not probed — fails closed
         "google/gemini-4-argon": {
             "context_window": 1_048_576,
             "max_output_tokens": 65_536,
@@ -225,6 +243,8 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": False,
             "supports_vision": True,
         },
+        # absent from the 2026-11-08 listing but still routed — previous entry retained; probe before
+        # removing
         "moonshot/kimi-k3": {
             "context_window": 1_048_576,
             "max_output_tokens": 65_536,
@@ -232,11 +252,18 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_vision": True,
         },
         # supportsTools: not probed — fails closed
-        "nvidia/llama-3.2-11b-vision": {
-            "context_window": 128_000,
-            "max_output_tokens": 16_384,
+        "moonshot/kimi-k3.1-pro": {
+            "context_window": 1_048_576,
+            "max_output_tokens": 65_536,
             "supports_tools": False,
             "supports_vision": True,
+        },
+        # supportsTools: not probed — fails closed
+        "nvidia/minimax-m3.1-flash": {
+            "context_window": 1_048_576,
+            "max_output_tokens": 16_384,
+            "supports_tools": False,
+            "supports_vision": False,
         },
         # supportsTools: not probed — fails closed
         "nvidia/muse-glimmer-30b": {
@@ -245,13 +272,12 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": False,
             "supports_vision": False,
         },
-        # override: The catalog tags this model "vision", but a correctly sized probe does not
-        # hold up (ClawRouter, 2026-08-31): a 64x64 solid-red PNG was named correctly 1 of 4
-        # times on Base, and on Solana the image was silently dropped and a text model answered
-        # "white". An HTTP 200 with a confident wrong answer gives the caller nothing to branch
-        # on, so image turns must not be routed here. It is ecoTiers.SIMPLE.fallback[0] since
-        # nemotron-3-nano-30b was delisted (2026-09-08); remove once a probe of this size comes
-        # back right on both chains.
+        # override: The catalog tags this model "vision", but a correctly sized probe does not hold up
+        # (ClawRouter, 2026-08-31): a 64x64 solid-red PNG was named correctly 1 of 4 times on Base,
+        # and on Solana the image was silently dropped and a text model answered "white". An HTTP 200
+        # with a confident wrong answer gives the caller nothing to branch on, so image turns must not
+        # be routed here. It is ecoTiers.SIMPLE.fallback[0] since nemotron-3-nano-30b was delisted
+        # (2026-09-08); remove once a probe of this size comes back right on both chains.
         "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": {
             "context_window": 256_000,
             "max_output_tokens": 16_384,
@@ -259,11 +285,25 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_vision": False,
         },
         # supportsTools: not probed — fails closed
+        "nvidia/nemotron-3-super-120b": {
+            "context_window": 131_072,
+            "max_output_tokens": 16_384,
+            "supports_tools": False,
+            "supports_vision": True,
+        },
+        # supportsTools: not probed — fails closed
         "nvidia/nemotron-3-ultra-550b": {
             "context_window": 1_000_000,
             "max_output_tokens": 16_384,
             "supports_tools": False,
             "supports_vision": False,
+        },
+        # supportsTools: not probed — fails closed
+        "nvidia/nemotron-3.5-bolt": {
+            "context_window": 131_072,
+            "max_output_tokens": 16_384,
+            "supports_tools": False,
+            "supports_vision": True,
         },
         # supportsTools: not probed — fails closed
         "nvidia/nemotron-3.5-lightning": {
@@ -285,12 +325,6 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_vision": True,
         },
         "openai/gpt-4.1-mini": {
-            "context_window": 128_000,
-            "max_output_tokens": 32_768,
-            "supports_tools": True,
-            "supports_vision": False,
-        },
-        "openai/gpt-4.1-nano": {
             "context_window": 128_000,
             "max_output_tokens": 32_768,
             "supports_tools": True,
@@ -333,12 +367,12 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": False,
             "supports_vision": True,
         },
-        # supportsTools: gateway unavailable at probe time — fails closed; override: 2026-08-29
-        # probe: every request (6 plain + 3 tool attempts) returned a gateway 500, so the probe
-        # measured an incident, not the model. Codex's function calling is established by the
-        # 2026-07 Terminal-Bench / tau2 calibration trajectories in portfolio.ts. Hosts observing
-        # the 500s should drop it with RouterOptions.unavailableModels rather than this snapshot
-        # claiming the model cannot call tools.
+        # supportsTools: gateway unavailable at probe time — fails closed; override: 2026-08-29 probe:
+        # every request (6 plain + 3 tool attempts) returned a gateway 500, so the probe measured an
+        # incident, not the model. Codex's function calling is established by the 2026-07 Terminal-
+        # Bench / tau2 calibration trajectories in portfolio.ts. Hosts observing the 500s should drop
+        # it with RouterOptions.unavailableModels rather than this snapshot claiming the model cannot
+        # call tools.
         "openai/gpt-5.3-codex": {
             "context_window": 400_000,
             "max_output_tokens": 128_000,
@@ -437,7 +471,6 @@ DEFAULT_MODEL_CAPABILITIES: Mapping[str, ModelCapabilities] = MappingProxyType(
             "supports_tools": True,
             "supports_vision": True,
         },
-        # supportsTools: not probed — fails closed
         "openai/gpt-6.1-sol": {
             "context_window": 1_050_000,
             "max_output_tokens": 128_000,
