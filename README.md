@@ -75,7 +75,7 @@ response = client.chat("nvidia/nemotron-3.5-lightning", "Explain x402 in 1 sente
 
 # Option 2: let the smart router pick the best free model per request
 result = client.smart_chat("What is 2+2?", routing_profile="free")
-print(result.model)     # e.g. 'nvidia/llama-3.2-11b-vision' (free SIMPLE tier)
+print(result.model)     # e.g. 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning' (free SIMPLE tier)
 print(result.response)  # '4'
 ```
 
@@ -86,11 +86,10 @@ print(result.response)  # '4'
 | `nvidia/nemotron-3.5-lightning` | 1M | The free default — thinking-mode reasoning, longest free context |
 | `nvidia/nemotron-3-ultra-550b` | 1M | Largest free model (550B / 55B active MoE) — strongest, but slower |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Fast general chat + reasoning (30B-A3B) |
-| `nvidia/llama-3.2-11b-vision` | 128K | The free Meta Llama |
-| `cohere/north-mini-code` | 256K | Coding, sub-second responses |
+| `nvidia/nemotron-3.5-bolt` | 131K | Free vision — verified on real image probes on Base and Solana |
 | `poolside/laguna-xs-2.1` | 131K | Coding, ~161 tok/s |
 
-> Two of these (`nemotron-3-nano-omni` and `llama-3.2-11b-vision`) are catalogued as vision-capable, but image input did not hold up on real probes — both return HTTP 200 with a wrong answer. Send images to a paid vision model.
+> For free image input use `nemotron-3.5-bolt`. `nemotron-3-nano-omni` is catalogued as vision-capable but failed earlier image probes on Solana, so the router never sends it images. `nvidia/llama-3.2-11b-vision` and `cohere/north-mini-code` are no longer served as themselves: the gateway answers them with another model, so do not pin them.
 
 > Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.435/$0.87 — the 75% launch promo became the permanent list price after 2026-05-31) — the free `nvidia/deepseek-v4-pro` is retired, and the gateway redirects calls to it to a free NVIDIA Nemotron model.
 

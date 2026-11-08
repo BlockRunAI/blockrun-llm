@@ -84,8 +84,18 @@ SOLANA_MINIMUM_PAYMENT_USD = 0.001
 #: The router adapter was already dropping nano-30b at runtime, because it is not
 #: in the catalog, so SIMPLE had been opening on its first fallback.
 #:
-#: The table is no longer NVIDIA-only: ``cohere/north-mini-code`` and
-#: ``poolside/laguna-xs-2.1`` serve at $0 and carry the free coding load.
+#: 2026-11-08: two rungs had gone the same way. ``nvidia/llama-3.2-11b-vision``
+#: left ``/v1/models`` and ``cohere/north-mini-code`` lists ``available: false``;
+#: both still answer 200, served by a different model (nano-omni or
+#: ``nemotron-3-super-120b``). So the "free vision" rung was not Llama at all.
+#: Replacements were checked on both gateways (Base and Solana), each id asked
+#: twice with the reply's ``model`` field read back:
+#: ``nvidia/nemotron-3.5-bolt`` is the vision rung — it named a solid
+#: red/blue/green 64x64 PNG correctly 9/9 on each chain, serving as itself —
+#: and ``nvidia/nemotron-3-ultra-550b`` (1M ctx, now answering as itself; it
+#: was a substitute on 2026-08-31) takes north-mini-code's long-context and
+#: coding slots. ``poolside/laguna-xs-2.1`` serves as itself on Base but is
+#: substituted on Solana, so it is the last rung wherever it appears.
 #: ``gpt-oss-120b/20b`` stay out — proxy-only ids with no catalog price, under
 #: the NVIDIA free tier's prompt-retention policy.
 FREE_TIERS: dict[str, TierConfig] = {
@@ -96,7 +106,8 @@ FREE_TIERS: dict[str, TierConfig] = {
         "primary": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",  # 256K ctx
         "fallback": [
             "nvidia/nemotron-3.5-lightning",
-            "nvidia/llama-3.2-11b-vision",
+            "nvidia/nemotron-3.5-bolt",  # free vision, verified on both chains
+            "nvidia/nemotron-3-ultra-550b",
             "poolside/laguna-xs-2.1",
         ],
     },
@@ -104,25 +115,26 @@ FREE_TIERS: dict[str, TierConfig] = {
         "primary": "nvidia/nemotron-3.5-lightning",  # 1M ctx — free tier flagship
         "fallback": [
             "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+            "nvidia/nemotron-3-ultra-550b",
+            "nvidia/nemotron-3.5-bolt",
             "poolside/laguna-xs-2.1",
-            "cohere/north-mini-code",
         ],
     },
     "COMPLEX": {
-        # Only free model above 256K, so it absorbs long inputs; the vision rung
-        # behind it absorbs multi-modal ones.
+        # The two 1M-context free models absorb long inputs; the vision rung
+        # behind them absorbs multi-modal ones.
         "primary": "nvidia/nemotron-3.5-lightning",
         "fallback": [
-            "cohere/north-mini-code",  # 256K ctx
+            "nvidia/nemotron-3-ultra-550b",  # 1M ctx
             "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-            "nvidia/llama-3.2-11b-vision",  # free vision
+            "nvidia/nemotron-3.5-bolt",  # free vision
         ],
     },
     "REASONING": {
         "primary": "nvidia/nemotron-3.5-lightning",
         "fallback": [
+            "nvidia/nemotron-3-ultra-550b",
             "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
-            "cohere/north-mini-code",
             "poolside/laguna-xs-2.1",
         ],
     },

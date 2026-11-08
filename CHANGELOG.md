@@ -5,6 +5,16 @@ All notable changes to blockrun-llm will be documented in this file.
 ## Unreleased
 
 ### Fixed
+- **The free tier's vision rung really sees images again.**
+  `nvidia/llama-3.2-11b-vision` (no longer listed) and `cohere/north-mini-code`
+  (listed `available: false`) still answered 200, but the gateway served them
+  with another model, so a free image turn went to a model nobody chose.
+  `routing_profile="free"` now uses `nvidia/nemotron-3.5-bolt` for vision (it
+  named a solid-color image correctly 9/9 on both Base and Solana) and
+  `nvidia/nemotron-3-ultra-550b` (1M context) for the old north-mini-code
+  slots. `poolside/laguna-xs-2.1` moves to the last rung because Solana
+  substitutes it. Every rung was checked on both gateways by reading back the
+  reply's `model` field.
 - **`router_core` re-synced to upstream `@blockrun/router-core` `273c2af`**
   (was `8773a99`), which includes the 2026-11 router audit. All 88
   cross-language snapshot decisions match the TypeScript engine.
