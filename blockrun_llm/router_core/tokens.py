@@ -33,9 +33,13 @@ def estimate_tokens(text: str) -> int:
     return cjk + math.ceil((len(text) - cjk) / 4)
 
 
-def scan_limit(prompt_truncation_chars: int) -> int:
+def scan_limit(prompt_truncation_chars: float) -> int:
     """The scan window the feature regexes read, bounded so a pasted document cannot stall routing."""
-    return max(1, min(8_000, prompt_truncation_chars))
+    if not isinstance(prompt_truncation_chars, (int, float)) or not math.isfinite(
+        prompt_truncation_chars
+    ):
+        return 8_000
+    return max(1, min(8_000, math.floor(prompt_truncation_chars)))
 
 
 def sample_for_scan(value: str, limit: int) -> str:
@@ -49,6 +53,8 @@ def sample_for_scan(value: str, limit: int) -> str:
         return value
     prefix_length = math.ceil(limit / 2)
     suffix_length = limit - prefix_length
-    # JS ``slice(-0)`` is the whole string, not an empty one.
-    suffix = value[-suffix_length:] if suffix_length else value
-    return f"{value[:prefix_length]}\n{suffix}"
+    # A one-character limit leaves no suffix; never fall back to the whole text
+    # (upstream's ``slice(-0)`` used to, which defeated the scan bound).
+    if suffix_length <= 0:
+        return value[:prefix_length]
+    return f"{value[:prefix_length]}\n{value[-suffix_length:]}"

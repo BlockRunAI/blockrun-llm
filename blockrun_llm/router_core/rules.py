@@ -23,9 +23,11 @@ from .types import DimensionScore, ScoringConfig, ScoringResult, Tier, TokenCoun
 _MULTI_STEP_PATTERNS = [
     js_regex(r"first.*then", ignorecase=True),
     js_regex(r"step \d", ignorecase=True),
-    js_regex(r"\d\.\s"),
+    # A numbered list item must start a line: a bare ``\d\.\s`` also matched
+    # every sentence that ends in a number ("born in 1990. How old…").
+    js_regex(r"(?:^|\n)\s*\d+[.)]\s"),
 ]
-_QUESTION_MARK = js_regex(r"\?")
+_QUESTION_MARK = js_regex(r"[?？]")
 
 
 # ─── Keyword Matching ───

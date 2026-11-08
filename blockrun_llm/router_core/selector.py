@@ -9,6 +9,7 @@ RoutingDecision metadata with cost estimates and savings.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Iterable, Mapping
 
 from .types import Capacity, Method, ModelPricing, RoutingDecision, Tier, TierConfig
@@ -45,13 +46,40 @@ def _flat_price(pricing: ModelPricing | None) -> float | None:
     return float(flat) if flat else None
 
 
+def _usable_price(value: object) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
+
+
+def usable_pricing(pricing: ModelPricing | None) -> ModelPricing | None:
+    """The pricing entry, or ``None`` when a price it carries is not a finite, non-negative number.
+
+    A hand-built price map with a NaN would otherwise put NaN into
+    ``cost_estimate`` and ``savings``; a malformed price is an unknown price.
+    """
+    if not pricing:
+        return None
+    flat = pricing.get("flat_price")
+    if flat:
+        return pricing if _usable_price(flat) else None
+    for key in ("input_price", "output_price"):
+        value = pricing.get(key)
+        if value is not None and not _usable_price(value):
+            return None
+    return pricing
+
+
 def _baseline_cost(
     model_pricing: Mapping[str, ModelPricing],
     estimated_input_tokens: int,
     max_output_tokens: int,
 ) -> float:
     """What the premium reference model would cost for the same request."""
-    opus_pricing = model_pricing.get(BASELINE_MODEL_ID)
+    opus_pricing = usable_pricing(model_pricing.get(BASELINE_MODEL_ID))
     opus_input_price = (opus_pricing or {}).get("input_price", BASELINE_INPUT_PRICE)
     opus_output_price = (opus_pricing or {}).get("output_price", BASELINE_OUTPUT_PRICE)
     baseline_input = (estimated_input_tokens / 1_000_000) * opus_input_price
@@ -83,7 +111,7 @@ def select_model(
     """Select the primary model for a tier and build the RoutingDecision."""
     tier_config = tier_configs[tier]
     model = tier_config["primary"]
-    pricing = model_pricing.get(model)
+    pricing = usable_pricing(model_pricing.get(model))
 
     flat = _flat_price(pricing)
     if flat is not None:
@@ -134,7 +162,7 @@ def calculate_model_cost(
     Includes the server margin and the facilitator minimum so the estimate
     matches the actual x402 charge.
     """
-    pricing = model_pricing.get(model)
+    pricing = usable_pricing(model_pricing.get(model))
 
     flat = _flat_price(pricing)
     if flat is not None:
@@ -154,7 +182,10 @@ def calculate_model_cost(
     return {
         "cost_estimate": cost_estimate,
         "baseline_cost": baseline_cost,
-        "savings": _savings(cost_estimate, baseline_cost, routing_profile),
+        # Same rule as select_model: an unpriced model has unknown, not 100%, savings.
+        "savings": (
+            0.0 if pricing is None else _savings(cost_estimate, baseline_cost, routing_profile)
+        ),
     }
 
 
