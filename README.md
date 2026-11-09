@@ -8,7 +8,7 @@
 > request settle itself over x402 — on **Solana or Base**. Every client takes
 > either credential in the same first argument.
 >
-> 🆓 **Includes <!-- br:models.free -->8<!-- /br:models.free --> free models** — Nemotron 3.5 Lightning (1M context), Nemotron 3 Ultra 550B, Nemotron 3 Nano Omni, Llama 3.2 11B Vision, Cohere North Mini Code and Poolside Laguna XS 2.1. Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any of them directly.
+> 🆓 **Includes <!-- br:models.free -->9<!-- /br:models.free --> free models** — Nemotron 3.5 Lightning (1M context), Nemotron 3 Ultra 550B, Nemotron 3 Nano Omni, Llama 3.2 11B Vision, Cohere North Mini Code and Poolside Laguna XS 2.1. Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any of them directly.
 
 [![PyPI](https://img.shields.io/pypi/v/blockrun-llm.svg)](https://pypi.org/project/blockrun-llm/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -673,7 +673,7 @@ only ranks what `/v1/models` lists.
 
 ### Free Tier
 
-The <!-- br:models.free -->8<!-- /br:models.free --> free models are listed under
+The <!-- br:models.free -->9<!-- /br:models.free --> free models are listed under
 [Try It Free](#try-it-free-no-balance-required). Pin them by full model id, or
 use `routing_profile="free"`.
 
@@ -1999,7 +1999,7 @@ When you make an API call, the SDK automatically handles x402 payment. It signs 
 Router Core is BlockRun's built-in routing engine — shared with the TypeScript SDK and the gateway, so the same request routes the same way everywhere. It scores your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, drops every model that can't actually handle it (context, output length, tools, vision), then picks the cheapest capable one and keeps the rest as a fallback chain. Routing happens locally in under 1ms and makes no extra model call. It can save up to <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
 
 ### How much does it cost?
-Pay only for what you use. Prices start at **FREE** (<!-- br:models.free -->8<!-- /br:models.free --> free models). Paid models start at $0.10/M tokens. There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
+Pay only for what you use. Prices start at **FREE** (<!-- br:models.free -->9<!-- /br:models.free --> free models). Paid models start at $0.10/M tokens. There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
 
 ### Can I use it with Solana?
 Yes. Install with `pip install blockrun-llm[solana]` and use `SolanaLLMClient` instead of `LLMClient`. Same API, different payment chain.
