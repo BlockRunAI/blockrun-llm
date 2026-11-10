@@ -3860,7 +3860,12 @@ class SolanaLLMClient:
         return self._request_with_payment_raw(f"/v1/modal/{path}", body or {})
 
     def modal_sandbox_create(self, **body: Any) -> dict[str, Any]:
-        """Create a sandboxed compute environment ($0.01 CPU / $0.05 GPU)."""
+        """Create a sandboxed compute environment.
+
+        Small sandboxes (up to 300 s, 1 CPU, 1024 MB) pay a flat $0.01 CPU or
+        $0.05-$0.40 GPU; larger or longer ones pay the hourly rate for the
+        requested lifetime, upfront. The 402 quote is the exact price.
+        """
         return self.modal("sandbox/create", body)
 
     def modal_sandbox_exec(
@@ -6578,7 +6583,12 @@ class AsyncSolanaLLMClient:
         return await self._request_with_payment_raw(f"/v1/modal/{path}", body or {})
 
     async def modal_sandbox_create(self, **body: Any) -> dict[str, Any]:
-        """Create a sandboxed compute environment ($0.01 CPU / $0.05 GPU)."""
+        """Create a sandboxed compute environment.
+
+        Small sandboxes (up to 300 s, 1 CPU, 1024 MB) pay a flat $0.01 CPU or
+        $0.05-$0.40 GPU; larger or longer ones pay the hourly rate for the
+        requested lifetime, upfront. The 402 quote is the exact price.
+        """
         return await self.modal("sandbox/create", body)
 
     async def modal_sandbox_exec(

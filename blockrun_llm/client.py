@@ -2830,14 +2830,21 @@ class LLMClient:
         Call the Modal sandbox compute API (POST passthrough).
 
         Args:
-            path: "sandbox/create" ($0.01 CPU / $0.05 GPU), "sandbox/exec"
-                ($0.001), "sandbox/status" ($0.001), "sandbox/terminate" ($0.001).
+            path: "sandbox/create" (flat $0.01 CPU or $0.05-$0.40 GPU for a
+                small sandbox of up to 300 s, 1 CPU and 1024 MB; anything larger
+                or longer is billed hourly for the requested lifetime, upfront),
+                "sandbox/exec" ($0.001), "sandbox/status" ($0.001),
+                "sandbox/terminate" ($0.001). The 402 quote is the exact price.
             body: JSON body for the endpoint.
         """
         return self._request_with_payment_raw(f"/v1/modal/{path}", body or {})
 
     def modal_sandbox_create(self, **body: Any) -> dict[str, Any]:
-        """Create a sandboxed compute environment ($0.01 CPU / $0.05 GPU).
+        """Create a sandboxed compute environment.
+
+        Small sandboxes (up to 300 s, 1 CPU, 1024 MB) pay a flat $0.01 CPU or
+        $0.05-$0.40 GPU; larger or longer ones pay the hourly rate for the
+        requested lifetime, upfront. The 402 quote is the exact price.
 
         Common fields: image ("python:3.11"), gpu (optional GPU type),
         timeout. Returns a sandbox_id for exec/status/terminate.
@@ -4564,7 +4571,7 @@ class AsyncLLMClient:
         return await self._request_with_payment_raw(f"/v1/modal/{path}", body or {})
 
     async def modal_sandbox_create(self, **body: Any) -> dict[str, Any]:
-        """Async: create a sandbox ($0.01 CPU / $0.05 GPU)."""
+        """Async: create a sandbox. Pricing as in the sync ``modal_sandbox_create``."""
         return await self.modal("sandbox/create", body)
 
     async def modal_sandbox_exec(
