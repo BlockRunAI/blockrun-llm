@@ -4,6 +4,17 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+## 1.21.7 — 2026-11-09
+
+### Docs
+- **Sandbox create pricing in docstrings matches the gateway.** `modal()` and
+  `modal_sandbox_create` (sync and async, both clients) said a flat
+  $0.01 CPU / $0.05 GPU. Only a small sandbox (up to 300 s, 1 CPU, 1024 MB) is
+  flat: $0.01 CPU or $0.05-$0.40 GPU. Anything larger or longer is billed
+  hourly for the requested lifetime, upfront. The 402 quote is the exact
+  price. No behaviour change.
+- README brand numbers re-synced from blockrun.ai.
+
 ## 1.21.6 — 2026-11-08
 
 ### Fixed
