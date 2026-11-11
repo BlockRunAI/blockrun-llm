@@ -107,6 +107,7 @@ from .speech import SpeechClient
 from .surf import SurfClient
 from .tx_log import TransactionLogger, decode_settlement_header, format_row
 from .types import (
+    PAYMENT_REPLAY,
     APIError,
     AudioModel,
     AudioTrack,
@@ -127,6 +128,7 @@ from .types import (
     MusicResponse,
     NewsSearchSource,
     PaymentError,
+    PaymentReplayError,
     # Virtual Portrait types
     PortraitEnrollment,
     PortraitList,
@@ -204,6 +206,7 @@ __all__ = [
     "NETWORK_ALIASES",
     "PAYMENT_MODE_API_KEY",
     "PAYMENT_MODE_WALLET",
+    "PAYMENT_REPLAY",
     "SUPPORTED_NETWORKS",
     "WALLET_DIR",
     "WALLET_FILE",
@@ -232,6 +235,7 @@ __all__ = [
     "MusicResponse",
     "NewsSearchSource",
     "PaymentError",
+    "PaymentReplayError",
     "PhoneClient",
     "PortraitClient",
     "PortraitEnrollment",

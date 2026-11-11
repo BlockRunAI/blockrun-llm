@@ -373,6 +373,67 @@ class PaymentError(BlockrunError):
         self.response = response
 
 
+#: The gateway's ``code`` for a payment authorization it has already seen.
+PAYMENT_REPLAY = "PAYMENT_REPLAY"
+
+
+class PaymentReplayError(PaymentError):
+    """The gateway refused the payment as already used (``code: "PAYMENT_REPLAY"``).
+
+    Not a balance problem. The same signed authorization was already submitted
+    once (usually a retry or a proxy re-sent it), and that earlier request may
+    already have been served and charged. The SDK raises this without signing
+    anything new: a fresh authorization for the same request can be a second
+    charge.
+
+    Every field the gateway sent is kept verbatim:
+
+    * ``server_message`` / ``details``: the gateway's own explanation
+      (its ``message`` and ``details`` fields).
+    * ``poll_url`` / ``job_id``: where the earlier request's result can be
+      collected, when the gateway names one.
+    * ``wallet_auth``: the EIP-191 challenge the gateway issues for a settled
+      authorization (``{"timestamp", "message", "headers", "expires_in"}``).
+      Sign ``wallet_auth["message"]`` with the paying wallet and resend the
+      same request with the headers it names to get the earlier ``poll_url``.
+      The SDK does not do this step for you yet.
+    * ``payer``: the wallet the gateway attributes the authorization to.
+
+    ``response`` carries the same fields as a dict, under the gateway's own
+    key names. Subclasses :class:`PaymentError`, so existing
+    ``except PaymentError`` handlers keep working.
+    """
+
+    code = PAYMENT_REPLAY
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: Optional[int] = None,
+        response: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        super().__init__(message, status_code=status_code, response=response)
+        body = response or {}
+        self.server_message: Optional[str] = _str_or_none(body.get("message"))
+        self.details: Optional[str] = _str_or_none(body.get("details"))
+        self.poll_url: Optional[str] = _str_or_none(body.get("poll_url"))
+        self.job_id: Optional[str] = _str_or_none(body.get("job_id")) or _str_or_none(
+            body.get("id")
+        )
+        recoverable = body.get("recoverable")
+        self.recoverable: Optional[bool] = recoverable if isinstance(recoverable, bool) else None
+        wallet_auth = body.get("wallet_auth")
+        self.wallet_auth: Optional[Dict[str, Any]] = (
+            wallet_auth if isinstance(wallet_auth, dict) else None
+        )
+        self.payer: Optional[str] = _str_or_none(body.get("payer"))
+
+
+def _str_or_none(value: Any) -> Optional[str]:
+    return value if isinstance(value, str) and value else None
+
+
 class SpendLimitError(PaymentError):
     """A quote exceeded a spend limit the caller configured, so it was refused.
 

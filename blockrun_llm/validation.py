@@ -559,37 +559,124 @@ def validate_api_url(url: str) -> None:
         )
 
 
-def build_payment_rejected_error(response: Any) -> PaymentError:
-    """Translate a 402 retry response into a :class:`PaymentError` that
-    preserves the gateway's original failure reason.
+# Fields of a ``PAYMENT_REPLAY`` body that tell the caller how to recover the
+# earlier request's result. Kept verbatim on :class:`PaymentReplayError`. The
+# gateway's shapes (blockrun ``src/lib/payment-nonce.ts``):
+#
+#   402 {error: "Payment authorization already used", message, code, payer}
+#   402 {error: "Payment authorization already settled", code, message,
+#        wallet_auth: {timestamp, message, headers, expires_in}}
+#   202 {status: "in_progress", object: "generation.job", message, code, payer,
+#        id, job_id, poll_url, recoverable: true}   (a job POST; not an error)
+_REPLAY_FIELDS = (
+    "error",
+    "message",
+    "details",
+    "code",
+    "payer",
+    "id",
+    "job_id",
+    "poll_url",
+    "recoverable",
+    "wallet_auth",
+    "status",
+)
 
-    Without this helper, clients used to throw a generic
-    ``"Payment rejected. Check your wallet balance."`` and the real
-    facilitator reason (e.g. ``transaction_simulation_failed``,
-    ``insufficient_funds``) was lost.
+
+def _body_code(body: dict[str, Any]) -> str | None:
+    code = body.get("code")
+    nested = body.get("error")
+    if not isinstance(code, str) and isinstance(nested, dict):
+        code = nested.get("code")
+    return code if isinstance(code, str) else None
+
+
+def is_payment_replay(body: Any) -> bool:
+    """Does this response body say ``code: "PAYMENT_REPLAY"``?
+
+    The gateway sends that code when the signed authorization was already
+    submitted once. The earlier request may have been served and charged, so
+    the answer is never "sign a new payment and try again".
+    """
+    if not isinstance(body, dict):
+        return False
+    code = _body_code(body)
+    return code is not None and code.upper() == "PAYMENT_REPLAY"
+
+
+def _read_json_body(response: Any) -> dict[str, Any]:
+    try:
+        body = response.json()
+    except Exception:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _status_of(response: Any) -> int:
+    status = getattr(response, "status_code", None)
+    return status if isinstance(status, int) else 402
+
+
+def _replay_error(body: dict[str, Any], status_code: int) -> PaymentError:
+    from .types import PaymentReplayError
+
+    detail: dict[str, Any] = {k: body[k] for k in _REPLAY_FIELDS if body.get(k) is not None}
+    detail["code"] = "PAYMENT_REPLAY"
+    detail.update(_payment_facts(body))
+    server_message = body.get("message")
+    poll_url = body.get("poll_url")
+    text = (
+        "Payment authorization already used (PAYMENT_REPLAY): an earlier request "
+        "with this authorization was accepted and may already have been charged. "
+        "Nothing new was signed; a fresh payment for the same request can charge twice."
+    )
+    if isinstance(poll_url, str) and poll_url:
+        text += f" Its result can be collected at {poll_url}."
+    if isinstance(server_message, str) and server_message:
+        text += f" Gateway: {server_message}"
+    details = body.get("details")
+    if isinstance(details, str) and details and details != server_message:
+        text += f" ({details})"
+    return PaymentReplayError(text, status_code=status_code, response=detail)
+
+
+def build_payment_rejected_error(response: Any, *, replay: bool | None = None) -> PaymentError:
+    """The ONE place a paid request's refused payment becomes an exception.
+
+    Every paid call routes its post-payment 402 (and a poll's 402) through
+    here, so what the caller reads is the gateway's reason, never a guess.
+
+    * ``code: "PAYMENT_REPLAY"`` (or ``replay=True``, for a caller with its own
+      evidence) returns a :class:`PaymentReplayError` carrying the gateway's
+      ``message``, ``details``, ``poll_url``, ``job_id``, ``wallet_auth`` and
+      ``payer`` verbatim. Callers must not answer it by signing again.
+    * Anything else returns a :class:`PaymentError` whose message is the
+      gateway's reason. Clients used to throw a generic
+      ``"Payment was rejected. Check your wallet balance."`` and the real
+      reason (``transaction_simulation_failed``, ``PAYMENT_MALFORMED``, an
+      already-used authorization) was lost.
 
     The gateway's ``details`` field on a 402 settlement-failed response
-    is the x402 facilitator's well-defined error enum — safe to surface
+    is the x402 facilitator's well-defined error enum, safe to surface
     verbatim. We bound the length defensively in case a future server
     bug widens the field.
 
     Args:
-        response: An ``httpx.Response`` with status 402 from a paid
-            retry. Anything with a ``.json()`` method works for tests.
-
-    Returns:
-        A :class:`PaymentError` carrying ``status_code=402`` and a
-        ``response`` dict that includes the gateway's ``details``.
+        response: An ``httpx.Response`` from a paid request. Anything with a
+            ``.json()`` method (and optionally ``.status_code``) works for tests.
+        replay: Force (``True``) or forbid (``False``) the replay
+            classification. ``None`` reads the body's ``code``.
     """
     # Local import to avoid a circular module dependency at import time.
     from .types import PaymentError
 
-    try:
-        body = response.json()
-    except Exception:
-        body = {}
-    if not isinstance(body, dict):
-        body = {}
+    body = _read_json_body(response)
+    status_code = _status_of(response)
+    if replay is None:
+        replay = is_payment_replay(body)
+    if replay:
+        return _replay_error(body, status_code)
+
     sanitized = dict(sanitize_error_response(body))
     raw_details = body.get("details")
     if isinstance(raw_details, str) and 0 < len(raw_details) < 256:
@@ -615,16 +702,33 @@ def build_payment_rejected_error(response: Any) -> PaymentError:
     raw_code = body.get("code")
     if isinstance(raw_code, str) and 0 < len(raw_code) < 128:
         sanitized["code"] = raw_code
-    detail_part = sanitized.get("details") or sanitized.get("message") or ""
+    gave_reason = any(
+        bool(body.get(k)) and isinstance(body.get(k), (str, dict))
+        for k in ("error", "message", "details", "invalidMessage")
+    )
+    detail_part = (
+        (sanitized.get("details") or sanitized.get("message") or "") if gave_reason else ""
+    )
+    # A flat body's prose `message` beside its short `error` title is the
+    # gateway's actual explanation (PAYMENT_MALFORMED names the bad field):
+    # keep it when there is no facilitator `details` enum to show instead.
+    server_message = body.get("message")
+    if (
+        "details" not in sanitized
+        and isinstance(server_message, str)
+        and server_message
+        and server_message != detail_part
+    ):
+        detail_part = f"{detail_part}: {server_message}" if detail_part else server_message
     invalid_message = sanitized.get("invalidMessage")
     if invalid_message:
         detail_part = f"{detail_part} ({invalid_message})" if detail_part else invalid_message
     msg = (
         f"Payment rejected by gateway: {detail_part}"
         if detail_part
-        else "Payment rejected by gateway"
+        else f"Payment rejected by gateway (HTTP {status_code}); it gave no reason"
     )
-    return PaymentError(msg, status_code=402, response=sanitized)
+    return PaymentError(msg, status_code=status_code, response=sanitized)
 
 
 # Whether money moved on a failed call. A paid job can still fail, and a caller

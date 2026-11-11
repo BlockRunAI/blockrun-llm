@@ -57,6 +57,7 @@ from .apikey import (
 from .tx_log import paid_request_error_prefix
 from .types import APIError, PaymentError, retry_after_of
 from .validation import (
+    build_payment_rejected_error,
     sanitize_error_response,
     validate_api_url,
     validate_private_key,
@@ -316,7 +317,7 @@ class PhoneClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise build_payment_rejected_error(retry)
         data = self._unwrap(retry, after_payment=True)
         tx_hash = retry.headers.get("x-payment-receipt") or retry.headers.get("X-Payment-Receipt")
         if tx_hash and isinstance(data, dict):

@@ -49,6 +49,8 @@ from .apikey import (
 from .jobs import absolute_poll_url
 from .types import APIError, PaymentError, VideoResponse, retry_after_of
 from .validation import (
+    build_payment_rejected_error,
+    is_payment_replay,
     raise_api_error,
     sanitize_error_response,
     validate_api_url,
@@ -425,7 +427,7 @@ class VideoClient:
             )
 
             if submit_resp.status_code == 402:
-                raise PaymentError("Payment was rejected. Check your wallet balance.")
+                raise build_payment_rejected_error(submit_resp)
 
             if submit_resp.status_code not in (200, 202):
                 self._raise_api_error(submit_resp, "Submit failed")
@@ -495,6 +497,11 @@ class VideoClient:
                 # Account rail: a 402 is the account being out of credit, not a
                 # challenge to sign. Nothing here can sign, so say so plainly.
                 raise_for_api_key_402(poll_resp, self.api_key)
+                # PAYMENT_REPLAY is never an expiry: the authorization was
+                # already used, and a fresh signature here can be a second
+                # charge. Surface it with its recovery fields, sign nothing.
+                if is_payment_replay(poll_data):
+                    raise build_payment_rejected_error(poll_resp, replay=True)
                 # Mid-poll 402 = the signed authorization expired (600s
                 # window) on a budget longer than that. Re-challenge +
                 # re-sign and keep going. A fresh signature that 402s again
@@ -505,11 +512,9 @@ class VideoClient:
                     if challenge.status_code == 402:
                         payment_payload = self._sign_from_challenge(challenge, poll_url)
                         continue
-                raise PaymentError(
-                    "Payment verification failed mid-poll (not a signature-expiry). "
-                    "Check the wallet balance and that you poll from the wallet "
-                    "that submitted the job."
-                )
+                # A fresh signature that 402s again: the gateway's reason, not
+                # a guess. It still polls from the wallet that submitted.
+                raise build_payment_rejected_error(poll_resp)
 
             if poll_resp.status_code not in (200, 202, 504):
                 self._raise_api_error(poll_resp, "Poll failed")

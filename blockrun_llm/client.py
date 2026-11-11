@@ -97,7 +97,9 @@ from .types import (
     stream_choice_finish_reason,
 )
 from .validation import (
+    build_payment_rejected_error,
     check_spend_limits,
+    is_payment_replay,
     resolve_spend_limit,
     sanitize_error_response,
     validate_api_url,
@@ -449,10 +451,9 @@ def _is_payment_replay(response: httpx.Response) -> bool:
     body = _rejection_body(response)
     if body is None:
         return False
-    code = body.get("code")
-    if isinstance(code, str) and code.upper() == "PAYMENT_REPLAY":
+    if is_payment_replay(body):
         return True
-    return any(body.get(k) for k in ("recoverable", "poll_url", "job_id"))
+    return any(body.get(k) for k in ("recoverable", "poll_url", "job_id", "wallet_auth"))
 
 
 def _is_verify_failure(response: httpx.Response) -> bool:
@@ -501,29 +502,12 @@ def _payment_rejected_error(response: httpx.Response) -> PaymentError:
 
     A ``PAYMENT_REPLAY`` is not a balance problem and must not read as "just
     retry": a retry signs a fresh authorization, and is charged again for a
-    request that was already paid for. Keep the gateway's message and, when it
-    names one, the earlier result's ``poll_url``.
+    request that was already paid for. The shared
+    :func:`~blockrun_llm.validation.build_payment_rejected_error` keeps the
+    gateway's message and recovery fields; this adds the chat route's wider
+    replay evidence (a body pointing at the earlier result).
     """
-    if not _is_payment_replay(response):
-        return PaymentError("Payment was rejected. Check your wallet balance.")
-    body = _rejection_body(response) or {}
-    gateway_message = body.get("message")
-    poll_url = body.get("poll_url")
-    detail: dict[str, Any] = sanitize_error_response(body)
-    for key in ("poll_url", "job_id", "recoverable"):
-        if body.get(key) is not None:
-            detail[key] = body[key]
-    text = (
-        "The gateway refused this payment as already used (PAYMENT_REPLAY): an earlier "
-        "request with the same authorization was accepted and may have been charged. "
-        "Nothing more was signed. Retrying signs a new authorization and is billed "
-        "again, so check what the earlier request returned first."
-    )
-    if isinstance(poll_url, str) and poll_url:
-        text += f" Its result can be collected at {poll_url}."
-    if isinstance(gateway_message, str) and gateway_message:
-        text += f" Gateway: {gateway_message}"
-    return PaymentError(text, status_code=response.status_code, response=detail)
+    return build_payment_rejected_error(response, replay=_is_payment_replay(response) or None)
 
 
 def _exact_after_upto_rejection(client: Any, payment: _ChatPayment) -> _ChatPayment:
