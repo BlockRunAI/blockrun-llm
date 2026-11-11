@@ -737,18 +737,12 @@ no `quality` field and would silently ignore the value, so passing it there
 raises `TypeError` rather than quietly doing nothing.
 
 ### Video Generation
-| Model | Default 5s 720p | Notes |
-| ------- | ----------------- | --- |
-| `xai/grok-imagine-video` | 8s ≈ $0.40 |  |
-| `bytedance/seedance-1.5-pro` | ≈ $0.46 | flat |
-| `bytedance/seedance-2.0-fast` | ≈ $1.19 t2v / $0.70 i2v |  |
-| `bytedance/seedance-2.0` | ≈ $1.49 t2v / $0.91 i2v |  |
+Live video prices: [blockrun.ai/pricing](https://blockrun.ai/pricing) (agents: `GET https://blockrun.ai/api/v1/models`); every call's exact price is in its 402 quote before you pay.
 
-Seedance is billed by token360 in tokens (~20,256 tok/sec at 720p). Drop
-`resolution="480p"` for ~half the cost, or bump to `1080p` / `4K`.
 Seedance defaults to `720p` with synced audio on every input (text, image,
 first/last frame, reference media, RealFace); pass `generate_audio=False` for a
-silent clip. Grok ignores `resolution` and `generate_audio`.
+silent clip. `resolution="480p"` costs about half as much, `1080p` / `4K`
+more. Grok ignores `resolution` and `generate_audio`.
 
 ```python
 from blockrun_llm import VideoClient
