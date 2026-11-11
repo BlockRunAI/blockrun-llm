@@ -746,9 +746,9 @@ raises `TypeError` rather than quietly doing nothing.
 
 Seedance is billed by token360 in tokens (~20,256 tok/sec at 720p). Drop
 `resolution="480p"` for ~half the cost, or bump to `1080p` / `4K`.
-Seedance defaults to `720p` with synced audio on text-to-video; image- or
-face-conditioned paths default audio off. Grok ignores `resolution` and
-`generate_audio`.
+Seedance defaults to `720p` with synced audio on every input (text, image,
+first/last frame, reference media, RealFace); pass `generate_audio=False` for a
+silent clip. Grok ignores `resolution` and `generate_audio`.
 
 ```python
 from blockrun_llm import VideoClient

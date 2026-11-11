@@ -238,8 +238,9 @@ class VideoClient:
             resolution: Output resolution — `360p` / `480p` / `720p` /
                 `1080p` / `4K`. Seedance defaults to `720p`; Grok ignores.
             generate_audio: Synced audio in the output. Seedance defaults
-                to `True` for text-to-video and `False` for image- or
-                face-conditioned generation. Grok ignores this field.
+                to `True` for every input (text, image, first/last frame,
+                reference media, RealFace); pass `False` for a silent clip.
+                Grok ignores this field.
             seed: Deterministic generation seed (Seedance only).
             watermark: Add the provider watermark (Seedance only).
             return_last_frame: Also return the final frame as an image
