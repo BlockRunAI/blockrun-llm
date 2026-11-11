@@ -55,6 +55,7 @@ from .apikey import (
 from .tx_log import paid_request_error_prefix
 from .types import APIError, PaymentError, SpeechResponse, retry_after_of
 from .validation import (
+    build_payment_rejected_error,
     sanitize_error_response,
     validate_api_url,
     validate_private_key,
@@ -354,7 +355,7 @@ class SpeechClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise build_payment_rejected_error(retry_response)
 
         if retry_response.status_code != 200:
             try:

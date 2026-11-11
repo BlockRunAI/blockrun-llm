@@ -342,6 +342,13 @@ def _is_safe_resign_error(exc: PaymentError) -> bool:
     gateway its own verify retries.
     """
     body = exc.response if isinstance(exc.response, dict) else {}
+    # A replay that names the earlier request's result (poll_url / job_id /
+    # recoverable / wallet_auth) says that request owns the authorization and
+    # may be charged: collect it, never pay again. Only sol's bare
+    # "Sign a new payment for each request" replay (a concurrent nonce
+    # collision on another request) is re-signed below.
+    if any(body.get(k) for k in ("poll_url", "job_id", "recoverable", "wallet_auth")):
+        return False
     code = _normalize_reason(str(body.get("code") or ""))
     reason = _normalize_reason(str(body.get("reason") or ""))
     message = _normalize_reason(str(body.get("message") or str(exc)))

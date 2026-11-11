@@ -50,6 +50,7 @@ from .jobs import poll_until_completed
 from .tx_log import paid_request_error_prefix
 from .types import APIError, MusicResponse, PaymentError, retry_after_of
 from .validation import (
+    build_payment_rejected_error,
     sanitize_error_response,
     validate_api_url,
     validate_private_key,
@@ -275,7 +276,7 @@ class MusicClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise build_payment_rejected_error(retry_response)
 
         if retry_response.status_code == 202:
             # The signed create is queued: replay the same signature on each

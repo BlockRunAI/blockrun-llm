@@ -86,6 +86,7 @@ from .types import (
     retry_after_of,
 )
 from .validation import (
+    build_payment_rejected_error,
     raise_api_error,
     sanitize_error_response,
     validate_api_url,
@@ -459,7 +460,7 @@ class RealFaceClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry, self.api_key)
-            raise PaymentError("Payment was rejected. Check your wallet balance.")
+            raise build_payment_rejected_error(retry)
 
         if retry.status_code == 425:
             # Group is not active — the person hasn't finished the phone

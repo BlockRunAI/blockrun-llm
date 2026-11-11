@@ -4,6 +4,28 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+- **`PAYMENT_REPLAY` is its own error, not "check your wallet balance".** When
+  the gateway refuses a payment as already used (`code: "PAYMENT_REPLAY"`),
+  every paid call (chat, search, image, music, video, speech, voice, phone,
+  price, RPC, portrait, RealFace) now raises `PaymentReplayError`, a
+  `PaymentError` subclass exported with the `PAYMENT_REPLAY` constant. It
+  carries the gateway's `message`/`details` and any `poll_url`, `job_id`,
+  `recoverable`, `wallet_auth` and `payer` verbatim, and the SDK signs nothing
+  new for it: the earlier request may already have been charged, and a fresh
+  authorization for the same request can charge twice. A video poll that gets
+  `PAYMENT_REPLAY` no longer treats it as an expired signature and re-signs.
+  All of this goes through one helper, `validation.build_payment_rejected_error`.
+- **Other refused payments say what the gateway said.** A non-replay 402 (for
+  example `PAYMENT_MALFORMED`) now raises with the gateway's own reason
+  instead of asserting a balance problem.
+- The Solana client still re-signs sol.blockrun.ai's bare `PAYMENT_REPLAY`
+  ("Sign a new payment for each request", a concurrent nonce collision), but
+  never one that names the earlier request's result.
+
+Not yet: answering a `wallet_auth` challenge automatically (sign it once with
+the paying wallet and resend). Until then, use `PaymentReplayError.wallet_auth`.
+
 ## 1.21.7 — 2026-11-09
 
 ### Docs
