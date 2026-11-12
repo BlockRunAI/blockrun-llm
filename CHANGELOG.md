@@ -4,6 +4,15 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+## 1.22.0 — 2026-11-12
+
+### Docs
+- **Seedance synced audio defaults on for every input.** `generate_audio`
+  docstrings: the gateway now turns synced audio on by default for every
+  Seedance input (text, image, first/last frame, reference image, video or
+  audio, RealFace), not only text-to-video. Pass `generate_audio=False` to turn
+  it off. The price does not depend on it.
+
 ### Fixed
 - **`PAYMENT_REPLAY` is its own error, not "check your wallet balance".** When
   the gateway refuses a payment as already used (`code: "PAYMENT_REPLAY"`),
