@@ -4,6 +4,27 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+## 1.22.2 — 2026-11-13
+
+### Fixed
+- **Paid calls with side effects or live state are never served from the
+  local cache.** An endpoint missing from `cache.DEFAULT_TTL` used to be
+  cached for an hour, so a second identical Modal `exec` returned the first
+  run's output without calling the gateway, and `create`, `status` and
+  `terminate` did the same. 0x quotes, gasless submit and trade status, and the
+  single-use onramp link were cached too. Unknown endpoints now default to no
+  cache. Exa and DefiLlama, the read-only families that relied on the old
+  default, are listed at their previous 1 hour. `/v1/modal/`, `/v1/zerox/` and
+  `/v1/onramp/` are listed at 0. Applies to `LLMClient`, `AsyncLLMClient`,
+  `SolanaLLMClient` and `AsyncSolanaLLMClient`. Every paid call is still
+  archived and cost-logged.
+- **Custom Solana RPC headers now reach the RPC.** With `rpc_headers` (or
+  `SOLANA_RPC_API_KEY` / `SOLANA_RPC_HEADERS`), the header-carrying RPC client
+  was registered only under legacy network names, while x402 2.x looks clients
+  up by CAIP-2 id. Every mainnet payment therefore built a header-less client,
+  and the mint lookup and blockhash fetch went out without the key. The client
+  is now registered under the mainnet, devnet and testnet CAIP-2 ids too.
+
 ## 1.22.1 — 2026-11-13
 
 ### Fixed

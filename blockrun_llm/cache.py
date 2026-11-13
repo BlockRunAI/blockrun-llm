@@ -25,8 +25,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-# Default TTL in seconds per endpoint pattern
+# TTL in seconds per endpoint pattern. Only read-only data is cached; an
+# endpoint listed nowhere here is never served from cache (``_get_ttl``
+# returns 0). A cache hit answers without calling the gateway, so caching a
+# call that changes or reads live state (a sandbox exec, a trade submit, a
+# status poll, a single-use link) would hand back a stale answer for a call
+# the user meant to make again.
 DEFAULT_TTL: dict[str, int] = {
+    # Exa neural search / contents / answer — cache 1 hour
+    "/v1/exa/": 3600,
+    # DefiLlama protocol / chain / yield data — cache 1 hour
+    "/v1/defillama/": 3600,
     # X/Twitter data — cache 1 hour (followers/tweets don't change every minute)
     "/v1/partner/": 3600,
     # Prediction markets — cache 30 minutes
@@ -52,6 +61,13 @@ DEFAULT_TTL: dict[str, int] = {
     "/v1/commodity": 0,
     "/v1/stocks": 0,
     "/v1/usstock": 0,
+    # Stateful or live — never cached (also the default; listed so the
+    # reason is on record): Modal sandboxes (create/exec/status/terminate),
+    # 0x swap quotes, gasless submit and trade status, and single-use
+    # Coinbase onramp links.
+    "/v1/modal/": 0,
+    "/v1/zerox/": 0,
+    "/v1/onramp/": 0,
 }
 
 CACHE_DIR = Path.home() / ".blockrun" / "cache"
@@ -64,8 +80,9 @@ def _get_ttl(endpoint: str) -> int:
     for pattern, ttl in DEFAULT_TTL.items():
         if pattern in endpoint:
             return ttl
-    # Default: cache 1 hour for unknown endpoints
-    return 3600
+    # Unknown endpoints are not cached: a new route may have side effects,
+    # and a cache miss only costs a call, while a wrong hit skips one.
+    return 0
 
 
 def _cache_key(endpoint: str, body: dict[str, Any]) -> str:
