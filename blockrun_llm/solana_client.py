@@ -466,6 +466,14 @@ def _warn_if_x402_ignores_quoted_blockhash() -> None:
         )
 
 
+# CAIP-2 ids of the Solana clusters (genesis-hash prefixes; fixed by the chain).
+_SOLANA_CAIP2_NETWORKS = (
+    "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",  # mainnet-beta
+    "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",  # devnet
+    "solana:4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z",  # testnet
+)
+
+
 def _register_svm_with_headers(
     x402_client: Any,
     signer: Any,
@@ -499,9 +507,18 @@ def _register_svm_with_headers(
     pre_client = SolanaClient(rpc_url, extra_headers=rpc_headers)
 
     def _populated(scheme):
-        # Hit several common network keys so the lazy _get_client never
-        # constructs a header-less SolanaClient.
-        for net in ("solana", "solana:mainnet", "solana-mainnet", "solana:devnet"):
+        # Every x402 2.x scheme looks its client up by the CAIP-2 id
+        # (``normalize_network``), so those are the keys that matter: with
+        # only the legacy names below, every mainnet payment got a fresh
+        # header-less client and the headers never reached the RPC. The
+        # legacy names stay for any release that looks up by them. One client
+        # serves every network, as x402 does itself for a custom ``rpc_url``.
+        for net in _SOLANA_CAIP2_NETWORKS + (
+            "solana",
+            "solana:mainnet",
+            "solana-mainnet",
+            "solana:devnet",
+        ):
             scheme._clients[net] = pre_client
         return scheme
 
