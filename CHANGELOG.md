@@ -4,6 +4,22 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+## 1.22.1 — 2026-11-13
+
+### Fixed
+- **Solana payments sign on the 402's quoted blockhash.** The `solana` extra
+  now requires `x402[svm]>=2.17.0`, the first release whose SVM exact client
+  signs on `extra.recentBlockhash` when a 402 quotes one, and fetches its own
+  only when it does not. sol.blockrun.ai's Modal create 402 quotes a hash with
+  `lastValidBlockHeight` and a `blockrunCreateProof`; the gateway refuses to
+  create a sandbox for a payment on that hash with fewer than 100 blocks of
+  validity left, instead of creating one and then failing settlement. A
+  payment on a self-fetched hash skipped that check. `accepted.extra` is
+  echoed unchanged, proof included; amount and recipient are unchanged.
+- A Solana client built on an older installed `x402` (one an upgrade without
+  the `[solana]` extra leaves in place) logs a one-time warning naming the
+  upgrade.
+
 ## 1.22.0 — 2026-11-12
 
 ### Docs

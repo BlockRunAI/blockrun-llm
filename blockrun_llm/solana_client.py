@@ -437,6 +437,35 @@ def _resolve_rpc_config(
     return resolved_url, resolved_headers
 
 
+_quoted_blockhash_warned = False
+
+
+def _warn_if_x402_ignores_quoted_blockhash() -> None:
+    """Warn once when the installed ``x402`` signs on its own blockhash.
+
+    A 402 can quote the blockhash to sign on (``extra.recentBlockhash``).
+    sol.blockrun.ai's Modal create only checks that a payment has enough
+    blocks of validity left when it is signed on that hash, so a client that
+    fetches its own can still pay with a near-expired one, get a sandbox, and
+    fail settlement. ``x402`` 2.17.0 (the declared floor) signs on the quote;
+    an older install survives an upgrade of this package without the
+    ``[solana]`` extra. Detected by behaviour, not version string.
+    """
+    global _quoted_blockhash_warned
+    if _quoted_blockhash_warned:
+        return
+    _quoted_blockhash_warned = True
+    try:
+        from x402.mechanisms.svm.exact import client as _svm_exact_client
+    except Exception:
+        return
+    if not hasattr(_svm_exact_client, "resolve_blockhash"):
+        logger.warning(
+            "The installed x402 package signs Solana payments on its own blockhash "
+            "and ignores the one the 402 quotes. Upgrade: pip install -U 'x402[svm]>=2.17.0'"
+        )
+
+
 def _register_svm_with_headers(
     x402_client: Any,
     signer: Any,
@@ -454,6 +483,7 @@ def _register_svm_with_headers(
     If ``rpc_headers`` is ``None`` we delegate to the upstream helper so
     behavior is unchanged for users on Helius-URL-style auth.
     """
+    _warn_if_x402_ignores_quoted_blockhash()
     if not rpc_headers:
         register_exact_svm_client(x402_client, signer, rpc_url=rpc_url)
         return
