@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "blockrun-llm"
-version = "1.22.0"
+version = "1.22.1"
 description = "BlockRun SDK - Pay-per-request AI (LLM, Image, Video, Music, Voice) via x402 on Base and Solana"
 readme = "README.md"
 license = "MIT"
@@ -46,7 +46,10 @@ anthropic = [
     "anthropic>=0.40.0,<1",
 ]
 solana = [
-    "x402[svm]>=2.0.0",
+    # 2.17.0 is the first release whose SVM exact client signs on the 402's
+    # extra.recentBlockhash instead of fetching its own. sol.blockrun.ai's Modal
+    # create checks the payment window only for a payment on the quoted hash.
+    "x402[svm]>=2.17.0",
     # solana 0.40.0 (2026-06-27) removed solana.rpc.api, which x402's SVM
     # signer imports — fresh installs get _HAS_X402=False. Lift when x402
     # supports the new layout.
