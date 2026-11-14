@@ -341,6 +341,11 @@ def _is_safe_resign_error(exc: PaymentError) -> bool:
     no fresh signature makes them pass, and each wasted attempt costs the
     gateway its own verify retries.
     """
+    # Raised after this signature already drew a 5xx (see
+    # _refused_after_paid_5xx): that earlier attempt may have settled, so
+    # whatever the refusal says about the RESEND, a new signature can pay twice.
+    if getattr(exc, _SETTLED_ATTR, False):
+        return False
     body = exc.response if isinstance(exc.response, dict) else {}
     # A replay that names the earlier request's result (poll_url / job_id /
     # recoverable / wallet_auth) says that request owns the authorization and
@@ -370,6 +375,95 @@ def _is_safe_resign_error(exc: PaymentError) -> bool:
     if code in _PRE_BROADCAST_CODES:
         return True
     return message.startswith(_PRE_BROADCAST_TITLES)
+
+
+# --- A paid leg that answered 5xx ---------------------------------------------
+#
+# sol settles in parallel with the upstream call (and Fable 5.2 at a 45s bound),
+# so a paid request can be CHARGED and still answer 5xx ("CHARGED BUT REQUEST
+# FAILED" in the gateway log). The paid legs re-send the SAME signed payment
+# once on a 5xx: one signature settles at most once, so that resend can never
+# pay twice, and it is the only recovery from a 5xx the gateway itself never
+# saw (a load-balancer 502). But if the first attempt did settle, the gateway
+# still holds its nonce claim and answers the resend with a bare 402
+# PAYMENT_REPLAY, which the whole-request retry used to read as a concurrent
+# nonce collision and re-sign: a second payment for one call. A refusal of a
+# resend therefore says nothing about the FIRST attempt and is never re-signed,
+# unless that first 5xx itself proved nothing was charged.
+
+_GATEWAY_REQUEST_ID_HEADER = "x-blockrun-gateway-request-id"
+
+# The one payment_status a gateway 5xx uses to say no money moved (sol's
+# pre-settle refusals: upstream cooldown, verifier outage). "settlement_failed"
+# is deliberately NOT here: a failed settle result cannot prove the transfer
+# did not land.
+_PAID_5XX_NOT_CHARGED = "not_charged"
+
+
+def _json_object(response: Any) -> dict[str, Any]:
+    try:
+        body = response.json()
+    except Exception:
+        return {}
+    return body if isinstance(body, dict) else {}
+
+
+def _paid_5xx_proves_no_charge(response: Any) -> bool:
+    return _json_object(response).get("payment_status") == _PAID_5XX_NOT_CHARGED
+
+
+def _paid_5xx_reports_payment(response: Any) -> bool:
+    """Does a paid leg's 5xx itself say the payment did or may have moved?
+
+    Then it is surfaced as is, never re-sent: the resend could only come back
+    as a replay refusal, and the receipt in this answer would be lost.
+    """
+    body = _json_object(response)
+    status = body.get("payment_status")
+    if isinstance(status, str) and status and status != _PAID_5XX_NOT_CHARGED:
+        return True
+    if body.get("tx_hash") or body.get("code") == "CHARGED_UPSTREAM_FAILED":
+        return True
+    headers = getattr(response, "headers", None) or {}
+    return bool(headers.get("X-Payment-Receipt") or headers.get("PAYMENT-RESPONSE"))
+
+
+def _refused_after_paid_5xx(response: Any, first_5xx: Any | None) -> PaymentError:
+    """The error for a paid leg's 402, given the 5xx (if any) that preceded it.
+
+    Without a prior 5xx this is exactly :func:`build_payment_rejected_error`.
+    After one, the 402 refused a RESEND of a signature the gateway already
+    received once, so the error says the first attempt may have been charged,
+    names that attempt's gateway request id and receipt, and is tagged
+    settled so no retry loop signs again.
+    """
+    exc = build_payment_rejected_error(response)
+    if first_5xx is None or _paid_5xx_proves_no_charge(first_5xx):
+        return exc
+    detail: dict[str, Any] = dict(exc.response) if isinstance(exc.response, dict) else {}
+    first_body = _json_object(first_5xx)
+    prior: dict[str, Any] = {"status_code": first_5xx.status_code}
+    for key in ("code", "payment_status", "tx_hash"):
+        if isinstance(first_body.get(key), str):
+            prior[key] = first_body[key]
+    headers = getattr(first_5xx, "headers", None) or {}
+    receipt = headers.get("X-Payment-Receipt")
+    if receipt and "tx_hash" not in prior:
+        prior["tx_hash"] = receipt
+    request_id = headers.get(_GATEWAY_REQUEST_ID_HEADER)
+    if request_id:
+        prior["gateway_request_id"] = request_id
+    detail["prior_attempt"] = prior
+    where = f" (gateway request id {request_id})" if request_id else ""
+    tx = f" tx {prior['tx_hash']}." if prior.get("tx_hash") else ""
+    message = (
+        f"{exc} This signed payment first got HTTP {first_5xx.status_code}{where}, "
+        "and that attempt may already have been charged, so no new payment was "
+        f"signed.{tx} Check your wallet before paying for this request again."
+    )
+    wrapped = type(exc)(message, status_code=exc.status_code, response=detail)
+    setattr(wrapped, _SETTLED_ATTR, True)
+    return wrapped
 
 
 def _get_user_agent() -> str:
@@ -462,8 +556,46 @@ def _warn_if_x402_ignores_quoted_blockhash() -> None:
     if not hasattr(_svm_exact_client, "resolve_blockhash"):
         logger.warning(
             "The installed x402 package signs Solana payments on its own blockhash "
-            "and ignores the one the 402 quotes. Upgrade: pip install -U 'x402[svm]>=2.17.0'"
+            "and ignores the one the 402 quotes. Upgrade: pip install -U 'blockrun-llm[solana]'"
         )
+        # Not `pip install -U 'x402[svm]>=2.17.0'`: resolved without this
+        # package, pip takes the latest x402 (2.28 pulls solders 0.29), outside
+        # what our `solana>=0.36,<0.40` pin co-installs with (x402 2.26,
+        # solders 0.27), and leaves a mixed install.
+
+
+# Fields of a 402's `extra` that describe the blockhash it QUOTES. A signer on
+# x402 >= 2.17 signs on `recentBlockhash` whenever it is present.
+_QUOTED_BLOCKHASH_KEYS = ("recentBlockhash", "lastValidBlockHeight", "blockrunCreateProof")
+
+
+def _without_quoted_blockhash(payment_required: Any) -> Any:
+    """A copy of a challenge with its quoted blockhash removed.
+
+    For re-signing a challenge that was issued earlier (the media poll's
+    keep-fresh re-sign): the quote ages with the challenge, so re-signing it
+    reproduces the same aging hash. Without the quote the signer fetches the
+    latest one, which is what the re-sign is for. Amount, payTo and the rest of
+    `extra` are untouched. Anything not shaped like a challenge is returned as is.
+    """
+    accepts = getattr(payment_required, "accepts", None)
+    if not isinstance(accepts, list):
+        return payment_required
+    stripped: list[Any] = []
+    changed = False
+    for requirement in accepts:
+        extra = getattr(requirement, "extra", None)
+        if isinstance(extra, dict) and any(k in extra for k in _QUOTED_BLOCKHASH_KEYS):
+            requirement = requirement.model_copy(
+                update={
+                    "extra": {k: v for k, v in extra.items() if k not in _QUOTED_BLOCKHASH_KEYS}
+                }
+            )
+            changed = True
+        stripped.append(requirement)
+    if not changed:
+        return payment_required
+    return payment_required.model_copy(update={"accepts": stripped})
 
 
 # CAIP-2 ids of the Solana clusters (genesis-hash prefixes; fixed by the chain).
@@ -1458,6 +1590,7 @@ class SolanaLLMClient:
 
         # ----- Phase 2: stream with PAYMENT-SIGNATURE -----
         assert payment_headers is not None
+        first_5xx: httpx.Response | None = None
         try:
             for attempt in range(len(backoffs) + 1):
                 with self._client.stream(
@@ -1479,8 +1612,14 @@ class SolanaLLMClient:
                         # Account rail: a 402 is the account being out of credit, not a
                         # challenge to sign. Nothing here can sign, so say so plainly.
                         raise_for_api_key_402(resp2, self.api_key)
-                        raise build_payment_rejected_error(resp2)
-                    if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
+                        raise _refused_after_paid_5xx(resp2, first_5xx)
+                    if (
+                        resp2.status_code in self._STREAM_5XX_STATUSES
+                        and attempt < len(backoffs)
+                        and not _paid_5xx_reports_payment(resp2)
+                    ):
+                        if first_5xx is None:
+                            first_5xx = resp2
                         import time
 
                         time.sleep(backoffs[attempt])
@@ -1742,7 +1881,12 @@ class SolanaLLMClient:
         retry_response = self._client.post(
             url, json=body, headers=payment_headers, timeout=eff_timeout
         )
-        if retry_response.status_code in (502, 503):
+        # Re-send the SAME signature once; see _refused_after_paid_5xx.
+        first_5xx: httpx.Response | None = None
+        if retry_response.status_code in (502, 503) and not _paid_5xx_reports_payment(
+            retry_response
+        ):
+            first_5xx = retry_response
             import time
 
             time.sleep(1)
@@ -1754,7 +1898,7 @@ class SolanaLLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise build_payment_rejected_error(retry_response)
+            raise _refused_after_paid_5xx(retry_response, first_5xx)
 
         if not retry_response.is_success:
             try:
@@ -1921,7 +2065,12 @@ class SolanaLLMClient:
         retry_response = self._client.post(
             url, json=body, headers=payment_headers, timeout=eff_timeout
         )
-        if retry_response.status_code in (502, 503):
+        # Re-send the SAME signature once; see _refused_after_paid_5xx.
+        first_5xx: httpx.Response | None = None
+        if retry_response.status_code in (502, 503) and not _paid_5xx_reports_payment(
+            retry_response
+        ):
+            first_5xx = retry_response
             import time
 
             time.sleep(1)
@@ -1933,7 +2082,7 @@ class SolanaLLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise build_payment_rejected_error(retry_response)
+            raise _refused_after_paid_5xx(retry_response, first_5xx)
 
         if not retry_response.is_success:
             try:
@@ -2072,7 +2221,12 @@ class SolanaLLMClient:
         retry_response = self._client.get(
             url, params=params, headers=payment_headers, timeout=eff_timeout
         )
-        if retry_response.status_code in (502, 503):
+        # Re-send the SAME signature once; see _refused_after_paid_5xx.
+        first_5xx: httpx.Response | None = None
+        if retry_response.status_code in (502, 503) and not _paid_5xx_reports_payment(
+            retry_response
+        ):
+            first_5xx = retry_response
             import time
 
             time.sleep(1)
@@ -2084,7 +2238,7 @@ class SolanaLLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise build_payment_rejected_error(retry_response)
+            raise _refused_after_paid_5xx(retry_response, first_5xx)
 
         if not retry_response.is_success:
             try:
@@ -2277,7 +2431,10 @@ class SolanaLLMClient:
             submit_resp = self._client.post(
                 url, json=body, headers=paid_headers, timeout=eff_timeout
             )
-            if submit_resp.status_code in (502, 503):
+            # Re-send the SAME signature once; see _refused_after_paid_5xx.
+            first_5xx: httpx.Response | None = None
+            if submit_resp.status_code in (502, 503) and not _paid_5xx_reports_payment(submit_resp):
+                first_5xx = submit_resp
                 _time.sleep(1)
                 submit_resp = self._client.post(
                     url, json=body, headers=paid_headers, timeout=eff_timeout
@@ -2287,7 +2444,7 @@ class SolanaLLMClient:
                 # Account rail: a 402 is the account being out of credit, not a
                 # challenge to sign. Nothing here can sign, so say so plainly.
                 raise_for_api_key_402(submit_resp, self.api_key)
-                raise build_payment_rejected_error(submit_resp)
+                raise _refused_after_paid_5xx(submit_resp, first_5xx)
 
             if submit_resp.status_code == 200:
                 # Fast path — image was produced inline.
@@ -2481,7 +2638,7 @@ class SolanaLLMClient:
             if payment_required is not None:
                 try:
                     poll_headers["PAYMENT-SIGNATURE"] = encode_payment_signature_header(
-                        self._sign_payment(payment_required)
+                        self._sign_payment(_without_quoted_blockhash(payment_required))
                     )
                     last_resign_at = _time.monotonic()
                 except Exception:
@@ -2523,7 +2680,9 @@ class SolanaLLMClient:
 
                 # Keep the settlement blockhash fresh (poll-based media path only,
                 # gated on max_resigns). Re-sign the ORIGINAL challenge — same
-                # amount/pay_to, only a freshly-fetched blockhash — so that whenever
+                # amount/pay_to, only a freshly-fetched blockhash (the challenge's quoted
+                # blockhash is dropped first: x402 >= 2.17 signs on a quote, and this
+                # one is as old as the challenge) — so that whenever
                 # upstream flips to "completed" the signature is
                 # <MEDIA_RESIGN_FRESH_SECONDS old and settlement can't hit a
                 # stale-blockhash transaction_simulation_failed. Only the completed
@@ -2535,7 +2694,9 @@ class SolanaLLMClient:
                     and _time.monotonic() - last_resign_at >= self.MEDIA_RESIGN_FRESH_SECONDS
                 ):
                     try:
-                        fresh_payload = self._sign_payment(payment_required)
+                        fresh_payload = self._sign_payment(
+                            _without_quoted_blockhash(payment_required)
+                        )
                         poll_headers["PAYMENT-SIGNATURE"] = encode_payment_signature_header(
                             fresh_payload
                         )
@@ -4592,6 +4753,7 @@ class AsyncSolanaLLMClient:
 
         # ----- Phase 2: stream with PAYMENT-SIGNATURE -----
         assert payment_headers is not None
+        first_5xx: httpx.Response | None = None
         try:
             for attempt in range(len(backoffs) + 1):
                 async with self._client.stream(
@@ -4614,8 +4776,14 @@ class AsyncSolanaLLMClient:
                         # Account rail: a 402 is the account being out of credit, not a
                         # challenge to sign. Nothing here can sign, so say so plainly.
                         raise_for_api_key_402(resp2, self.api_key)
-                        raise build_payment_rejected_error(resp2)
-                    if resp2.status_code in self._STREAM_5XX_STATUSES and attempt < len(backoffs):
+                        raise _refused_after_paid_5xx(resp2, first_5xx)
+                    if (
+                        resp2.status_code in self._STREAM_5XX_STATUSES
+                        and attempt < len(backoffs)
+                        and not _paid_5xx_reports_payment(resp2)
+                    ):
+                        if first_5xx is None:
+                            first_5xx = resp2
                         import asyncio
 
                         await asyncio.sleep(backoffs[attempt])
@@ -4743,8 +4911,11 @@ class AsyncSolanaLLMClient:
             cost_usd,
         )
 
-    # Reuse the sync class's pure helper — it doesn't touch async state.
-    _raise_stream_error = SolanaLLMClient._raise_stream_error
+    # Reuse the sync class's pure helper — it doesn't touch async state. Class
+    # attribute access unwraps the staticmethod, so it must be re-wrapped: bare,
+    # every call bound `self` into `response` and raised TypeError in place of
+    # the gateway's error.
+    _raise_stream_error = staticmethod(SolanaLLMClient._raise_stream_error)
 
     async def _request_with_payment(
         self, endpoint: str, body: dict[str, Any], timeout: float | None = None
@@ -4827,7 +4998,12 @@ class AsyncSolanaLLMClient:
         retry_response = await self._client.post(
             url, json=body, headers=payment_headers, timeout=eff_timeout
         )
-        if retry_response.status_code in (502, 503):
+        # Re-send the SAME signature once; see _refused_after_paid_5xx.
+        first_5xx: httpx.Response | None = None
+        if retry_response.status_code in (502, 503) and not _paid_5xx_reports_payment(
+            retry_response
+        ):
+            first_5xx = retry_response
             import asyncio
 
             await asyncio.sleep(1)
@@ -4839,7 +5015,7 @@ class AsyncSolanaLLMClient:
             # Account rail: a 402 is the account being out of credit, not a
             # challenge to sign. Nothing here can sign, so say so plainly.
             raise_for_api_key_402(retry_response, self.api_key)
-            raise build_payment_rejected_error(retry_response)
+            raise _refused_after_paid_5xx(retry_response, first_5xx)
         if not retry_response.is_success:
             try:
                 error_body = retry_response.json()
@@ -4934,13 +5110,18 @@ class AsyncSolanaLLMClient:
             retry_response = await self._client.post(
                 url, json=body, headers=payment_headers, timeout=eff_timeout
             )
-            if retry_response.status_code in (502, 503):
+            # Re-send the SAME signature once; see _refused_after_paid_5xx.
+            first_5xx: httpx.Response | None = None
+            if retry_response.status_code in (502, 503) and not _paid_5xx_reports_payment(
+                retry_response
+            ):
+                first_5xx = retry_response
                 await asyncio.sleep(1)
                 retry_response = await self._client.post(
                     url, json=body, headers=payment_headers, timeout=eff_timeout
                 )
             if retry_response.status_code == 402:
-                raise build_payment_rejected_error(retry_response)
+                raise _refused_after_paid_5xx(retry_response, first_5xx)
             if not retry_response.is_success:
                 try:
                     error_body = retry_response.json()
@@ -5040,13 +5221,18 @@ class AsyncSolanaLLMClient:
             retry_response = await self._client.get(
                 url, params=params, headers=payment_headers, timeout=eff_timeout
             )
-            if retry_response.status_code in (502, 503):
+            # Re-send the SAME signature once; see _refused_after_paid_5xx.
+            first_5xx: httpx.Response | None = None
+            if retry_response.status_code in (502, 503) and not _paid_5xx_reports_payment(
+                retry_response
+            ):
+                first_5xx = retry_response
                 await asyncio.sleep(1)
                 retry_response = await self._client.get(
                     url, params=params, headers=payment_headers, timeout=eff_timeout
                 )
             if retry_response.status_code == 402:
-                raise build_payment_rejected_error(retry_response)
+                raise _refused_after_paid_5xx(retry_response, first_5xx)
             if not retry_response.is_success:
                 try:
                     error_body = retry_response.json()
@@ -5867,7 +6053,10 @@ class AsyncSolanaLLMClient:
             submit_resp = await self._client.post(
                 url, json=body, headers=payment_headers, timeout=eff_timeout
             )
-            if submit_resp.status_code in (502, 503):
+            # Re-send the SAME signature once; see _refused_after_paid_5xx.
+            first_5xx: httpx.Response | None = None
+            if submit_resp.status_code in (502, 503) and not _paid_5xx_reports_payment(submit_resp):
+                first_5xx = submit_resp
                 await asyncio.sleep(1)
                 submit_resp = await self._client.post(
                     url, json=body, headers=payment_headers, timeout=eff_timeout
@@ -5877,7 +6066,7 @@ class AsyncSolanaLLMClient:
                 # Account rail: a 402 is the account being out of credit, not a
                 # challenge to sign. Nothing here can sign, so say so plainly.
                 raise_for_api_key_402(submit_resp, self.api_key)
-                raise build_payment_rejected_error(submit_resp)
+                raise _refused_after_paid_5xx(submit_resp, first_5xx)
 
             if submit_resp.status_code == 200:
                 # Fast path — image produced inline.
@@ -6074,7 +6263,7 @@ class AsyncSolanaLLMClient:
             if payment_required is not None:
                 try:
                     poll_headers["PAYMENT-SIGNATURE"] = encode_payment_signature_header(
-                        await self._sign_payment(payment_required)
+                        await self._sign_payment(_without_quoted_blockhash(payment_required))
                     )
                     last_resign_at = _time.monotonic()
                 except Exception:
@@ -6116,7 +6305,9 @@ class AsyncSolanaLLMClient:
 
                 # Keep the settlement blockhash fresh (poll-based media path only,
                 # gated on max_resigns). Re-sign the ORIGINAL challenge — same
-                # amount/pay_to, only a freshly-fetched blockhash — so that whenever
+                # amount/pay_to, only a freshly-fetched blockhash (the challenge's quoted
+                # blockhash is dropped first: x402 >= 2.17 signs on a quote, and this
+                # one is as old as the challenge) — so that whenever
                 # upstream flips to "completed" the signature is
                 # <MEDIA_RESIGN_FRESH_SECONDS old and settlement can't hit a
                 # stale-blockhash transaction_simulation_failed. Only the completed
@@ -6129,7 +6320,9 @@ class AsyncSolanaLLMClient:
                     >= SolanaLLMClient.MEDIA_RESIGN_FRESH_SECONDS
                 ):
                     try:
-                        fresh_payload = await self._sign_payment(payment_required)
+                        fresh_payload = await self._sign_payment(
+                            _without_quoted_blockhash(payment_required)
+                        )
                         poll_headers["PAYMENT-SIGNATURE"] = encode_payment_signature_header(
                             fresh_payload
                         )

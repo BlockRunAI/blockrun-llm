@@ -4,6 +4,42 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+## 1.22.3 — 2026-11-14
+
+### Fixed
+- **A Solana paid call that answered 5xx is never paid for twice.**
+  sol.blockrun.ai settles in parallel with the upstream call, so a request can
+  be charged and still answer 502/503. The paid leg re-sends the same signed
+  payment once on a 5xx (one signature settles at most once, so that resend is
+  safe), and the gateway, still holding that payment's nonce, refuses the
+  resend with a bare `402 PAYMENT_REPLAY`. The whole-request retry read that
+  as a concurrent nonce collision and signed a new payment, which settled too:
+  two charges for one call. Reproduced against a fake gateway on every retry
+  loop (chat, streaming chat, raw POST, raw GET; sync and async). Now any 402
+  that refuses a resend after a 5xx raises without signing again, carries the
+  first attempt's status, gateway request id
+  (`x-blockrun-gateway-request-id`) and receipt under
+  `exc.response["prior_attempt"]`, and says the first attempt may have been
+  charged. A 5xx that itself reports the payment (`payment_status` other than
+  `not_charged`, a `tx_hash`, `CHARGED_UPSTREAM_FAILED`, or a receipt header)
+  is raised as is instead of resent, so its receipt reaches the caller. Kept:
+  the same-signature resend after a 5xx the gateway never charged, and the
+  re-sign after a `payment_status: "not_charged"` 5xx or a replay with no 5xx
+  before it.
+- **Media poll re-signs use a fresh blockhash again.** sol quotes
+  `recentBlockhash` on every 402, and since 1.22.1 (`x402>=2.17`) a signer
+  signs on a quote, so re-signing a video's submit challenge to keep the
+  payment fresh produced the same aging hash every time. Poll re-signs now drop
+  the quote first and sign on the latest blockhash; amount and recipient are
+  unchanged.
+- `AsyncSolanaLLMClient` streaming raised `TypeError` instead of the
+  gateway's `APIError` on every stream error (the sync class's static
+  `_raise_stream_error` was aliased unwrapped).
+- The old-`x402` warning now says `pip install -U 'blockrun-llm[solana]'`.
+  The previous `pip install -U 'x402[svm]>=2.17.0'` resolved x402 without this
+  package's `solana<0.40` pin and could leave an incompatible x402/solders/solana
+  mix.
+
 ## 1.22.2 — 2026-11-13
 
 ### Fixed
