@@ -235,3 +235,122 @@ def test_no_warning_on_a_current_x402(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger=solana_client_mod.logger.name):
         solana_client_mod._warn_if_x402_ignores_quoted_blockhash()
     assert not [r for r in caplog.records if "ignores the one the 402 quotes" in r.getMessage()]
+
+
+# --- Media poll re-signs never reuse the challenge's quote -------------------
+#
+# A video's payment polls keep the signature fresh by re-signing the submit
+# challenge every MEDIA_RESIGN_FRESH_SECONDS. sol quotes `recentBlockhash` on
+# every 402 (x402-solana.ts create402ResponseParts), and x402 >= 2.17 signs on
+# a quote, so re-signing the original challenge reproduced the same aging hash
+# every time: the "fresh" signature died with the submit's blockhash.
+
+
+def _video_job_handler(extra: dict[str, Any], poll_hashes: list[str], *, in_progress: int):
+    state = {"polls": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        header = request.headers.get("PAYMENT-SIGNATURE")
+        if request.method == "POST":
+            if header is None:
+                return _modal_402(extra)
+            return httpx.Response(
+                202,
+                json={
+                    "id": "JOB",
+                    "poll_url": "/api/v1/videos/generations/JOB",
+                    "status": "queued",
+                },
+            )
+        assert header is not None, "payment-signature polling expected"
+        poll_hashes.append(_signed_blockhash(json.loads(base64.b64decode(header))))
+        state["polls"] += 1
+        if state["polls"] <= in_progress:
+            return httpx.Response(202, json={"status": "in_progress"})
+        return httpx.Response(
+            200,
+            json={"status": "completed", "created": 1, "data": [{"url": "https://cdn/v.mp4"}]},
+        )
+
+    return handler
+
+
+_POLL_KW: dict[str, Any] = {
+    "poll_budget_seconds": 5.0,
+    "poll_interval_seconds": 0.001,
+    "max_resigns": 2,
+    "label": "Video generation",
+}
+
+
+def test_poll_resign_signs_on_a_fresh_blockhash_not_the_quote(harness, monkeypatch):
+    client, rpc, _payments, _state = harness
+    quoted = _new_hash()
+    extra = {"feePayer": FEE_PAYER, "recentBlockhash": quoted, "lastValidBlockHeight": "1"}
+    poll_hashes: list[str] = []
+    client._client = httpx.Client(
+        transport=httpx.MockTransport(_video_job_handler(extra, poll_hashes, in_progress=2))
+    )
+    client._poll_keypair = None  # a gateway without poll proofs: payment polls
+    monkeypatch.setattr(SolanaLLMClient, "MEDIA_RESIGN_FRESH_SECONDS", 0.0)
+
+    data = client._request_image_with_payment(
+        "/v1/videos/generations", {"model": "xai/grok-imagine-video", "prompt": "a cat"}, **_POLL_KW
+    )
+
+    assert data["data"][0]["url"] == "https://cdn/v.mp4"
+    assert len(poll_hashes) == 3
+    # Every poll carried a re-signed payment, none of it on the submit's quote.
+    assert quoted not in poll_hashes, poll_hashes
+    assert set(poll_hashes) == {rpc.blockhash}
+
+
+async def test_async_poll_resign_signs_on_a_fresh_blockhash_not_the_quote(monkeypatch, tmp_path):
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(cache_mod, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(cache_mod, "COST_LOG_PATH", tmp_path / "cost_log.jsonl")
+    rpc = _FakeRpc(_new_hash())
+    monkeypatch.setattr(ExactSvmScheme, "_get_client", lambda self, network: rpc)
+    monkeypatch.setattr(SolanaLLMClient, "MEDIA_RESIGN_FRESH_SECONDS", 0.0)
+    quoted = _new_hash()
+    extra = {"feePayer": FEE_PAYER, "recentBlockhash": quoted, "lastValidBlockHeight": "1"}
+    poll_hashes: list[str] = []
+
+    client = AsyncSolanaLLMClient(private_key=TEST_BS58_KEY)
+    client._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_video_job_handler(extra, poll_hashes, in_progress=2))
+    )
+    client._poll_keypair = None
+
+    await client._request_image_with_payment(
+        "/v1/videos/generations", {"model": "xai/grok-imagine-video", "prompt": "a cat"}, **_POLL_KW
+    )
+
+    assert len(poll_hashes) == 3
+    assert quoted not in poll_hashes, poll_hashes
+    assert set(poll_hashes) == {rpc.blockhash}
+
+
+def test_stripping_the_quote_keeps_the_payment_terms():
+    from x402.http.utils import decode_payment_required_header
+
+    response = _modal_402(
+        {
+            "feePayer": FEE_PAYER,
+            "recentBlockhash": _new_hash(),
+            "lastValidBlockHeight": "9",
+            "blockrunCreateProof": "p",
+        }
+    )
+    challenge = decode_payment_required_header(base64.b64encode(response.content).decode())
+    stripped = solana_client_mod._without_quoted_blockhash(challenge)
+    original, after = challenge.accepts[0], stripped.accepts[0]
+    assert after.extra == {"feePayer": FEE_PAYER}
+    assert (after.amount, after.pay_to, after.asset, after.network) == (
+        original.amount,
+        original.pay_to,
+        original.asset,
+        original.network,
+    )
+    # The original challenge is not mutated: the submit already signed on it.
+    assert "recentBlockhash" in original.extra
