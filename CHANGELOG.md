@@ -4,6 +4,36 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+### Docs
+- **README model tables re-synced with the live catalog** (`GET /v1/models`,
+  2026-11-15). Added `anthropic/claude-fable-5.2`, `google/gemini-4-carbon`,
+  `moonshot/kimi-k3.1-pro` (replaces `kimi-k3`, which is hidden but still
+  callable), `deepseek/deepseek-v4.1-flash`, `openai/gpt-6.1-sol`,
+  `qwen/qwen3.8-max`, `mistral/mistral-large-4`, `tencent/hy4-preview`,
+  `poolside/laguna-s-2.1` and the free `nvidia/minimax-m3.1-flash`. Removed the
+  retired `openai/gpt-4.1-nano` and `openai/dall-e-3`; added the image models
+  the catalog lists (`gpt-image-2.5-flare` / `-sunburst`, `nano-banana-2`,
+  `grok-imagine-image-2.0`, `seedream-5-pro`).
+- **Free tier:** the README names the free models worth pinning and says not
+  to pin `nvidia/llama-3.2-11b-vision`, `nvidia/nemotron-3-super-120b`,
+  `cohere/north-mini-code` or `nvidia/muse-glimmer-30b`, which the gateway now
+  serves with a different model. The `free` routing-profile row lists the
+  models `routing_profile="free"` actually routes across.
+- **Market data:** `PriceClient` docs no longer say Pyth or realtime. Crypto,
+  FX and commodity price, history and lists are free daily closes (Chainlink /
+  Backpack, `realtime: false`). Equity price and history answer 501 on both
+  gateways, which `PriceClient` raises as `APIError` with `status_code == 501`;
+  stock symbol lists still work.
+- **Surf:** the README section now says `/v1/surf/*` is retired (410) and
+  `SurfClient` is deprecated, and points to the replacements.
+- **Live Search:** the `search=True` example used `openai/gpt-5.2`, which the
+  gateway refuses with 400 `SEARCH_UNSUPPORTED`; it now uses `xai/grok-4.7`.
+- Dropped per-call prices the live 402 quotes no longer match (Live Search,
+  `SearchClient`, Predexon tiers, sound effects, the paid DeepSeek V4 Pro rate,
+  the FAQ's paid-model floor) and the unverifiable testnet prices; corrected
+  the Modal sandbox pricing to match the gateway. The FAQ no longer says the
+  SDK takes no API keys.
+
 ## 1.22.3 — 2026-11-14
 
 ### Fixed

@@ -1,6 +1,6 @@
 # BlockRun LLM SDK (Python)
 
-> **blockrun-llm** is a Python SDK for accessing <!-- br:models.chatVisible -->91<!-- /br:models.chatVisible --> large language models (GPT-6, GPT-5.x, Claude 5.x, Gemini 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, prediction-market data (Predexon), Exa neural web search, and Pyth-backed market data. Every call is paid per request — no subscription, no seats, no minimum. Built for AI agents that need to operate autonomously.
+> **blockrun-llm** is a Python SDK for accessing <!-- br:models.chatVisible -->91<!-- /br:models.chatVisible --> large language models (GPT-6, GPT-5.x, Claude 5.x, Gemini 4 / 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, prediction-market data (Predexon), Exa neural web search, and free crypto / FX / commodity price data (daily closes). Paid calls are billed per request — no subscription, no seats, no minimum. Built for AI agents that need to operate autonomously.
 >
 > **Two ways to pay, same SDK, same catalogue.** Sign up at
 > **[user.blockrun.ai](https://user.blockrun.ai)** for an API key and prepaid
@@ -8,7 +8,7 @@
 > request settle itself over x402 — on **Solana or Base**. Every client takes
 > either credential in the same first argument.
 >
-> 🆓 **Includes <!-- br:models.free -->9<!-- /br:models.free --> free models** — Nemotron 3.5 Lightning (1M context), Nemotron 3 Ultra 550B, Nemotron 3 Nano Omni, Llama 3.2 11B Vision, Cohere North Mini Code and Poolside Laguna XS 2.1. Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or call any of them directly.
+> 🆓 **Includes <!-- br:models.free -->9<!-- /br:models.free --> free models** — Nemotron 3.5 Lightning (1M context), Nemotron 3 Ultra 550B, MiniMax M3.1 Flash (1M context), Nemotron 3 Nano Omni, Nemotron 3.5 Bolt (vision) and Poolside Laguna XS 2.1. Zero USDC, no rate-limit gimmicks. Use `routing_profile="free"` or pin one of the models listed under [Try It Free](#try-it-free-no-balance-required).
 
 [![PyPI](https://img.shields.io/pypi/v/blockrun-llm.svg)](https://pypi.org/project/blockrun-llm/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -85,13 +85,16 @@ print(result.response)  # '4'
 |----------|---------|----------|
 | `nvidia/nemotron-3.5-lightning` | 1M | The free default — thinking-mode reasoning, longest free context |
 | `nvidia/nemotron-3-ultra-550b` | 1M | Largest free model (550B / 55B active MoE) — strongest, but slower |
+| `nvidia/minimax-m3.1-flash` | 1M | MiniMax M3.1 Flash — reasons before it answers, calls tools, usually answers in a few seconds |
 | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | 256K | Fast general chat + reasoning (30B-A3B) |
 | `nvidia/nemotron-3.5-bolt` | 131K | Free vision — verified on real image probes on Base and Solana |
 | `poolside/laguna-xs-2.1` | 131K | Coding, ~161 tok/s |
 
-> For free image input use `nemotron-3.5-bolt`. `nemotron-3-nano-omni` is catalogued as vision-capable but failed earlier image probes on Solana, so the router never sends it images. `nvidia/llama-3.2-11b-vision` and `cohere/north-mini-code` are no longer served as themselves: the gateway answers them with another model, so do not pin them.
+> For free image input use `nemotron-3.5-bolt`. `nemotron-3-nano-omni` is catalogued as vision-capable but failed earlier image probes on Solana, so the router never sends it images.
 
-> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro` ($0.435/$0.87 — the 75% launch promo became the permanent list price after 2026-05-31) — the free `nvidia/deepseek-v4-pro` is retired, and the gateway redirects calls to it to a free NVIDIA Nemotron model.
+> **Do not pin these free ids:** `nvidia/llama-3.2-11b-vision`, `nvidia/nemotron-3-super-120b`, `cohere/north-mini-code` and `nvidia/muse-glimmer-30b`. They still answer 200, but since 2026-11 the gateway serves them with a different model, so a pinned call does not get the model it names.
+
+> Need V4-Pro-class reasoning? Use the paid `deepseek/deepseek-v4-pro`. The free `nvidia/deepseek-v4-pro` is retired and no longer in the catalog; calls to it are redirected to a free NVIDIA Nemotron model.
 
 > **Retired**: NVIDIA has EOL'd most of its early free lineup — the free DeepSeek family (last: `nvidia/deepseek-v4-flash`, 2026-08-12), `step-3.7-flash`, `mistral-nemotron`, `nemotron-nano-9b-v2` / `-12b-v2-vl` (2026-08-30), `gpt-oss-120b/20b` (2026-09-03), `nemotron-3-nano-30b` (2026-09-08), `llama-4-maverick`, the qwen3 SKUs, free Mistral small/large, and more. The gateway auto-redirects pinned callers to a live model, so old model IDs still return 200 — from a different model.
 
@@ -263,7 +266,7 @@ print(decision.reasoning)   # human-readable explanation of the pick
 
 | Profile | Description | Best For |
 |---------|-------------|----------|
-| `free` | Free tier — smart-routes across the $0 models (Nemotron 3 Nano Omni, Nemotron 3.5 Lightning, Llama 3.2 11B Vision, Cohere North Mini Code, Poolside Laguna XS 2.1). Nemotron 3 Ultra 550B is free too, by direct call. | Zero-cost testing, dev, prod |
+| `free` | Free tier — smart-routes across the $0 models (Nemotron 3 Nano Omni, Nemotron 3.5 Lightning, Nemotron 3.5 Bolt, Nemotron 3 Ultra 550B, Poolside Laguna XS 2.1). MiniMax M3.1 Flash is free too, by direct call. | Zero-cost testing, dev, prod |
 | `eco` | Cheapest capable model per tier | Cost-sensitive production |
 | `auto` | Best balance of cost/quality (default) | General use |
 | `premium` | Top-tier models (Anthropic, OpenAI, Moonshot) | Quality-critical tasks |
@@ -525,12 +528,13 @@ and `client.list_image_models()` return exactly what the gateway is charging.
 ### OpenAI GPT-6 Family
 
 The GPT-6 generation: Astra is the flagship for long-horizon agentic work and
-computer use, Sol the cost-efficient tier for complex coding, Luna the fast
-low-cost tier.
+computer use, Sol the cost-efficient tier for complex coding (`gpt-6.1-sol` is the
+refreshed Sol), Luna the fast low-cost tier.
 
 | Model | Context |
 |---|---|
 | `openai/gpt-6-astra` | 1.05M |
+| `openai/gpt-6.1-sol` | 1.05M |
 | `openai/gpt-6-sol` | 1.05M |
 | `openai/gpt-6-luna` | 1.05M |
 
@@ -572,7 +576,6 @@ longer at the same token price.
 |---|---|
 | `openai/gpt-4.1` | 128K |
 | `openai/gpt-4.1-mini` | 128K |
-| `openai/gpt-4.1-nano` | 128K |
 | `openai/gpt-4o` | 128K |
 | `openai/gpt-4o-mini` | 128K |
 
@@ -589,7 +592,8 @@ longer at the same token price.
 
 | Model | Context | Notes |
 |---|---|---|
-| `anthropic/claude-fable-5.1` | 1M | Most capable — successor to Fable 5 at the same tier and price |
+| `anthropic/claude-fable-5.2` | 1M | Most capable — successor to Fable 5.1 at a lower price |
+| `anthropic/claude-fable-5.1` | 1M | Successor to Fable 5 at the same tier and price |
 | `anthropic/claude-fable-5` | 1M | Mythos-class flagship above Opus — always-on thinking, 128K output |
 | `anthropic/claude-opus-5.5` | 1M | Newest Opus — Opus-class reasoning at a lower price than Opus 5 |
 | `anthropic/claude-opus-5` | 1M | Flagship — the baseline the routing savings claim is measured against |
@@ -606,6 +610,7 @@ longer at the same token price.
 
 | Model | Context |
 |---|---|
+| `google/gemini-4-carbon` | 1M |
 | `google/gemini-4-argon` | 1M |
 | `google/gemini-3.1-pro` | 1M |
 | `google/gemini-3.8-flash` | 1M |
@@ -622,11 +627,13 @@ longer at the same token price.
 
 DeepSeek upstream serves the legacy `deepseek-chat` / `deepseek-reasoner`
 aliases as V4 Flash non-thinking / thinking modes. V4 Pro is the flagship
-paid SKU; the vision SKU is an experimental preview.
+paid SKU; V4.1 Flash is the newer Flash in non-thinking mode; the vision SKU
+is an experimental preview.
 
 | Model | Context | Notes |
 |---|---|---|
 | `deepseek/deepseek-v4-pro` | 1M | V4 flagship — strongest open-weight reasoner |
+| `deepseek/deepseek-v4.1-flash` | 1M | V4.1 Flash, non-thinking mode |
 | `deepseek/deepseek-v4-flash-vision-exp` | 1M | Experimental vision preview |
 | `deepseek/deepseek-chat` | 1M | V4 Flash non-thinking |
 | `deepseek/deepseek-reasoner` | 1M | V4 Flash thinking (same upstream, thinking on by default) |
@@ -650,7 +657,7 @@ only ranks what `/v1/models` lists.
 
 | Model | Context | Notes |
 |---|---|---|
-| `moonshot/kimi-k3` | 1M | Replaces the retired `kimi-k2.5` / `k2.6` SKUs |
+| `moonshot/kimi-k3.1-pro` | 1M | Moonshot flagship — successor to Kimi K3; image + text input, returns `reasoning_content`. `kimi-k3` is hidden from the catalog but still callable by id |
 | `minimax/minimax-m3` | 1M |  |
 | `minimax/minimax-m2.7` | 200K |  |
 | `zai/glm-5.3` | 1M |  |
@@ -659,6 +666,7 @@ only ranks what `/v1/models` lists.
 | `zai/glm-5.1` | 200K |  |
 | `zai/glm-5` | 200K |  |
 | `zai/glm-5-turbo` | 200K |  |
+| `qwen/qwen3.8-max` | 1M | Current Qwen flagship |
 | `qwen/qwen3.7-max` | 1M |  |
 | `qwen/qwen3.7-plus` | 1M |  |
 | `qwen/qwen3.8-flash` | 1M |  |
@@ -670,6 +678,14 @@ only ranks what `/v1/models` lists.
 |---|---|
 | `xiaomi/mimo-v2.5` | 1M |
 | `xiaomi/mimo-v2.5-pro` | 1M |
+
+### Mistral, Tencent, Poolside
+
+| Model | Context | Notes |
+|---|---|---|
+| `mistral/mistral-large-4` | 512K | Mistral flagship — reasoning, coding, image input |
+| `tencent/hy4-preview` | 1M | Hy4 — 770B open-weight MoE (Apache 2.0) |
+| `poolside/laguna-s-2.1` | 1M | 118B open-weight coding model |
 
 ### Free Tier
 
@@ -712,13 +728,17 @@ automatically.
 
 | Model | Notes |
 | ------- | --- |
-| `openai/dall-e-3` |  |
 | `openai/gpt-image-1` |  |
 | `openai/gpt-image-2` | reasoning-driven, multilingual text rendering, character consistency |
+| `openai/gpt-image-2.5-flare` |  |
+| `openai/gpt-image-2.5-sunburst` |  |
 | `google/nano-banana` |  |
+| `google/nano-banana-2` |  |
 | `google/nano-banana-pro` |  |
 | `xai/grok-imagine-image` |  |
+| `xai/grok-imagine-image-2.0` |  |
 | `xai/grok-imagine-image-pro` |  |
+| `bytedance/seedream-5-pro` |  |
 | `zai/cogview-4` |  |
 
 Image editing (`client.edit` / `client.image_edit`) hits the `/v1/images/image2image` endpoint and supports `openai/gpt-image-1`, `openai/gpt-image-2`, `google/nano-banana`, and `google/nano-banana-pro`. Pass a list of source images to fuse multiple inputs (openai/* up to 4, google/* up to 3).
@@ -840,7 +860,7 @@ result = client.generate(
     speed=1.1,
 )
 
-# Sound effects (flat $0.05/generation)
+# Sound effects (flat price per generation)
 result = client.sound_effect("rain on a tin roof, distant thunder")
 
 # List voices (free, rate-limited)
@@ -1015,39 +1035,26 @@ client.renew_number(bought["phone_number"])     # $5.00, +30 days
 client.release_number(bought["phone_number"])   # free
 ```
 
-## Surf — Crypto Intelligence (`SurfClient`)
+## Surf (`SurfClient`) — retired
 
-`SurfClient` wraps `/v1/surf/*` — the asksurf.ai partner gateway, ~83 crypto
-endpoints across exchanges, on-chain SQL, prediction markets (Polymarket +
-Kalshi), wallets, social analytics, and project intelligence. Tiered pricing:
-$0.001 / $0.005 / $0.020 per call (tier 1 / 2 / 3).
+**Deprecated.** The gateway retired `/v1/surf/*` on 2026-09-06: every Surf
+endpoint answers `410 endpoint_retired` on both blockrun.ai and sol.blockrun.ai,
+before any payment is asked for. `SurfClient` is still importable, but
+constructing it emits a `DeprecationWarning`, and every call that reaches the
+gateway fails with that 410 as an `APIError`. It will be removed in a future release.
 
-```python
-from blockrun_llm import SurfClient
+Use these instead:
 
-client = SurfClient()
-
-# Discovery
-print(SurfClient.endpoints())                       # full catalog
-print(client.price("market/ranking"))               # 0.001
-print(client.endpoint_info("onchain/sql"))          # {'method': 'POST', 'tier': 3, ...}
-
-# GET — pass query params (validated against the catalog)
-btc_price = client.get("exchange/price", {"pair": "BTC/USDT"})
-holders   = client.get("token/holders", {"address": "0x...", "chain": "ethereum"})
-
-# POST — JSON body
-rows = client.post("onchain/sql", {"query": "SELECT count() FROM ethereum.blocks"})
-
-# Generic helper — auto-routes GET vs POST from the catalog
-result = client.call("token/holders", params={"address": "0x...", "chain": "ethereum"})
-```
+- Prices: [`PriceClient`](#market-data-priceclient) (crypto, FX, commodities).
+- Prediction markets: [`client.pm_*`](#prediction-markets-powered-by-predexon-v2).
+- Protocol TVL and yields: [`client.defi_*`](#defi-data-powered-by-defillama).
+- DEX quotes and swaps: [`client.dex_*`](#dex-swaps-powered-by-0x).
 
 ## Standalone Search (`SearchClient`)
 
 `SearchClient` wraps `POST /v1/search` — standalone Grok Live Search with
-automatic x402 payment. Pricing: `$0.025/source + margin`
-(10 sources ≈ `$0.26`).
+automatic x402 payment. The exact price is in each call's 402 quote before
+you pay.
 
 ```python
 from blockrun_llm import SearchClient
@@ -1065,34 +1072,47 @@ for url in result.citations or []:
 
 ## Market Data (`PriceClient`)
 
-Pyth-backed realtime quotes and OHLC history across crypto, FX, commodities
-and 12 global equity markets. Crypto / FX / commodity are **fully free**
-across price, history and list; stocks (`stocks/{market}` and the `usstock`
-legacy alias) charge `$0.001` per price or history call. Pass
-`require_wallet=False` when you only need free endpoints.
+Crypto, FX and commodity prices, OHLC history and symbol lists — all **free**,
+no payment and no wallet needed. Prices are **daily closes, not realtime**:
+responses carry `realtime: false` (`delayed: true` on sol.blockrun.ai) and name
+their `source` (Chainlink or Backpack). Pass `require_wallet=False` so the
+client does not insist on a wallet it never uses.
 
 ```python
+import time
 from blockrun_llm import PriceClient
 
-# Free usage — no wallet
 p = PriceClient(require_wallet=False)
-btc = p.price("crypto", "BTC-USD")
-eur = p.price("fx", "EUR-USD")
-symbols = p.list_symbols("crypto", q="sol", limit=20)
 
-# Paid — requires a wallet
-p2 = PriceClient()
-aapl = p2.price("stocks", "AAPL", market="us")
-bars = p2.history(
-    "stocks", "AAPL",
-    market="us",
-    resolution="D",
-    from_ts=1_700_000_000,
-    to_ts=1_710_000_000,
-)
+btc = p.price("crypto", "BTC-USD")
+print(btc.price, btc.source, btc.realtime)   # e.g. 64712.9 backpack False
+eur = p.price("fx", "EUR-USD")
+gold = p.price("commodity", "XAU-USD")
+
+now = int(time.time())
+bars = p.history("crypto", "BTC-USD", resolution="D",
+                 from_ts=now - 30 * 86400, to_ts=now)
+symbols = p.list_symbols("crypto", q="sol", limit=20)
 ```
 
-Supported stock markets: `us, hk, jp, kr, gb, de, fr, nl, ie, lu, cn, ca`.
+**Equities are not served.** `stocks/{market}` and the `usstock` alias still
+list symbols (`p.list_symbols("stocks", market="us")` answers normally; markets
+`us, hk, jp, kr, gb, de, fr, nl, ie, lu, cn, ca`), but price and history answer
+HTTP **501** ("We do not currently serve equity
+prices") on both blockrun.ai and sol.blockrun.ai, without a payment request.
+`PriceClient` raises that as an `APIError` with `status_code == 501` and the
+gateway's error title as the message (e.g.
+`API error: 501: US Stock price is not available`):
+
+```python
+from blockrun_llm import APIError
+
+try:
+    p.price("stocks", "AAPL", market="us")
+except APIError as e:
+    if e.status_code == 501:
+        ...  # equity prices are not available from the gateway
+```
 
 ## Multi-chain RPC (`RpcClient`)
 
@@ -1183,7 +1203,10 @@ client.dex_gasless_chains()   # supported gasless chains
 ## Cloud Compute (Powered by Modal)
 
 Pay-per-call sandboxed compute — create a sandbox, run commands, tear it
-down. $0.01/create (CPU; $0.05 with GPU), $0.001 per exec/status/terminate.
+down. A small sandbox (up to 300 s, 1 CPU, 1024 MB) is a flat $0.01 to create
+on CPU, $0.05-$0.40 with a GPU; a longer-lived sandbox is billed hourly for
+its requested lifetime, upfront. Exec / status / terminate are $0.001 each.
+The 402 quote is the exact price.
 
 ```python
 sb = client.modal_sandbox_create(image="python:3.11")
@@ -1207,7 +1230,7 @@ print(link["url"])  # https://pay.coinbase.com/... — open to buy USDC on Base
 
 ## Prediction Markets (Powered by Predexon v2)
 
-Access real-time prediction market data from Polymarket, Kalshi, Limitless, sports, and Binance Futures via [Predexon](https://predexon.com). No API keys needed — pay-per-request via x402. Tier 1 endpoints are $0.001/call, Tier 2 (wallet identity / clustering) are $0.005/call.
+Access real-time prediction market data from Polymarket, Kalshi, Limitless, sports, and Binance Futures via [Predexon](https://predexon.com). No Predexon account needed — pay per request with an API key or x402. Each call's exact price is in its 402 quote before you pay; live rates are at [blockrun.ai/pricing](https://blockrun.ai/pricing).
 
 Each method below is available on `LLMClient` (Base), `AsyncLLMClient`, and `SolanaLLMClient`.
 
@@ -1261,7 +1284,7 @@ cluster = client.pm_wallet_cluster("0xABC123...")
 ### Generic passthrough
 
 For endpoints without a typed helper, drop down to `pm()` (GET) or `pm_query()`
-(POST). Same pricing tiers, same return shape:
+(POST). Same pricing, same return shape:
 
 ```python
 candles = client.pm("polymarket/candlesticks/0x1234abcd...")  # OHLCV
@@ -1423,17 +1446,19 @@ from blockrun_llm import LLMClient
 
 client = LLMClient()
 
-# Simple: Enable live search with search=True (default 10 sources, ~$0.26)
+# Live Search runs on xai/* models only; any other model answers
+# 400 SEARCH_UNSUPPORTED.
+# Simple: enable live search with search=True
 response = client.chat(
-    "openai/gpt-5.2",
+    "xai/grok-4.7",
     "What are the latest posts from @blockrunai?",
     search=True
 )
 print(response)
 
-# Custom: Limit sources to reduce cost (5 sources, ~$0.13)
+# Custom: full search_parameters (the 402 quote states the price before you pay)
 response = client.chat(
-    "openai/gpt-5.2",
+    "xai/grok-4.7",
     "What's trending on X?",
     search_parameters={"mode": "on", "max_search_results": 5}
 )
@@ -1537,8 +1562,8 @@ print(f"Testnet USDC: ${balance:.4f}")
 
 ### Available Testnet Models
 
-- `openai/gpt-oss-20b` - $0.001/request (flat price)
-- `openai/gpt-oss-120b` - $0.002/request (flat price)
+- `openai/gpt-oss-20b` (flat price per request)
+- `openai/gpt-oss-120b` (flat price per request)
 
 ### Manual Testnet Configuration
 
@@ -1984,7 +2009,7 @@ The `AnthropicClient` wraps `anthropic.Anthropic` with a custom httpx transport 
 ## Frequently Asked Questions
 
 ### What is blockrun-llm?
-blockrun-llm is a Python SDK that provides pay-per-request access to <!-- br:models.chatVisible -->91<!-- /br:models.chatVisible --> large language models from OpenAI, Anthropic, Google, DeepSeek, NVIDIA, ZAI, and more. It uses the x402 protocol for automatic USDC micropayments — no API keys, no subscriptions, no vendor lock-in.
+blockrun-llm is a Python SDK that provides pay-per-request access to <!-- br:models.chatVisible -->91<!-- /br:models.chatVisible --> large language models from OpenAI, Anthropic, Google, DeepSeek, NVIDIA, ZAI, and more. Pay with a BlockRun API key (prepaid credit from [user.blockrun.ai](https://user.blockrun.ai)) or with automatic x402 USDC micropayments from your own wallet — no subscriptions, no vendor lock-in.
 
 ### How does payment work?
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
@@ -1993,7 +2018,7 @@ When you make an API call, the SDK automatically handles x402 payment. It signs 
 Router Core is BlockRun's built-in routing engine — shared with the TypeScript SDK and the gateway, so the same request routes the same way everywhere. It scores your request across <!-- br:clawrouter.dimensions -->15<!-- /br:clawrouter.dimensions --> dimensions, drops every model that can't actually handle it (context, output length, tools, vision), then picks the cheapest capable one and keeps the rest as a fallback chain. Routing happens locally in under 1ms and makes no extra model call. It can save up to <!-- br:savings.autoVsBaselinePct -->84<!-- /br:savings.autoVsBaselinePct -->% on LLM costs compared to using premium models for every request.
 
 ### How much does it cost?
-Pay only for what you use. Prices start at **FREE** (<!-- br:models.free -->9<!-- /br:models.free --> free models). Paid models start at $0.10/M tokens. There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
+Pay only for what you use. Prices start at **FREE** (<!-- br:models.free -->9<!-- /br:models.free --> free models). Live per-model prices are at [blockrun.ai/pricing](https://blockrun.ai/pricing). There are no minimums, subscriptions, or monthly fees. $5 in USDC gets you thousands of requests.
 
 ### Can I use it with Solana?
 Yes. Install with `pip install blockrun-llm[solana]` and use `SolanaLLMClient` instead of `LLMClient`. Same API, different payment chain.
