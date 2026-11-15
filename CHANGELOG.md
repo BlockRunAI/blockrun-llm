@@ -4,6 +4,31 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+### Added
+- **`decisions()`: typed judgments** on `LLMClient`, `AsyncLLMClient`,
+  `SolanaLLMClient` and `AsyncSolanaLLMClient` (`POST /v1/decisions`, OpenAI
+  Decisions-compatible, `gpt-6-luna`): `predicate` / `choice` / `score`
+  questions get one typed answer each (`DecisionsResponse`). Works with an API
+  key and with x402 on Base, Arc and Solana; only input tokens are billed
+  (live: $0.001045 on Solana for two questions). A malformed request raises
+  `ValueError` before anything is sent. Never served from the local cache.
+
+### Fixed
+- **Search on a non-xAI model is refused before sending.** `search=True`,
+  `search_parameters` (other than `mode: "off"`) or an `x_search` /
+  `web_search` tool on a non-`xai/*` model (or fallback) raised a paid-path
+  400 `SEARCH_UNSUPPORTED` from the gateway; it now raises `ValueError` with
+  nothing sent. The `chat()` / `chat_completion()` docstring examples used
+  `openai/gpt-5.2` with `search=True` and now use `xai/grok-4.7`.
+- **`smart_chat_completion(..., search=True)` stays on `xai/*`.** The routed
+  chain is narrowed to its `xai/*` candidates; when it has none, it falls back
+  to the catalog's search-capable xAI models, cheapest first (`premium`: most
+  capable first), as the TypeScript SDK does. `routing_profile="free"` with
+  search raises `ValueError` (no free model serves search).
+- `SurfClient`'s deprecation warning pointed at `LLMClient.price`, which does
+  not exist; it now names `PriceClient`, `LLMClient.pm` and
+  `LLMClient.defi` / `LLMClient.dex`.
+
 ### Docs
 - **README model tables re-synced with the live catalog** (`GET /v1/models`,
   2026-11-15). Added `anthropic/claude-fable-5.2`, `google/gemini-4-carbon`,

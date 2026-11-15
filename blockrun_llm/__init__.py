@@ -80,6 +80,7 @@ from .client import (
     list_models,
     testnet_client,
 )
+from .decisions import DECISIONS_DEFAULT_MODEL
 from .image import ImageClient
 from .music import MusicClient
 from .phone import PhoneClient
@@ -120,6 +121,7 @@ from .types import (
     ChatCompletionChunk,
     ChatMessage,
     ChatResponse,
+    DecisionsResponse,
     ImageData,
     ImageModel,
     ImageResponse,
@@ -200,6 +202,7 @@ from .wallet import (
 
 __version__ = "1.22.3"
 __all__ = [
+    "DECISIONS_DEFAULT_MODEL",
     "DEFAULT_API_KEY_URL",
     "ENV_API_KEY",
     "ENV_API_KEY_URL",
@@ -225,6 +228,7 @@ __all__ = [
     "ChatCompletionChunk",
     "ChatMessage",
     "ChatResponse",
+    "DecisionsResponse",
     "ImageClient",
     "ImageData",
     "ImageModel",

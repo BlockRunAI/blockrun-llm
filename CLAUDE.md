@@ -1,6 +1,6 @@
 # BlockRun LLM SDK (Python)
 
-Python SDK for <!-- br:models.chatVisible -->91<!-- /br:models.chatVisible --> LLMs plus image/video/music/speech generation, standalone search, multi-chain RPC, and Pyth-backed market data — paid two ways: a BlockRun API key drawing on prepaid account credit, or USDC micropayments via x402 where the wallet signature is the authentication and the key never leaves your machine.
+Python SDK for <!-- br:models.chatVisible -->91<!-- /br:models.chatVisible --> LLMs plus image/video/music/speech generation, standalone search, multi-chain RPC, free market data (crypto / FX / commodity daily closes), and typed judgments (`decisions()`) — paid two ways: a BlockRun API key drawing on prepaid account credit, or USDC micropayments via x402 where the wallet signature is the authentication and the key never leaves your machine.
 
 ## Commands
 
@@ -25,7 +25,7 @@ blockrun_llm/
 ├── x402.py                  # x402 payment protocol
 ├── poll_auth.py             # Solana media-poll ownership proofs (x-poll-* headers)
 ├── router_core/             # Port of @blockrun/router-core (shared with the TS SDK + gateway)
-├── router_adapter.py        # Host glue: catalog ids, payment floors, free profile
+├── router_adapter.py        # Host glue: catalog ids, payment floors, free profile, xai/*-only search routing
 ├── router.py                # Back-compat shim over router_core
 ├── types.py                 # Type definitions
 ├── validation.py            # Input validation
@@ -37,7 +37,8 @@ blockrun_llm/
 ├── portrait.py              # Virtual Portrait enrollment (AI characters)
 ├── realface.py              # RealFace enrollment (real-person likeness)
 ├── search.py                # Standalone Grok Live Search
-├── price.py                 # Pyth market data (crypto/fx/commodity/stocks)
+├── decisions.py             # decisions() body check — typed judgments (POST /v1/decisions)
+├── price.py                 # Market data: crypto/fx/commodity daily closes (free); stock lists (price/history 501)
 ├── rpc.py                   # Multi-chain JSON-RPC (Tatum gateway, 40+ chains)
 └── anthropic_client.py      # Anthropic-compatible client
 ```

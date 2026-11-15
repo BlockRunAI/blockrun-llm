@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 # Tool calling types (OpenAI compatible)
@@ -958,9 +958,27 @@ class SearchResult(BaseModel):
     model: Optional[str] = None
 
 
-# Pyth-backed market data types (crypto, stocks, fx, commodity)
+class DecisionsResponse(BaseModel):
+    """Response from ``POST /v1/decisions`` (OpenAI Decisions-compatible).
+
+    ``answers`` holds one typed answer per question, in the order asked:
+    ``{"type": "predicate", "name", "probability"}``,
+    ``{"type": "choice", "name", "choice", "probabilities": [{"value", "probability"}], "confidence"}``
+    or ``{"type": "score", "name", "score", "probabilities": [{"value", "label", "probability"}],
+    "confidence"}``. Only input tokens are billed (``usage.output_tokens`` is 0).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    model: str
+    answers: List[Dict[str, Any]]
+    usage: Optional[Dict[str, Any]] = None
+    id: Optional[str] = None
+
+
+# Market data types (crypto, fx, commodity daily closes; stock symbol lists)
 class PricePoint(BaseModel):
-    """A single latest price quote from the Pyth network."""
+    """A single latest price quote (a daily close, not realtime)."""
 
     symbol: str
     price: float

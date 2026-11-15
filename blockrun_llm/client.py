@@ -61,9 +61,12 @@ from .apikey import (
     resolve_api_key,
     wallet_only,
 )
+from .decisions import build_decisions_body
 from .router_adapter import (
     BASE_MINIMUM_PAYMENT_USD,
     build_model_pricing,
+    requests_search,
+    require_search_model,
     route_with_catalog,
     routing_profile_for_model,
     routing_text,
@@ -81,6 +84,7 @@ from .types import (
     APIError,
     ChatCompletionChunk,
     ChatResponse,
+    DecisionsResponse,
     ImageResponse,
     PaymentError,
     RetiredEndpointError,
@@ -1117,6 +1121,7 @@ class LLMClient:
             tool_choice=tool_choice,
             conversation_chars=view["conversation_chars"],
             has_vision=view["has_vision"],
+            search=requests_search(search, search_parameters, tools),
             minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
         )
         response = self.chat_completion(
@@ -1217,7 +1222,7 @@ class LLMClient:
 
             # With xAI Live Search (for real-time X/Twitter data)
             response = client.chat(
-                "openai/gpt-5.2",
+                "xai/grok-4.7",
                 "What are the latest posts from @blockrunai?",
                 search=True  # Enable live search
             )
@@ -1303,7 +1308,7 @@ class LLMClient:
 
             # With xAI Live Search
             result = client.chat_completion(
-                "openai/gpt-5.2",
+                "xai/grok-4.7",
                 [{"role": "user", "content": "Latest news about AI?"}],
                 search=True
             )
@@ -1372,6 +1377,7 @@ class LLMClient:
             body["top_p"] = top_p
 
         # Handle xAI Live Search parameters
+        require_search_model([model, *(fallback_models or [])], search, search_parameters, tools)
         if search_parameters is not None:
             body["search_parameters"] = search_parameters
         elif search is True:
@@ -1497,6 +1503,7 @@ class LLMClient:
             body["tools"] = tools
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
+        require_search_model([model, *(fallback_models or [])], search, search_parameters, tools)
         if search_parameters is not None:
             body["search_parameters"] = search_parameters
         elif search is True:
@@ -2432,6 +2439,46 @@ class LLMClient:
         data = self._request_with_payment_raw("/v1/search", body)
         return SearchResult(**data)
 
+    def decisions(
+        self,
+        input: str | list[dict[str, Any]],
+        questions: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> DecisionsResponse:
+        """
+        Typed judgments (OpenAI Decisions-compatible, ``gpt-6-luna``): one typed
+        answer per question instead of text.
+
+        Each question has a fixed answer space: ``predicate`` (probability that
+        it holds), ``choice`` (one of your ``choices[].value``, with per-value
+        probabilities) or ``score`` (position on ``levels``, lowest first).
+        Only input tokens are billed. With a wallet the 402 quotes an
+        upper-bound estimate of them plus the $0.001 fee, and that quote
+        settles; with an API key the account pays the reported tokens. A request
+        over the gateway's limits is refused with a 400 before payment. A
+        ``choice`` always picks one of your values: give it a ``none`` value.
+
+        Raises:
+            ValueError: on a malformed request, before anything is sent.
+
+        Example:
+            result = client.decisions(
+                "My card was charged twice for one order.",
+                [
+                    {"type": "predicate", "name": "urgent",
+                     "instructions": "Does this need a reply today?"},
+                    {"type": "choice", "name": "team", "instructions": "Which team owns this?",
+                     "choices": [{"value": "billing"}, {"value": "shipping"}, {"value": "none"}]},
+                ],
+            )
+            print(result.answers[0]["probability"], result.answers[1]["choice"])
+        """
+        body = build_decisions_body(input, questions, model=model, metadata=metadata)
+        data = self._request_with_payment_raw("/v1/decisions", body)
+        return DecisionsResponse(**data)
+
     # ── Exa Web Search (Powered by Exa) ─────────────────────────────────────
 
     def exa(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
@@ -3327,6 +3374,7 @@ class AsyncLLMClient:
             tool_choice=tool_choice,
             conversation_chars=view["conversation_chars"],
             has_vision=view["has_vision"],
+            search=requests_search(search, search_parameters, tools),
             minimum_payment_usd=BASE_MINIMUM_PAYMENT_USD,
         )
         response = await self.chat_completion(
@@ -3449,6 +3497,7 @@ class AsyncLLMClient:
             body["top_p"] = top_p
 
         # Handle xAI Live Search parameters
+        require_search_model([model, *(fallback_models or [])], search, search_parameters, tools)
         if search_parameters is not None:
             body["search_parameters"] = search_parameters
         elif search is True:
@@ -3538,6 +3587,7 @@ class AsyncLLMClient:
             body["tools"] = tools
         if tool_choice is not None:
             body["tool_choice"] = tool_choice
+        require_search_model([model, *(fallback_models or [])], search, search_parameters, tools)
         if search_parameters is not None:
             body["search_parameters"] = search_parameters
         elif search is True:
@@ -4341,6 +4391,46 @@ class AsyncLLMClient:
 
         data = await self._request_with_payment_raw("/v1/search", body)
         return SearchResult(**data)
+
+    async def decisions(
+        self,
+        input: str | list[dict[str, Any]],
+        questions: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> DecisionsResponse:
+        """
+        Typed judgments (OpenAI Decisions-compatible, ``gpt-6-luna``): one typed
+        answer per question instead of text.
+
+        Each question has a fixed answer space: ``predicate`` (probability that
+        it holds), ``choice`` (one of your ``choices[].value``, with per-value
+        probabilities) or ``score`` (position on ``levels``, lowest first).
+        Only input tokens are billed. With a wallet the 402 quotes an
+        upper-bound estimate of them plus the $0.001 fee, and that quote
+        settles; with an API key the account pays the reported tokens. A request
+        over the gateway's limits is refused with a 400 before payment. A
+        ``choice`` always picks one of your values: give it a ``none`` value.
+
+        Raises:
+            ValueError: on a malformed request, before anything is sent.
+
+        Example:
+            result = await client.decisions(
+                "My card was charged twice for one order.",
+                [
+                    {"type": "predicate", "name": "urgent",
+                     "instructions": "Does this need a reply today?"},
+                    {"type": "choice", "name": "team", "instructions": "Which team owns this?",
+                     "choices": [{"value": "billing"}, {"value": "shipping"}, {"value": "none"}]},
+                ],
+            )
+            print(result.answers[0]["probability"], result.answers[1]["choice"])
+        """
+        body = build_decisions_body(input, questions, model=model, metadata=metadata)
+        data = await self._request_with_payment_raw("/v1/decisions", body)
+        return DecisionsResponse(**data)
 
     # ── Prediction Markets (Powered by Predexon) ────────────────────────────
 
