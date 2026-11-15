@@ -14,6 +14,7 @@ deliberately product-neutral, so everything BlockRun-specific lives here:
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -141,6 +142,82 @@ FREE_TIERS: dict[str, TierConfig] = {
 }
 
 
+class ModelPricingMap(dict):  # type: ignore[type-arg]
+    """The router's pricing map, plus the catalog's search-capable models.
+
+    ``search_models`` lists the available ``xai/*`` chat models the catalog
+    tags ``search`` (every available ``xai/*`` chat model when none is
+    tagged). The gateway serves search on ``xai/*`` ids only.
+    """
+
+    search_models: list[str]
+
+
+def requests_search(
+    search: bool | None = None,
+    search_parameters: Mapping[str, Any] | None = None,
+    tools: Sequence[Mapping[str, Any]] | None = None,
+) -> bool:
+    """Whether a call asks for xAI search.
+
+    An ``x_search`` / ``web_search`` tool, or ``search_parameters`` whose
+    ``mode`` is not ``"off"``, or the ``search=True`` shortcut when no
+    ``search_parameters`` are given (the precedence the request body follows).
+    The gateway serves search on ``xai/*`` models only and answers any other
+    model with a non-transient 400 ``SEARCH_UNSUPPORTED``.
+    """
+    if any(tool.get("type") in ("x_search", "web_search") for tool in tools or []):
+        return True
+    if search_parameters is not None:
+        return search_parameters.get("mode") != "off"
+    return search is True
+
+
+def require_search_model(
+    models: Sequence[str],
+    search: bool | None = None,
+    search_parameters: Mapping[str, Any] | None = None,
+    tools: Sequence[Mapping[str, Any]] | None = None,
+) -> None:
+    """Refuse, before anything is sent or paid, a search call on a non-xAI model."""
+    if not requests_search(search, search_parameters, tools):
+        return
+    wrong = [model for model in models if not model.startswith("xai/")]
+    if wrong:
+        raise ValueError(
+            "Search (search=True, search_parameters, or an x_search / web_search tool) runs on "
+            f"xai/* models only; the gateway refuses {', '.join(wrong)} with a 400. "
+            "Use an xai/* model (e.g. xai/grok-4.7), smart_chat_completion(..., search=True), "
+            "or drop the search options."
+        )
+
+
+def _search_fallback_chain(
+    model_pricing: Mapping[str, ModelPricing], routing_profile: str | None
+) -> list[str]:
+    """Search models when the route has none: cheapest first (premium: priciest first)."""
+    pool = getattr(model_pricing, "search_models", None)
+    if pool is None:
+        pool = [model_id for model_id in model_pricing if model_id.startswith("xai/")]
+    pool = [model_id for model_id in pool if model_id in model_pricing]
+
+    def price(model_id: str) -> float:
+        entry = model_pricing[model_id]
+        return entry["input_price"] + entry["output_price"]
+
+    # Ties go to the newer id (the larger one in version order).
+    by_id = sorted(pool, key=_version_key, reverse=True)
+    if routing_profile == "premium":
+        return sorted(by_id, key=price, reverse=True)
+    return sorted(by_id, key=price)
+
+
+def _version_key(model_id: str) -> list[Any]:
+    return [
+        (0, int(part)) if part.isdigit() else (1, part) for part in re.split(r"(\d+)", model_id)
+    ]
+
+
 def build_model_pricing(models: list[dict[str, Any]]) -> dict[str, ModelPricing]:
     """Build the router's pricing map from a ``/v1/models`` payload.
 
@@ -153,7 +230,7 @@ def build_model_pricing(models: list[dict[str, Any]]) -> dict[str, ModelPricing]
     older snapshots used top-level ``inputPrice`` / ``outputPrice``. Both are
     accepted so the SDK keeps working through backend transitions.
     """
-    pricing: dict[str, ModelPricing] = {}
+    pricing = ModelPricingMap()
     for model in models:
         if model.get("available") is False:
             continue
@@ -169,6 +246,15 @@ def build_model_pricing(models: list[dict[str, Any]]) -> dict[str, ModelPricing]
             "output_price": float(output_price or 0),
             "flat_price": float(flat_price or 0),
         }
+    xai_chat = [
+        model
+        for model in models
+        if str(model.get("id", "")).startswith("xai/")
+        and model["id"] in pricing
+        and "chat" in (model.get("categories") or [])
+    ]
+    tagged = [model for model in xai_chat if "search" in (model.get("categories") or [])]
+    pricing.search_models = [model["id"] for model in (tagged or xai_chat)]
     return pricing
 
 
@@ -278,13 +364,16 @@ def route_with_catalog(
     minimum_payment_usd: float = SOLANA_MINIMUM_PAYMENT_USD,
     conversation_chars: int | None = None,
     has_vision: bool = False,
+    search: bool = False,
     config: RoutingConfig | None = None,
     now: Any = None,
 ) -> ResolvedRoutingDecision:
     """Route a request and resolve the ranking against the live catalog.
 
     ``routing_profile`` accepts Router Core's ``"eco" | "auto" | "premium"``
-    plus the SDK-only ``"free"``.
+    plus the SDK-only ``"free"``. ``search`` (see :func:`requests_search`)
+    keeps only ``xai/*`` candidates, the only models the gateway serves search
+    on.
     """
     tool_list = list(tools or [])
     if tool_choice == "none":
@@ -353,6 +442,30 @@ def route_with_catalog(
         if free_only:
             callable_models = free_only
 
+    # Search runs on xai/* only: the gateway refuses any other model with a
+    # non-transient 400, so a non-xai pick (or fallback) would fail outright.
+    # Keep the router's order among the xai/* candidates. When the route has
+    # none (the common case: the router seldom ranks xAI), fall back to the
+    # catalog's search-capable xAI models, cheapest first (premium: most
+    # capable first). Mirrors the TypeScript SDK's routeWithCatalog.
+    search_fallback = False
+    if search:
+        if is_free_profile:
+            raise ValueError(
+                "The free profile has no search-capable model: search runs on paid xai/* "
+                "models only. Use routing_profile='eco' (or another) or drop the search options."
+            )
+        searchable = [model_id for model_id in callable_models if model_id.startswith("xai/")]
+        if not searchable:
+            searchable = _search_fallback_chain(model_pricing, routing_profile)
+            search_fallback = True
+        if not searchable:
+            raise ValueError(
+                "Search runs on xai/* models only, and the catalog lists no available xai/* "
+                "chat model. Call an xai/* model directly or drop the search options."
+            )
+        callable_models = searchable
+
     # Capacity check against the FULL conversation, not just the routing prompt
     # — an agent transcript can be 100x the last user message, and a context
     # overflow is a non-transient 400 the fallback chain won't save. Models
@@ -392,7 +505,13 @@ def route_with_catalog(
     resolved_decision["cost_estimate"] = cost_estimate
     resolved_decision["savings"] = savings
     resolved_decision["model"] = model
-    if model != decision["model"]:
+    if search_fallback:
+        which = "most capable" if routing_profile == "premium" else "cheapest"
+        resolved_decision["reasoning"] = (
+            f"{decision['reasoning']} | search runs on xai/* only; the route had none, "
+            f"so the {which} search-capable xAI model: {model}"
+        )
+    elif model != decision["model"]:
         resolved_decision["reasoning"] = f"{decision['reasoning']} | catalog fallback: {model}"
     resolved_decision["candidates"] = available_candidates
     if "candidate_scores" in decision:

@@ -4,7 +4,7 @@ Guidance for AI coding agents working with the BlockRun Python SDK.
 
 ## Project Overview
 
-**blockrun-llm** is a Python SDK for pay-per-request access to AI models (GPT, Claude, Gemini, DeepSeek, NVIDIA) using API account credit or x402 wallets on Solana and Base. **Includes 8 fully-free NVIDIA-hosted models** — DeepSeek V4 Flash (1M ctx), Nemotron Nano Omni (vision), Qwen3 Next + Coder, Llama 4 Maverick, Mistral Small 4, plus `gpt-oss-120b/20b` (hidden from `/v1/models` but direct calls still work). Accessible via `routing_profile="free"` or any `nvidia/*` model id.
+**blockrun-llm** is a Python SDK for pay-per-request access to AI models (GPT, Claude, Gemini, DeepSeek, NVIDIA) using API account credit or x402 wallets on Solana and Base. **Includes free models** ($0 in and out): the `free` routing profile ranks the ones in `FREE_TIERS` (`blockrun_llm/router_adapter.py`), and the README's Free Tier table lists the ones to pin by id. Some listed free ids are now answered by a different model; the README names them. Never hardcode a free-model list here: check the live catalog (`GET /v1/models`) instead.
 
 **Package:** `blockrun-llm` (PyPI)
 **Python:** >=3.9
@@ -20,7 +20,10 @@ blockrun-llm/
 │   ├── client.py            # LLMClient, AsyncLLMClient
 │   ├── anthropic_client.py  # AnthropicClient (official SDK wrapper)
 │   ├── solana_client.py     # SolanaLLMClient (Solana payments)
-│   ├── router.py            # ClawRouter smart routing
+│   ├── router_core/         # Port of @blockrun/router-core (do not hand-edit; re-port from upstream)
+│   ├── router_adapter.py    # Catalog resolution, free profile, xai/*-only search routing
+│   ├── router.py            # Back-compat shim over router_core
+│   ├── decisions.py         # decisions() body check (POST /v1/decisions)
 │   ├── image.py             # Image generation client
 │   ├── types.py             # Pydantic models and type definitions
 │   ├── validation.py        # Input validation utilities

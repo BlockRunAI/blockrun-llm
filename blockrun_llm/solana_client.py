@@ -48,6 +48,7 @@ from .apikey import (
 # in both fallback chains. client.py does not import this module, so there is
 # no cycle.
 from .client import _SETTLED_ATTR, _enforce_spend_limits, _mark_settled
+from .decisions import build_decisions_body
 from .jobs import absolute_poll_url
 from .poll_auth import (
     is_poll_ownership_refusal,
@@ -61,6 +62,8 @@ from .realface import _GROUP_ID_RE
 from .router_adapter import (
     SOLANA_MINIMUM_PAYMENT_USD,
     build_model_pricing,
+    requests_search,
+    require_search_model,
     route_with_catalog,
     routing_profile_for_model,
     routing_text,
@@ -79,6 +82,7 @@ from .types import (
     BlockrunError,
     ChatCompletionChunk,
     ChatResponse,
+    DecisionsResponse,
     ImageResponse,
     MusicResponse,
     PaymentError,
@@ -1225,6 +1229,7 @@ class SolanaLLMClient:
             tool_choice=tool_choice,
             conversation_chars=view["conversation_chars"],
             has_vision=view["has_vision"],
+            search=requests_search(search, search_parameters or None, tools),
             minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
         )
         response = self.chat_completion(
@@ -1333,6 +1338,9 @@ class SolanaLLMClient:
             body["temperature"] = temperature
         if top_p is not None:
             body["top_p"] = top_p
+        require_search_model(
+            [model, *(fallback_models or [])], search, search_parameters or None, tools
+        )
         if search_parameters:
             body["search_parameters"] = search_parameters
         elif search:
@@ -1465,6 +1473,9 @@ class SolanaLLMClient:
             body["temperature"] = temperature
         if top_p is not None:
             body["top_p"] = top_p
+        require_search_model(
+            [model, *(fallback_models or [])], search, search_parameters or None, tools
+        )
         if search_parameters:
             body["search_parameters"] = search_parameters
         elif search:
@@ -3786,6 +3797,46 @@ class SolanaLLMClient:
         data = self._request_with_payment_raw("/v1/search", body, timeout=eff_timeout)
         return SearchResult(**data)
 
+    def decisions(
+        self,
+        input: str | list[dict[str, Any]],
+        questions: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> DecisionsResponse:
+        """
+        Typed judgments (OpenAI Decisions-compatible, ``gpt-6-luna``): one typed
+        answer per question instead of text.
+
+        Each question has a fixed answer space: ``predicate`` (probability that
+        it holds), ``choice`` (one of your ``choices[].value``, with per-value
+        probabilities) or ``score`` (position on ``levels``, lowest first).
+        Only input tokens are billed. With a wallet the 402 quotes an
+        upper-bound estimate of them plus the $0.001 fee, and that quote
+        settles; with an API key the account pays the reported tokens. A request
+        over the gateway's limits is refused with a 400 before payment. A
+        ``choice`` always picks one of your values: give it a ``none`` value.
+
+        Raises:
+            ValueError: on a malformed request, before anything is sent.
+
+        Example:
+            result = client.decisions(
+                "My card was charged twice for one order.",
+                [
+                    {"type": "predicate", "name": "urgent",
+                     "instructions": "Does this need a reply today?"},
+                    {"type": "choice", "name": "team", "instructions": "Which team owns this?",
+                     "choices": [{"value": "billing"}, {"value": "shipping"}, {"value": "none"}]},
+                ],
+            )
+            print(result.answers[0]["probability"], result.answers[1]["choice"])
+        """
+        body = build_decisions_body(input, questions, model=model, metadata=metadata)
+        data = self._request_with_payment_raw("/v1/decisions", body)
+        return DecisionsResponse(**data)
+
     # ── Prediction Markets (Powered by Predexon) ────────────────────────────
 
     def pm(self, path: str, **params: Any) -> dict[str, Any]:
@@ -4466,6 +4517,7 @@ class AsyncSolanaLLMClient:
             tool_choice=tool_choice,
             conversation_chars=view["conversation_chars"],
             has_vision=view["has_vision"],
+            search=requests_search(search, search_parameters or None, tools),
             minimum_payment_usd=SOLANA_MINIMUM_PAYMENT_USD,
         )
         response = await self.chat_completion(
@@ -4563,6 +4615,9 @@ class AsyncSolanaLLMClient:
             body["temperature"] = temperature
         if top_p is not None:
             body["top_p"] = top_p
+        require_search_model(
+            [model, *(fallback_models or [])], search, search_parameters or None, tools
+        )
         if search_parameters:
             body["search_parameters"] = search_parameters
         elif search:
@@ -4637,6 +4692,9 @@ class AsyncSolanaLLMClient:
             body["temperature"] = temperature
         if top_p is not None:
             body["top_p"] = top_p
+        require_search_model(
+            [model, *(fallback_models or [])], search, search_parameters or None, tools
+        )
         if search_parameters:
             body["search_parameters"] = search_parameters
         elif search:
@@ -5302,6 +5360,46 @@ class AsyncSolanaLLMClient:
         eff_timeout = timeout if timeout is not None else self._search_timeout
         data = await self._request_with_payment_raw("/v1/search", body, timeout=eff_timeout)
         return SearchResult(**data)
+
+    async def decisions(
+        self,
+        input: str | list[dict[str, Any]],
+        questions: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> DecisionsResponse:
+        """
+        Typed judgments (OpenAI Decisions-compatible, ``gpt-6-luna``): one typed
+        answer per question instead of text.
+
+        Each question has a fixed answer space: ``predicate`` (probability that
+        it holds), ``choice`` (one of your ``choices[].value``, with per-value
+        probabilities) or ``score`` (position on ``levels``, lowest first).
+        Only input tokens are billed. With a wallet the 402 quotes an
+        upper-bound estimate of them plus the $0.001 fee, and that quote
+        settles; with an API key the account pays the reported tokens. A request
+        over the gateway's limits is refused with a 400 before payment. A
+        ``choice`` always picks one of your values: give it a ``none`` value.
+
+        Raises:
+            ValueError: on a malformed request, before anything is sent.
+
+        Example:
+            result = await client.decisions(
+                "My card was charged twice for one order.",
+                [
+                    {"type": "predicate", "name": "urgent",
+                     "instructions": "Does this need a reply today?"},
+                    {"type": "choice", "name": "team", "instructions": "Which team owns this?",
+                     "choices": [{"value": "billing"}, {"value": "shipping"}, {"value": "none"}]},
+                ],
+            )
+            print(result.answers[0]["probability"], result.answers[1]["choice"])
+        """
+        body = build_decisions_body(input, questions, model=model, metadata=metadata)
+        data = await self._request_with_payment_raw("/v1/decisions", body)
+        return DecisionsResponse(**data)
 
     # ── Balance ─────────────────────────────────────────────────────────────
 

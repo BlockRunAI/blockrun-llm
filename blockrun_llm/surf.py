@@ -189,8 +189,9 @@ class SurfClient:
 
     .. deprecated::
         Both gateways have answered every ``/v1/surf/*`` call with ``410
-        endpoint_retired`` since 2026-09-06. Use ``LLMClient.price`` for prices
-        and ``LLMClient.pm`` for prediction markets. This client will be removed
+        endpoint_retired`` since 2026-09-06. Use ``PriceClient`` for prices,
+        ``LLMClient.pm`` for prediction markets, and ``LLMClient.defi`` /
+        ``LLMClient.dex`` for DeFi and DEX data. This client will be removed
         in a future release.
 
     Wraps the `/v1/surf/*` partner proxy. Use SurfClient.endpoints() for discovery
@@ -209,7 +210,8 @@ class SurfClient:
     ):
         warnings.warn(
             "SurfClient is deprecated: the gateway retired /v1/surf/* on 2026-09-06 "
-            "(410 endpoint_retired). Use LLMClient.price or LLMClient.pm instead.",
+            "(410 endpoint_retired). Use PriceClient for prices, LLMClient.pm for "
+            "prediction markets, or LLMClient.defi / LLMClient.dex for DeFi and DEX data.",
             DeprecationWarning,
             stacklevel=2,
         )

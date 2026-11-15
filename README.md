@@ -1070,6 +1070,46 @@ for url in result.citations or []:
     print(url)
 ```
 
+## Decisions — typed judgments (`decisions()`)
+
+`decisions()` asks `gpt-6-luna` questions with a fixed answer space and gets one
+typed answer per question instead of text: a `predicate` (probability that it
+holds), a `choice` (one of your values, with per-value probabilities) or a
+`score` (position on an ordered rubric). Request and response match OpenAI's
+Decisions API. It is on `LLMClient`, `AsyncLLMClient`, `SolanaLLMClient` and
+`AsyncSolanaLLMClient`, with an API key or a wallet.
+
+```python
+from blockrun_llm import LLMClient
+
+client = LLMClient()
+
+result = client.decisions(
+    "My card was charged twice for one order and nobody answers my emails.",
+    [
+        {"type": "predicate", "name": "urgent", "instructions": "Does this need a reply today?"},
+        {"type": "choice", "name": "team", "instructions": "Which team owns this?",
+         "choices": [{"value": "billing"}, {"value": "shipping"},
+                     {"value": "none", "description": "fits no team"}]},
+        {"type": "score", "name": "anger", "instructions": "How upset is the writer?",
+         "levels": [{"label": "calm"}, {"label": "annoyed"}, {"label": "furious"}]},  # lowest first
+    ],
+)
+print(result.answers[0]["probability"])  # 0.85
+print(result.answers[1]["choice"])       # 'billing'
+print(result.answers[2]["score"])        # 1 (index on the rubric)
+```
+
+Only input tokens are billed. A wallet call pays the 402's quote: an
+upper-bound estimate of the input tokens plus the $0.001 transaction fee. With
+an API key the account is billed on reported tokens. `input` is a string or
+messages with text and inline `data:image/*` images (hosted image URLs are
+refused); the gateway caps a call at 64 questions, 255 choices or levels each,
+120,000 characters and 8 images, and refuses an over-limit request with a 400
+before any payment. A malformed request (no questions, a duplicate name, a
+choice without choices) raises `ValueError` before anything is sent. A `choice`
+always picks one of your values, so give it a `none` value.
+
 ## Market Data (`PriceClient`)
 
 Crypto, FX and commodity prices, OHLC history and symbol lists — all **free**,
@@ -1446,8 +1486,11 @@ from blockrun_llm import LLMClient
 
 client = LLMClient()
 
-# Live Search runs on xai/* models only; any other model answers
-# 400 SEARCH_UNSUPPORTED.
+# Live Search runs on xai/* models only. The SDK refuses search on any other
+# model with a ValueError before anything is sent or paid (the gateway would
+# answer 400 SEARCH_UNSUPPORTED). smart_chat_completion(..., search=True)
+# routes to the catalog's search-capable xAI models: cheapest first, most
+# capable first on routing_profile="premium".
 # Simple: enable live search with search=True
 response = client.chat(
     "xai/grok-4.7",
