@@ -19,8 +19,8 @@ from blockrun_llm import DECISIONS_DEFAULT_MODEL, DecisionsResponse, LLMClient
 from blockrun_llm.decisions import build_decisions_body
 from blockrun_llm.router_adapter import (
     build_model_pricing,
-    require_search_model,
     requests_search,
+    require_search_model,
     route_with_catalog,
 )
 
