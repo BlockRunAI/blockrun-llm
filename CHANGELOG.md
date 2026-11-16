@@ -4,6 +4,8 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+## 1.23.0 — 2026-11-16
+
 ### Added
 - **`decisions()`: typed judgments** on `LLMClient`, `AsyncLLMClient`,
   `SolanaLLMClient` and `AsyncSolanaLLMClient` (`POST /v1/decisions`, OpenAI

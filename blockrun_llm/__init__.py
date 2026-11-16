@@ -200,7 +200,7 @@ from .wallet import (
     create_wallet as generate_wallet,  # User-friendly alias
 )
 
-__version__ = "1.22.3"
+__version__ = "1.23.0"
 __all__ = [
     "DECISIONS_DEFAULT_MODEL",
     "DEFAULT_API_KEY_URL",
