@@ -1,6 +1,6 @@
 # BlockRun LLM SDK (Python)
 
-> **blockrun-llm** is a Python SDK for accessing <!-- br:models.chatVisible -->91<!-- /br:models.chatVisible --> large language models (GPT-6, GPT-5.x, Claude 5.x, Gemini 4 / 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, prediction-market data (Predexon), Exa neural web search, and free crypto / FX / commodity price data (daily closes). Paid calls are billed per request — no subscription, no seats, no minimum. Built for AI agents that need to operate autonomously.
+> **blockrun-llm** is a Python SDK for accessing <!-- br:models.chatVisible -->93<!-- /br:models.chatVisible --> large language models (GPT-6, GPT-5.x, Claude 5.x, Gemini 4 / 3.x, DeepSeek, Grok 4.x, GLM, MiniMax, Moonshot and more) plus image / video / music generation, Grok Live Search, prediction-market data (Predexon), Exa neural web search, and free crypto / FX / commodity price data (daily closes). Paid calls are billed per request — no subscription, no seats, no minimum. Built for AI agents that need to operate autonomously.
 >
 > **Two ways to pay, same SDK, same catalogue.** Sign up at
 > **[user.blockrun.ai](https://user.blockrun.ai)** for an API key and prepaid
@@ -2052,7 +2052,7 @@ The `AnthropicClient` wraps `anthropic.Anthropic` with a custom httpx transport 
 ## Frequently Asked Questions
 
 ### What is blockrun-llm?
-blockrun-llm is a Python SDK that provides pay-per-request access to <!-- br:models.chatVisible -->91<!-- /br:models.chatVisible --> large language models from OpenAI, Anthropic, Google, DeepSeek, NVIDIA, ZAI, and more. Pay with a BlockRun API key (prepaid credit from [user.blockrun.ai](https://user.blockrun.ai)) or with automatic x402 USDC micropayments from your own wallet — no subscriptions, no vendor lock-in.
+blockrun-llm is a Python SDK that provides pay-per-request access to <!-- br:models.chatVisible -->93<!-- /br:models.chatVisible --> large language models from OpenAI, Anthropic, Google, DeepSeek, NVIDIA, ZAI, and more. Pay with a BlockRun API key (prepaid credit from [user.blockrun.ai](https://user.blockrun.ai)) or with automatic x402 USDC micropayments from your own wallet — no subscriptions, no vendor lock-in.
 
 ### How does payment work?
 When you make an API call, the SDK automatically handles x402 payment. It signs a USDC transaction locally using your wallet private key (which never leaves your machine), and includes the payment proof in the request header. Settlement is non-custodial and instant on Base or Solana.
