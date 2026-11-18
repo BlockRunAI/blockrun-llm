@@ -4,6 +4,8 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+## 1.23.1 — 2026-11-18
+
 ### Fixed
 - **`decisions()` with `model="gemini-decision-1"`** now raises `ValueError`
   before sending when a choice or a score level has no `description` string.
