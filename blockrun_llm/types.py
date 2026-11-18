@@ -965,7 +965,11 @@ class DecisionsResponse(BaseModel):
     ``{"type": "predicate", "name", "probability"}``,
     ``{"type": "choice", "name", "choice", "probabilities": [{"value", "probability"}], "confidence"}``
     or ``{"type": "score", "name", "score", "probabilities": [{"value", "label", "probability"}],
-    "confidence"}``. Only input tokens are billed (``usage.output_tokens`` is 0).
+    "confidence"}``. A ``score`` is the probability-weighted position on the rubric
+    (0 = the first level) and can be fractional (Gemini Decision 1 answers 1.43
+    where a confident model answers 1); take the most probable entry in
+    ``probabilities`` for a single level. Only input tokens are billed
+    (``usage.output_tokens`` is 0).
     """
 
     model_config = ConfigDict(extra="allow")
