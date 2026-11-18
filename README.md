@@ -1099,7 +1099,7 @@ result = client.decisions(
 )
 print(result.answers[0]["probability"])  # 0.85
 print(result.answers[1]["choice"])       # 'billing'
-print(result.answers[2]["score"])        # 1 (index on the rubric)
+print(result.answers[2]["score"])        # 1.0 (probability-weighted position on the rubric)
 ```
 
 Only input tokens are billed. A wallet call pays the 402's quote: an
@@ -1117,6 +1117,12 @@ up to 1,000 questions). It needs a `description` string on every choice and ever
 score level; an empty string is fine. The SDK raises `ValueError` before sending
 when one is missing. `gpt-6-luna` accepts descriptions too, so the example above
 works on both models.
+
+A `score` answer is the probability-weighted position on the rubric (0 = the
+first level), so it can be fractional: Gemini answered the example above with
+1.43 (2% calm, 53% annoyed, 45% furious) where luna, all on "annoyed", gave 1.
+For a single level, take the entry in `probabilities` with the highest
+probability, or round.
 
 ## Market Data (`PriceClient`)
 

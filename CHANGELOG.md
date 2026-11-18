@@ -12,6 +12,10 @@ All notable changes to blockrun-llm will be documented in this file.
   charged, but the call failed with a less helpful message. `gpt-6-luna` is
   unchanged. The README and docstring examples now give every choice a
   `description`, so they work on both models.
+- **Docs: a `score` answer can be fractional.** It is the probability-weighted
+  position on the rubric; Gemini Decision 1 spreads probability across levels
+  (1.43 on the README example) where luna answered 1. The README comment said
+  "index on the rubric".
 
 ## 1.23.0 — 2026-11-16
 
