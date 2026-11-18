@@ -4,6 +4,15 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+- **`decisions()` with `model="gemini-decision-1"`** now raises `ValueError`
+  before sending when a choice or a score level has no `description` string.
+  Gemini Decision 1 needs one on every item (an empty string is fine); the
+  gateway refused the request with a 400 before payment, so nothing was ever
+  charged, but the call failed with a less helpful message. `gpt-6-luna` is
+  unchanged. The README and docstring examples now give every choice a
+  `description`, so they work on both models.
+
 ## 1.23.0 — 2026-11-16
 
 ### Added

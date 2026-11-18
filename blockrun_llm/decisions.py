@@ -24,6 +24,15 @@ DECISIONS_DEFAULT_MODEL = "gpt-6-luna"
 
 _QUESTION_TYPES = ("predicate", "choice", "score")
 
+#: Google's Decisions model. It needs a ``description`` string (empty is fine)
+#: on every choice and every score level; the gateway refuses it with a 400
+#: before payment otherwise (probed on sol.blockrun.ai 2026-11-18).
+GEMINI_DECISIONS_MODEL = "gemini-decision-1"
+
+
+def _is_gemini(model: str | None) -> bool:
+    return bool(model) and model.strip().removeprefix("google/") == GEMINI_DECISIONS_MODEL
+
 
 def build_decisions_body(
     input: str | Sequence[Mapping[str, Any]],
@@ -73,6 +82,14 @@ def build_decisions_body(
             raise ValueError(
                 f"decisions: questions[{i}] (score) needs a non-empty levels list, lowest first"
             )
+        if _is_gemini(model):
+            key = "choices" if q["type"] == "choice" else "levels" if q["type"] == "score" else None
+            for j, item in enumerate(q.get(key) or [] if key else []):
+                if not isinstance(item, Mapping) or not isinstance(item.get("description"), str):
+                    raise ValueError(
+                        f"decisions: questions[{i}].{key}[{j}].description must be a string for "
+                        f'{GEMINI_DECISIONS_MODEL} (it may be empty: "")'
+                    )
     body: dict[str, Any] = {
         "model": model or DECISIONS_DEFAULT_MODEL,
         "input": input if isinstance(input, str) else [dict(m) for m in input],

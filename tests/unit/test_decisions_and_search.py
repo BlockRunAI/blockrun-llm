@@ -323,3 +323,59 @@ class TestSearchRouting:
 
         assert result.model == "xai/grok-4.5"
         assert json.loads(seen[0].content)["model"] == "xai/grok-4.5"
+
+
+# gemini-decision-1 needs a `description` string (empty is fine) on every
+# choice and every score level: sol and Base refuse it with a 400 before
+# payment ("questions[0].choices[0].description must be a string (it may be
+# empty)", probed 2026-11-18). luna takes descriptions too, so they are never
+# wrong to send; the SDK only REQUIRES them for Gemini.
+class TestGeminiDecisionDescriptions:
+    CHOICE = {
+        "type": "choice",
+        "name": "team",
+        "instructions": "Which team?",
+        "choices": [{"value": "billing", "description": "payments"}, {"value": "none"}],
+    }
+    SCORE = {
+        "type": "score",
+        "name": "anger",
+        "instructions": "How upset?",
+        "levels": [{"label": "calm", "description": ""}, {"label": "furious"}],
+    }
+
+    @pytest.mark.parametrize("model", ["gemini-decision-1", "google/gemini-decision-1"])
+    def test_gemini_choice_without_description_is_refused_before_sending(self, model):
+        with pytest.raises(ValueError, match=r"questions\[0\]\.choices\[1\]\.description"):
+            build_decisions_body("x", [self.CHOICE], model=model)
+
+    @pytest.mark.parametrize("model", ["gemini-decision-1", "google/gemini-decision-1"])
+    def test_gemini_level_without_description_is_refused_before_sending(self, model):
+        with pytest.raises(ValueError, match=r"questions\[0\]\.levels\[1\]\.description"):
+            build_decisions_body("x", [self.SCORE], model=model)
+
+    def test_gemini_with_every_description_passes_and_empty_is_fine(self):
+        q = [
+            {
+                **self.CHOICE,
+                "choices": [
+                    {"value": "billing", "description": "payments"},
+                    {"value": "none", "description": ""},
+                ],
+            },
+            {
+                **self.SCORE,
+                "levels": [
+                    {"label": "calm", "description": ""},
+                    {"label": "furious", "description": "x"},
+                ],
+            },
+        ]
+        body = build_decisions_body("x", q, model="gemini-decision-1")
+        assert body["model"] == "gemini-decision-1"
+        assert body["questions"][0]["choices"][1]["description"] == ""
+
+    @pytest.mark.parametrize("model", [None, "gpt-6-luna", "openai/gpt-6-luna"])
+    def test_luna_does_not_require_descriptions(self, model):
+        body = build_decisions_body("x", [self.CHOICE, self.SCORE], model=model)
+        assert len(body["questions"]) == 2

@@ -1089,10 +1089,12 @@ result = client.decisions(
     [
         {"type": "predicate", "name": "urgent", "instructions": "Does this need a reply today?"},
         {"type": "choice", "name": "team", "instructions": "Which team owns this?",
-         "choices": [{"value": "billing"}, {"value": "shipping"},
+         "choices": [{"value": "billing", "description": "payments and refunds"},
+                     {"value": "shipping", "description": "delivery"},
                      {"value": "none", "description": "fits no team"}]},
         {"type": "score", "name": "anger", "instructions": "How upset is the writer?",
-         "levels": [{"label": "calm"}, {"label": "annoyed"}, {"label": "furious"}]},  # lowest first
+         "levels": [{"label": "calm", "description": ""}, {"label": "annoyed", "description": ""},
+                    {"label": "furious", "description": ""}]},  # lowest first
     ],
 )
 print(result.answers[0]["probability"])  # 0.85
@@ -1109,6 +1111,12 @@ refused); the gateway caps a call at 64 questions, 255 choices or levels each,
 before any payment. A malformed request (no questions, a duplicate name, a
 choice without choices) raises `ValueError` before anything is sent. A `choice`
 always picks one of your values, so give it a `none` value.
+
+Pass `model="gemini-decision-1"` to use Google's Gemini Decision 1 (same price,
+up to 1,000 questions). It needs a `description` string on every choice and every
+score level; an empty string is fine. The SDK raises `ValueError` before sending
+when one is missing. `gpt-6-luna` accepts descriptions too, so the example above
+works on both models.
 
 ## Market Data (`PriceClient`)
 

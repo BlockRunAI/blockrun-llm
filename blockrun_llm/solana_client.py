@@ -3828,7 +3828,9 @@ class SolanaLLMClient:
                     {"type": "predicate", "name": "urgent",
                      "instructions": "Does this need a reply today?"},
                     {"type": "choice", "name": "team", "instructions": "Which team owns this?",
-                     "choices": [{"value": "billing"}, {"value": "shipping"}, {"value": "none"}]},
+                     "choices": [{"value": "billing", "description": "payments and refunds"},
+                                 {"value": "shipping", "description": "delivery"},
+                                 {"value": "none", "description": "fits no team"}]},
                 ],
             )
             print(result.answers[0]["probability"], result.answers[1]["choice"])
@@ -5392,7 +5394,9 @@ class AsyncSolanaLLMClient:
                     {"type": "predicate", "name": "urgent",
                      "instructions": "Does this need a reply today?"},
                     {"type": "choice", "name": "team", "instructions": "Which team owns this?",
-                     "choices": [{"value": "billing"}, {"value": "shipping"}, {"value": "none"}]},
+                     "choices": [{"value": "billing", "description": "payments and refunds"},
+                                 {"value": "shipping", "description": "delivery"},
+                                 {"value": "none", "description": "fits no team"}]},
                 ],
             )
             print(result.answers[0]["probability"], result.answers[1]["choice"])
