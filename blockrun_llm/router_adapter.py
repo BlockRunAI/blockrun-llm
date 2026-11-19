@@ -26,6 +26,7 @@ from .router_core import (
     get_fallback_chain,
     route,
 )
+from .router_core.selector import usable_pricing
 from .router_core.types import (
     Capacity,
     ModelPricing,
@@ -34,6 +35,18 @@ from .router_core.types import (
     RoutingDecision,
     TierConfig,
 )
+
+
+class CatalogPricing(ModelPricing, total=False):
+    """A Router Core price entry plus the gateway's per-token platform fee.
+
+    ``platform_fee_percent`` is what an x402 call to a per-token paid chat row
+    pays on top of its list ``input`` / ``output`` rates (spec PF-8). Router
+    Core ignores it; :func:`route_with_catalog` reads it for ``cost_estimate``.
+    Absent means 0.
+    """
+
+    platform_fee_percent: float
 
 
 class ResolvedRoutingDecision(RoutingDecision, total=False):
@@ -218,7 +231,61 @@ def _version_key(model_id: str) -> list[Any]:
     ]
 
 
-def build_model_pricing(models: list[dict[str, Any]]) -> dict[str, ModelPricing]:
+def _fee_percent(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return float(value)
+
+
+def platform_fee_percent(model: Mapping[str, Any]) -> float:
+    """The platform fee percent a ``/v1/models`` row's per-token price pays on top.
+
+    The gateways charge per-token paid chat its list rates multiplied by
+    ``1 + platform_fee_percent / 100`` (spec PF-8). The field is read from
+    ``pricing.platform_fee_percent`` (both gateways), then from the row's top
+    level (blockrun.ai also publishes it there). It is 0 when neither is a
+    finite, non-negative number — older gateways and the enterprise gateway do
+    not send it — and 0 for any row that is not a per-token paid chat row:
+    free rows, flat rows, media and Decisions never pay it.
+    """
+    billing_mode = model.get("billing_mode")
+    if billing_mode is not None and billing_mode != "paid":
+        return 0.0
+    block = model.get("pricing")
+    if isinstance(block, Mapping):
+        if block.get("flat"):
+            return 0.0
+        nested = _fee_percent(block.get("platform_fee_percent"))
+        if nested is not None:
+            return nested
+    if model.get("flatPrice") or model.get("flat_price"):
+        return 0.0
+    top_level = _fee_percent(model.get("platform_fee_percent"))
+    return top_level if top_level is not None else 0.0
+
+
+def token_cost_usd(
+    pricing: ModelPricing | None, estimated_input_tokens: int, max_output_tokens: int
+) -> float | None:
+    """Estimated USD for a per-token entry, platform fee included.
+
+    ``None`` for a flat entry, a missing one, or one with an unusable price —
+    those keep Router Core's own estimate.
+    """
+    entry = usable_pricing(pricing)
+    if entry is None or entry.get("flat_price"):
+        return None
+    list_cost = (
+        estimated_input_tokens * entry.get("input_price", 0)
+        + max_output_tokens * entry.get("output_price", 0)
+    ) / 1_000_000
+    fee = _fee_percent(dict(entry).get("platform_fee_percent")) or 0.0
+    return list_cost * (1 + fee / 100)
+
+
+def build_model_pricing(models: list[dict[str, Any]]) -> dict[str, CatalogPricing]:
     """Build the router's pricing map from a ``/v1/models`` payload.
 
     Shared by every client (Base and Solana, sync and async) so the four copies
@@ -228,7 +295,10 @@ def build_model_pricing(models: list[dict[str, Any]]) -> dict[str, ModelPricing]
 
     The catalog uses the nested ``pricing.input`` / ``pricing.output`` shape;
     older snapshots used top-level ``inputPrice`` / ``outputPrice``. Both are
-    accepted so the SDK keeps working through backend transitions.
+    accepted so the SDK keeps working through backend transitions. Each entry
+    also carries the row's ``platform_fee_percent`` (see
+    :func:`platform_fee_percent`), so ``cost_estimate`` matches what the
+    gateway quotes for per-token paid chat.
     """
     pricing = ModelPricingMap()
     for model in models:
@@ -245,6 +315,7 @@ def build_model_pricing(models: list[dict[str, Any]]) -> dict[str, ModelPricing]
             "input_price": float(input_price or 0),
             "output_price": float(output_price or 0),
             "flat_price": float(flat_price or 0),
+            "platform_fee_percent": platform_fee_percent(model),
         }
     xai_chat = [
         model
@@ -486,6 +557,14 @@ def route_with_catalog(
     costs = calculate_model_cost(
         model, model_pricing, estimated_input_tokens, max_output_tokens, routing_profile
     )
+    # A per-token row's estimate is its list cost times (1 + platform_fee_percent
+    # / 100), the fee the catalog publishes per row (0 when absent). Router
+    # Core's calculate_model_cost instead multiplies by a hardcoded server
+    # margin, which is not the per-row fee (enterprise and older gateways charge
+    # none). Flat and unpriced entries keep Router Core's estimate.
+    token_cost = token_cost_usd(model_pricing.get(model), estimated_input_tokens, max_output_tokens)
+    if token_cost is not None:
+        costs["cost_estimate"] = token_cost
     # Free models settle at $0 (no payment is signed) — never floor them up to
     # the paid minimum. Detected from the catalog pricing, because Router Core's
     # calculate_model_cost applies its own internal floor even to $0 models.

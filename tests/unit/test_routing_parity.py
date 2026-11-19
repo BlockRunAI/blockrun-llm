@@ -104,6 +104,7 @@ class TestPricingMap:
             "input_price": 0.15,
             "output_price": 0.6,
             "flat_price": 0.0,
+            "platform_fee_percent": 0.0,
         }
 
     def test_accepts_the_legacy_top_level_price_shape(self):
