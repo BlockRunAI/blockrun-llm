@@ -4,6 +4,17 @@ All notable changes to blockrun-llm will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+- **Routing `cost_estimate` includes the platform fee.** blockrun.ai and
+  sol.blockrun.ai charge per-token paid chat its list rates times
+  `1 + platform_fee_percent / 100`, published on each `/v1/models` chat row
+  (inside `pricing`, and at the row's top level on blockrun.ai). The estimate
+  now reads that field (`pricing` first, then the top level) instead of a
+  hardcoded server margin, so it is 0 on gateways that do not send it (older
+  gateways, enterprise). Free, flat, media and Decisions rows never pay it.
+  The real charge is still the gateway's 402 quote, and the spend limits still
+  check that quote.
+
 ## 1.23.1 — 2026-11-18
 
 ### Fixed
